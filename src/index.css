@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: #05070d;
+  color: #dee2f1;
+  font-family: 'Inter', system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 144, 159, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 144, 159, 0.4);
+}
+
+/* Glass panel utility */
+@layer components {
+  .glass-panel {
+    background-color: #090d16;
+    border: 1px solid rgba(140, 144, 159, 0.08);
+  }
+
+  .glass-elevated {
+    background-color: #111827;
+    border: 1px solid rgba(140, 144, 159, 0.12);
+    backdrop-filter: blur(12px);
+  }
+
+  .glow-active {
+    transition: all 0.2s ease;
+  }
+
+  .glow-active:hover {
+    box-shadow: 0 0 8px 0px rgba(173, 198, 255, 0.4);
+    border-color: rgba(173, 198, 255, 0.3);
+  }
+
+  .text-gradient {
+    background: linear-gradient(135deg, #adc6ff 0%, #60a5fa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* Monaco editor overrides */
+.monaco-editor .monaco-editor-background,
+.monaco-editor .margin {
+  background-color: #090d16 !important;
+}
+
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .inputarea.ime-input {
+  background-color: #090d16 !important;
+}
+
+/* Resize handle */
+.resize-handle {
+  position: relative;
+  z-index: 10;
+}
+
+.resize-handle-h {
+  cursor: col-resize;
+  width: 4px;
+}
+
+.resize-handle-v {
+  cursor: row-resize;
+  height: 4px;
+}
+
+.resize-handle:hover {
+  background-color: rgba(173, 198, 255, 0.3);
+}
+
+.resize-handle.active {
+  background-color: rgba(173, 198, 255, 0.5);
+}
+
+/* No text selection during resize */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Focus ring */
+.focus-ring:focus-visible {
+  outline: 2px solid rgba(173, 198, 255, 0.5);
+  outline-offset: 2px;
+}
