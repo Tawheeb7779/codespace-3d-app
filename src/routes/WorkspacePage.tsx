@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Bot, Files, FolderOpen, Monitor, SquareTerminal } from 'lucide-react';
 import { ActivityBar } from '@/components/ide/ActivityBar';
@@ -101,7 +101,7 @@ function EditorArea({ path }: { path: string | null }) {
       <div className="min-w-0 flex-1">
         <CodeEditor path={path} readOnly={!canWrite} />
       </div>
-      {splitPath && splitPath !== path && splitPath in files && (
+      {splitPath && splitPath in files && (
         <>
           <div className="w-px shrink-0 bg-line" />
           <div className="min-w-0 flex-1">
@@ -187,15 +187,23 @@ export default function WorkspacePage() {
     };
   }, [projectId, open, loadGit]);
 
-  // Open a sensible first file once the tree is available.
+  /**
+   * Open a sensible first file once, when a project is opened.
+   *
+   * Keyed on the project so "Close all" (or closing the last tab) actually
+   * leaves an empty editor instead of being undone on the next render.
+   */
+  const greeted = useRef<string | null>(null);
   useEffect(() => {
-    if (!ready || activePath || !Object.keys(files).length) return;
+    if (!ready || !projectId || greeted.current === projectId) return;
+    if (activePath || !Object.keys(files).length) return;
+    greeted.current = projectId;
     const preferred =
       ['src/App.tsx', 'src/App.jsx', 'src/main.tsx', 'src/main.ts', 'index.html', 'README.md'].find(
         (candidate) => candidate in files,
       ) ?? Object.keys(files).filter(isTextFile).sort()[0];
     if (preferred) openTab(preferred);
-  }, [ready, activePath, files, openTab]);
+  }, [ready, projectId, activePath, files, openTab]);
 
   // Start the preview automatically when the project supports it.
   useEffect(() => {
@@ -207,6 +215,19 @@ export default function WorkspacePage() {
   }, [ready]);
 
   useEffect(() => () => void close(), [close]);
+
+  /**
+   * Show the terminal, or hide the panel if it is already showing.
+   *
+   * `setBottomTab` opens the panel as a side effect, so calling it before an
+   * unconditional `toggleBottom()` always landed on closed — the shortcut and
+   * the command could hide the panel but never bring it back.
+   */
+  const toggleTerminalPanel = useCallback(() => {
+    const next = !useUIStore.getState().bottomOpen;
+    if (next) setBottomTab('terminal');
+    else toggleBottom(false);
+  }, [setBottomTab, toggleBottom]);
 
   const save = useCallback(async () => {
     try {
@@ -278,10 +299,7 @@ export default function WorkspacePage() {
         group: 'View',
         label: 'Toggle terminal',
         keys: 'mod+j',
-        run: () => {
-          setBottomTab('terminal');
-          toggleBottom();
-        },
+        run: toggleTerminalPanel,
       },
       {
         id: 'view.problems',
@@ -378,9 +396,9 @@ export default function WorkspacePage() {
       setAppearance,
       setBottomTab,
       setSidebarPanel,
-      toggleBottom,
       togglePreview,
       toggleSidebar,
+      toggleTerminalPanel,
     ],
   );
 
@@ -390,10 +408,7 @@ export default function WorkspacePage() {
         commandPalette: () => setCommandPaletteOpen(true),
         quickOpen: () => setQuickOpenOpen(true),
         save: () => void save(),
-        toggleTerminal: () => {
-          setBottomTab('terminal');
-          toggleBottom();
-        },
+        toggleTerminal: toggleTerminalPanel,
         toggleSidebar: () => toggleSidebar(),
         togglePreview: () => togglePreview(),
         search: () => setSidebarPanel('search'),
@@ -406,13 +421,12 @@ export default function WorkspacePage() {
         closeTab,
         previewRun,
         save,
-        setBottomTab,
         setCommandPaletteOpen,
         setQuickOpenOpen,
         setSidebarPanel,
-        toggleBottom,
         togglePreview,
         toggleSidebar,
+        toggleTerminalPanel,
       ],
     ),
   );

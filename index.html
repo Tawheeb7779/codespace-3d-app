@@ -12,15 +12,13 @@
     <meta name="theme-color" content="#080b11" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <!-- Fonts are self-hosted: no third-party request, no render-blocking
-         round trip, and the app still looks right offline. -->
-    <link rel="preload" as="font" type="font/woff2" href="/fonts/inter-latin.woff2" crossorigin />
-    <link
-      rel="preload"
-      as="font"
-      type="font/woff2"
-      href="/fonts/jetbrains-mono-latin.woff2"
-      crossorigin
-    />
+         round trip, and the app still looks right offline.
+
+         They are deliberately not preloaded. Nothing paints in a webfont until
+         React has mounted behind a large editor chunk, so a preload issued here
+         expires unused — Chromium logs a warning for it on every production
+         load, and the two eager requests compete with the entry bundle for
+         bandwidth. `font-display: swap` in fonts.css covers the swap-in. -->
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Forge IDE" />
     <meta

@@ -1,4 +1,5 @@
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { cx } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/Tooltip';
 
@@ -48,3 +49,35 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
 
   return tooltip ? <Tooltip content={label}>{button}</Tooltip> : button;
 });
+
+const ICON_CONTROL =
+  'inline-flex shrink-0 items-center justify-center rounded transition-colors duration-100 text-ink-muted hover:bg-surface-raised hover:text-ink';
+
+/**
+ * The navigation counterpart of `IconButton`.
+ *
+ * Wrapping an `IconButton` in a `<Link>` nests a button inside an anchor: the
+ * markup is invalid, keyboard users get two stops, and the outer one announces
+ * nothing. One element carries both the destination and the name instead.
+ */
+export function IconLink({
+  to,
+  label,
+  icon,
+  size = 'sm',
+  className,
+  ...rest
+}: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & {
+  to: string;
+  label: string;
+  icon: ReactNode;
+  size?: 'xs' | 'sm' | 'md';
+}) {
+  return (
+    <Tooltip content={label}>
+      <Link to={to} aria-label={label} className={cx(ICON_CONTROL, SIZES[size], className)} {...rest}>
+        {icon}
+      </Link>
+    </Tooltip>
+  );
+}

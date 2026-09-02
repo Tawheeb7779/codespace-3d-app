@@ -34,6 +34,19 @@ interface EditorState {
   setSplit: (path: string | null) => void;
 }
 
+/**
+ * File the "Split editor" button should show beside the active one.
+ *
+ * The side pane only renders a path it can name, so returning the active path
+ * when another tab is available left the button lit with an empty pane.
+ */
+export function splitTargetFor(tabs: EditorTab[], activePath: string | null): string | null {
+  if (!tabs.length) return null;
+  const index = tabs.findIndex((tab) => tab.path === activePath);
+  if (index === -1) return tabs[0].path;
+  return (tabs[index + 1] ?? tabs[index - 1])?.path ?? activePath;
+}
+
 export const useEditorStore = create<EditorState>()((set, get) => ({
   tabs: [],
   activePath: null,

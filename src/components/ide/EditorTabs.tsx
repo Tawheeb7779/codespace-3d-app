@@ -4,7 +4,7 @@ import { FileIcon } from '@/components/ide/FileIcon';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, type MenuItem } from '@/components/ui/Menu';
 import { useContextMenu } from '@/hooks/useContextMenu';
-import { useEditorStore } from '@/stores/editorStore';
+import { splitTargetFor, useEditorStore } from '@/stores/editorStore';
 import { useFileStore } from '@/stores/fileStore';
 import { basename } from '@/lib/vfs';
 import { cx } from '@/lib/utils';
@@ -120,7 +120,7 @@ export function EditorTabs() {
             label={splitPath ? 'Close split view' : 'Split editor'}
             icon={<Columns2 className="h-3.5 w-3.5" />}
             active={Boolean(splitPath)}
-            onClick={() => setSplit(splitPath ? null : activePath)}
+            onClick={() => setSplit(splitPath ? null : splitTargetFor(tabs, activePath))}
           />
         </div>
       </div>

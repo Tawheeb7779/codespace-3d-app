@@ -13,7 +13,7 @@ import {
   Settings,
   Square,
 } from 'lucide-react';
-import { IconButton } from '@/components/ui/IconButton';
+import { IconButton, IconLink } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Primitives';
 import { useUIStore } from '@/stores/uiStore';
@@ -130,9 +130,7 @@ export function WorkspaceTopBar({ onCommandPalette }: { onCommandPalette: () => 
           icon={<PanelRight className="h-3.5 w-3.5" />}
           onClick={() => togglePreview()}
         />
-        <Link to="/settings">
-          <IconButton label="Settings" icon={<Settings className="h-3.5 w-3.5" />} />
-        </Link>
+        <IconLink to="/settings" label="Settings" icon={<Settings className="h-3.5 w-3.5" />} />
       </div>
     </header>
   );

@@ -31,6 +31,25 @@ interface SearchResponse {
   }>;
 }
 
+/**
+ * Turn a transport failure into something a developer can act on.
+ *
+ * `fetch` rejects with a bare "Failed to fetch" for a blocked host, an offline
+ * machine, a proxy without a trusted certificate and a CORS rejection alike,
+ * which tells the reader nothing about what to try next.
+ */
+async function registryFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new RegistryError(
+      `Could not reach ${REGISTRY}. Check your network, proxy or extensions — ` +
+        'Forge talks to the npm registry directly from this tab.',
+    );
+  }
+}
+
 export async function searchPackages(
   query: string,
   signal?: AbortSignal,
@@ -38,7 +57,7 @@ export async function searchPackages(
   const term = query.trim();
   if (!term) return [];
   const url = `${REGISTRY}/-/v1/search?text=${encodeURIComponent(term)}&size=20`;
-  const response = await fetch(url, { signal });
+  const response = await registryFetch(url, { signal });
   if (!response.ok) {
     throw new RegistryError(`npm search failed with HTTP ${response.status}`);
   }
@@ -55,7 +74,7 @@ export async function searchPackages(
 
 /** Resolve a dist-tag (default `latest`) to a concrete version. */
 export async function resolveVersion(name: string, tag = 'latest'): Promise<string> {
-  const response = await fetch(`${REGISTRY}/${encodeURIComponent(name)}`, {
+  const response = await registryFetch(`${REGISTRY}/${encodeURIComponent(name)}`, {
     headers: { Accept: 'application/vnd.npm.install-v1+json' },
   });
   if (response.status === 404) throw new RegistryError(`Package "${name}" was not found on npm`);

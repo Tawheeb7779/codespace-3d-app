@@ -247,6 +247,48 @@ try {
     await page.waitForTimeout(500);
   });
 
+  await step('the bottom panel closes and reopens with the same shortcut', async () => {
+    // Regression: the handler set the tab (which opens the panel) and then
+    // toggled, so Ctrl+J could hide the panel but never bring it back.
+    const panel = page.locator('section[aria-label="Panel"]');
+    if (!(await panel.isVisible())) await page.keyboard.press('Control+j');
+    await page.keyboard.press('Control+j');
+    await page.waitForTimeout(400);
+    if (await panel.isVisible()) throw new Error('the panel did not close');
+    await page.keyboard.press('Control+j');
+    await page.waitForTimeout(400);
+    if (!(await panel.isVisible())) throw new Error('the panel did not reopen');
+  });
+
+  await step('split editor puts a second editor beside the first', async () => {
+    // Regression: the button split to the active path, which the pane refused
+    // to render, so it lit up and showed nothing.
+    const before = await page.locator('.monaco-editor').count();
+    await page.getByRole('button', { name: 'Split editor', exact: true }).click();
+    await page.waitForTimeout(1500);
+    const after = await page.locator('.monaco-editor').count();
+    if (after <= before) throw new Error(`split added no editor (${before} → ${after})`);
+    await page.getByRole('button', { name: 'Close split view', exact: true }).click();
+    await page.waitForTimeout(500);
+  });
+
+  await step('closing every tab leaves the empty state, not a reopened file', async () => {
+    // Regression: the "open a sensible first file" effect fired whenever the
+    // active path went null, so Close all was immediately undone.
+    await page
+      .locator('[role="tablist"][aria-label="Open editors"] [role="tab"]')
+      .first()
+      .click({ button: 'right' });
+    await page.getByRole('menuitem', { name: /Close all/i }).click();
+    await page.waitForTimeout(800);
+    await page.getByText('No file open').waitFor({ timeout: 8000 });
+    await page.getByRole('button', { name: 'Open a file' }).click();
+    await page.getByLabel('Search files').fill('index.html');
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Enter');
+    await page.locator('.monaco-editor').first().waitFor({ timeout: 20000 });
+  });
+
   await step('settings page renders and toggles theme', async () => {
     await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: 'Appearance' }).click();

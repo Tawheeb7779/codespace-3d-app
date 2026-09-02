@@ -16,7 +16,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { IconButton } from '@/components/ui/IconButton';
+import { IconButton, IconLink } from '@/components/ui/IconButton';
 import { Input } from '@/components/ui/Field';
 import { Badge, EmptyState, ErrorState, SkeletonRows } from '@/components/ui/Primitives';
 import { Menu, type MenuItem } from '@/components/ui/Menu';
@@ -243,9 +243,7 @@ export default function DashboardPage() {
         {isSupabaseConfigured && !localMode && <Badge tone="positive">Cloud</Badge>}
 
         <div className="ml-auto flex items-center gap-2">
-          <Link to="/settings">
-            <IconButton label="Settings" icon={<Settings className="h-3.5 w-3.5" />} />
-          </Link>
+          <IconLink to="/settings" label="Settings" icon={<Settings className="h-3.5 w-3.5" />} />
           <div className="hidden items-center gap-2 border-l border-line pl-3 sm:flex">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-soft text-xs font-medium text-accent">
               {user?.displayName?.slice(0, 1).toUpperCase() ?? '?'}

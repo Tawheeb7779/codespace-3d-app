@@ -132,4 +132,30 @@ describe('searchPackages', () => {
     expect(await searchPackages('   ')).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * A blocked host, a proxy with an untrusted certificate and an offline
+   * machine all reject with the same bare "Failed to fetch", which the panel
+   * used to print verbatim. Name the host and what to check instead.
+   */
+  it('explains an unreachable registry instead of relaying "Failed to fetch"', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    await expect(searchPackages('react')).rejects.toThrow(/Could not reach https:\/\/registry\.npmjs\.org/);
+    await expect(resolveVersion('react')).rejects.toThrow(/Could not reach/);
+  });
+
+  it('still lets an aborted search cancel quietly', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }),
+    );
+    await expect(searchPackages('react')).rejects.toThrow(/aborted/);
+  });
 });

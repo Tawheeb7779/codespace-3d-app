@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { useAuthStore } from '@/stores/authStore';
 import { useProjectStore, validateProjectName } from '@/stores/projectStore';
 import { useFileStore } from '@/stores/fileStore';
-import { useEditorStore } from '@/stores/editorStore';
+import { splitTargetFor, useEditorStore } from '@/stores/editorStore';
+import { useUIStore } from '@/stores/uiStore';
+import { DEFAULT_KEYBINDINGS } from '@/stores/settingsStore';
 import { useGitStore } from '@/stores/gitStore';
 import type { AuthUser } from '@/types';
 
@@ -205,6 +207,67 @@ describe('editor tabs', () => {
     useEditorStore.getState().togglePin('c.ts');
     useEditorStore.getState().closeOthers('a.ts');
     expect(useEditorStore.getState().tabs.map((t) => t.path).sort()).toEqual(['a.ts', 'c.ts']);
+  });
+
+  /**
+   * The side pane renders a file it can name, so a split target equal to the
+   * active file left the button lit with nothing beside it — a dead control.
+   */
+  describe('splitTargetFor', () => {
+    const tabs = (...paths: string[]) => paths.map((path) => ({ path, pinned: false }));
+
+    it('splits to the next tab', () => {
+      expect(splitTargetFor(tabs('a.ts', 'b.ts', 'c.ts'), 'a.ts')).toBe('b.ts');
+    });
+
+    it('falls back to the previous tab for the last one', () => {
+      expect(splitTargetFor(tabs('a.ts', 'b.ts'), 'b.ts')).toBe('a.ts');
+    });
+
+    it('splits the active file when it is the only tab', () => {
+      expect(splitTargetFor(tabs('a.ts'), 'a.ts')).toBe('a.ts');
+    });
+
+    it('has nothing to split with no tabs', () => {
+      expect(splitTargetFor([], null)).toBeNull();
+    });
+
+    it('picks the first tab when the active path is not among them', () => {
+      expect(splitTargetFor(tabs('a.ts', 'b.ts'), 'gone.ts')).toBe('a.ts');
+    });
+  });
+});
+
+describe('keybindings', () => {
+  it('binds every command to a distinct chord', () => {
+    const chords = DEFAULT_KEYBINDINGS.map((binding) => binding.keys);
+    expect(new Set(chords).size).toBe(chords.length);
+  });
+
+  it('gives every binding a distinct id', () => {
+    const ids = DEFAULT_KEYBINDINGS.map((binding) => binding.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('bottom panel', () => {
+  /**
+   * `setBottomTab` opens the panel as a side effect. Chaining it with an
+   * unconditional toggle always landed on closed, so the shortcut could hide
+   * the panel but never bring it back.
+   */
+  it('opens the panel whenever a tab is selected', () => {
+    useUIStore.getState().toggleBottom(false);
+    useUIStore.getState().setBottomTab('terminal');
+    expect(useUIStore.getState().bottomOpen).toBe(true);
+    expect(useUIStore.getState().bottomTab).toBe('terminal');
+  });
+
+  it('closes on an explicit false and reopens on an explicit true', () => {
+    useUIStore.getState().toggleBottom(false);
+    expect(useUIStore.getState().bottomOpen).toBe(false);
+    useUIStore.getState().toggleBottom(true);
+    expect(useUIStore.getState().bottomOpen).toBe(true);
   });
 });
 
