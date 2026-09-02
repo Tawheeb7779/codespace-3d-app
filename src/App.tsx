@@ -1,67 +1,83 @@
-import { useUIStore } from '@/stores/uiStore';
-import { TopBar } from '@/components/layout/TopBar';
-import { Sidebar } from '@/components/layout/Sidebar';
-import { StatusBar } from '@/components/layout/StatusBar';
-import { MobileNav } from '@/components/layout/MobileNav';
-import { CommandPalette } from '@/components/CommandPalette';
-import { ToastContainer } from '@/components/ui/Toast';
-import { Dashboard } from '@/components/features/Dashboard';
-import { Projects } from '@/components/features/Projects';
-import { AssetsManager } from '@/components/features/AssetsManager';
-import { StorageManager } from '@/components/features/StorageManager';
-import { TeamManagement } from '@/components/features/TeamManagement';
-import { TeamChat } from '@/components/features/TeamChat';
-import { Notifications } from '@/components/features/Notifications';
-import { GlobalSearch } from '@/components/features/GlobalSearch';
-import { Settings } from '@/components/features/Settings';
-import { Workspace } from '@/components/workspace/Workspace';
+import { Suspense, lazy, useEffect } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { useAuthStore } from '@/stores/authStore';
+import { useTheme } from '@/hooks/useTheme';
+import { ToastViewport } from '@/components/ui/Toast';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { Spinner } from '@/components/ui/Primitives';
+import LandingPage from '@/routes/LandingPage';
+import AuthPage from '@/routes/AuthPage';
 
-function App() {
-  const currentView = useUIStore((s) => s.currentView);
+// The IDE and dashboard pull in Monaco, xterm and the bundler; keep them out of
+// the landing page's critical path.
+const DashboardPage = lazy(() => import('@/routes/DashboardPage'));
+const WorkspacePage = lazy(() => import('@/routes/WorkspacePage'));
+const SettingsPage = lazy(() => import('@/routes/SettingsPage'));
 
-  const renderView = () => {
-    switch (currentView) {
-      case 'dashboard': return <Dashboard />;
-      case 'workspace': return <Workspace />;
-      case 'projects': return <Projects />;
-      case 'assets': return <AssetsManager />;
-      case 'storage': return <StorageManager />;
-      case 'team': return <TeamManagement />;
-      case 'chat': return <TeamChat />;
-      case 'notifications': return <Notifications />;
-      case 'search': return <GlobalSearch />;
-      case 'settings': return <Settings />;
-      default: return <Dashboard />;
-    }
-  };
-
-  const isWorkspace = currentView === 'workspace';
-  const isChat = currentView === 'chat';
-
+function FullPageSpinner({ label }: { label: string }) {
   return (
-    <div className="h-screen flex flex-col bg-background text-on-surface overflow-hidden">
-      <TopBar />
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left sidebar - hidden on mobile, hidden in chat/workspace views on desktop */}
-        <aside
-          className={`w-56 shrink-0 glass-panel border-r border-outline-variant/10 overflow-auto ${
-            isWorkspace || isChat ? 'hidden md:block' : 'hidden md:block'
-          }`}
-        >
-          <Sidebar />
-        </aside>
-
-        {/* Main content */}
-        <main className="flex-1 flex overflow-hidden">
-          {renderView()}
-        </main>
-      </div>
-      <StatusBar />
-      <MobileNav />
-      <CommandPalette />
-      <ToastContainer />
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas">
+      <Spinner className="h-5 w-5" />
+      <p className="text-sm text-ink-faint">{label}</p>
     </div>
   );
 }
 
-export default App;
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const status = useAuthStore((s) => s.status);
+  const location = useLocation();
+
+  if (status === 'loading') return <FullPageSpinner label="Restoring your session…" />;
+  if (status === 'anonymous') {
+    return <Navigate to="/signin" replace state={{ from: location.pathname + location.search }} />;
+  }
+  return <>{children}</>;
+}
+
+export default function App() {
+  useTheme();
+  const initialize = useAuthStore((s) => s.initialize);
+
+  useEffect(() => {
+    void initialize();
+  }, [initialize]);
+
+  return (
+    <ErrorBoundary area="Forge IDE">
+      <Suspense fallback={<FullPageSpinner label="Loading…" />}>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/signin" element={<AuthPage mode="signin" />} />
+          <Route path="/signup" element={<AuthPage mode="signup" />} />
+          <Route path="/auth/callback" element={<AuthPage mode="callback" />} />
+          <Route
+            path="/dashboard"
+            element={
+              <RequireAuth>
+                <DashboardPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <RequireAuth>
+                <SettingsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/project/:projectId"
+            element={
+              <RequireAuth>
+                <WorkspacePage />
+              </RequireAuth>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+      <ToastViewport />
+    </ErrorBoundary>
+  );
+}

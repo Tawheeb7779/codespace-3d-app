@@ -1,99 +1,93 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { EditorTab, CenterView, BottomTab, ViewMode } from '@/types';
+
+export type SidebarPanel = 'explorer' | 'search' | 'git' | 'packages' | 'assistant' | 'members';
+export type BottomTab = 'terminal' | 'problems' | 'output' | 'ports';
+export type MobilePane = 'files' | 'editor' | 'preview' | 'terminal' | 'assistant';
 
 interface UIState {
-  // Navigation
-  currentView: ViewMode;
-  setView: (view: ViewMode) => void;
-
-  // Panel visibility
-  leftSidebarOpen: boolean;
-  rightSidebarOpen: boolean;
-  bottomPanelOpen: boolean;
-  toggleLeftSidebar: () => void;
-  toggleRightSidebar: () => void;
-  toggleBottomPanel: () => void;
-
-  // Panel sizes (percentages)
-  leftSidebarWidth: number;
-  rightSidebarWidth: number;
-  bottomPanelHeight: number;
-  setLeftSidebarWidth: (w: number) => void;
-  setRightSidebarWidth: (w: number) => void;
-  setBottomPanelHeight: (h: number) => void;
-
-  // Center view
-  centerView: CenterView;
-  setCenterView: (view: CenterView) => void;
-
-  // Bottom panel tab
+  sidebarPanel: SidebarPanel;
+  sidebarOpen: boolean;
+  sidebarWidth: number;
+  previewOpen: boolean;
+  previewWidth: number;
+  bottomOpen: boolean;
+  bottomHeight: number;
   bottomTab: BottomTab;
-  setBottomTab: (tab: BottomTab) => void;
-
-  // File explorer
-  fileExplorerOpen: boolean;
-  toggleFileExplorer: () => void;
-
-  // Command palette
   commandPaletteOpen: boolean;
+  quickOpenOpen: boolean;
+  mobilePane: MobilePane;
+  mobileDrawerOpen: boolean;
+
+  setSidebarPanel: (panel: SidebarPanel) => void;
+  toggleSidebar: (open?: boolean) => void;
+  setSidebarWidth: (width: number) => void;
+  togglePreview: (open?: boolean) => void;
+  setPreviewWidth: (width: number) => void;
+  toggleBottom: (open?: boolean) => void;
+  setBottomHeight: (height: number) => void;
+  setBottomTab: (tab: BottomTab) => void;
   setCommandPaletteOpen: (open: boolean) => void;
-
-  // Mobile
-  mobileNavOpen: boolean;
-  setMobileNavOpen: (open: boolean) => void;
-
-  // Preview
-  previewSize: 'desktop' | 'tablet' | 'mobile';
-  setPreviewSize: (size: 'desktop' | 'tablet' | 'mobile') => void;
+  setQuickOpenOpen: (open: boolean) => void;
+  setMobilePane: (pane: MobilePane) => void;
+  setMobileDrawerOpen: (open: boolean) => void;
+  resetLayout: () => void;
 }
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const DEFAULTS = {
+  sidebarPanel: 'explorer' as SidebarPanel,
+  sidebarOpen: true,
+  sidebarWidth: 264,
+  previewOpen: true,
+  previewWidth: 420,
+  bottomOpen: true,
+  bottomHeight: 240,
+  bottomTab: 'terminal' as BottomTab,
+};
 
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
-      currentView: 'dashboard',
-      setView: (view) => set({ currentView: view }),
-
-      leftSidebarOpen: true,
-      rightSidebarOpen: true,
-      bottomPanelOpen: true,
-      toggleLeftSidebar: () => set((s) => ({ leftSidebarOpen: !s.leftSidebarOpen })),
-      toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),
-      toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
-
-      leftSidebarWidth: 260,
-      rightSidebarWidth: 280,
-      bottomPanelHeight: 220,
-      setLeftSidebarWidth: (w) => set({ leftSidebarWidth: Math.max(180, Math.min(400, w)) }),
-      setRightSidebarWidth: (w) => set({ rightSidebarWidth: Math.max(200, Math.min(420, w)) }),
-      setBottomPanelHeight: (h) => set({ bottomPanelHeight: Math.max(100, Math.min(500, h)) }),
-
-      centerView: 'editor',
-      setCenterView: (view) => set({ centerView: view }),
-
-      bottomTab: 'terminal',
-      setBottomTab: (tab) => set({ bottomTab: tab }),
-
-      fileExplorerOpen: true,
-      toggleFileExplorer: () => set((s) => ({ fileExplorerOpen: !s.fileExplorerOpen })),
-
+      ...DEFAULTS,
       commandPaletteOpen: false,
-      setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+      quickOpenOpen: false,
+      mobilePane: 'editor',
+      mobileDrawerOpen: false,
 
-      mobileNavOpen: false,
-      setMobileNavOpen: (open) => set({ mobileNavOpen: open }),
-
-      previewSize: 'desktop',
-      setPreviewSize: (size) => set({ previewSize: size }),
+      setSidebarPanel: (panel) =>
+        set((state) => ({
+          sidebarPanel: panel,
+          // Clicking the active icon collapses the panel, as in VS Code.
+          sidebarOpen: state.sidebarPanel === panel ? !state.sidebarOpen : true,
+        })),
+      toggleSidebar: (open) => set((state) => ({ sidebarOpen: open ?? !state.sidebarOpen })),
+      setSidebarWidth: (width) => set({ sidebarWidth: clamp(width, 200, 520) }),
+      togglePreview: (open) => set((state) => ({ previewOpen: open ?? !state.previewOpen })),
+      setPreviewWidth: (width) => set({ previewWidth: clamp(width, 280, 900) }),
+      toggleBottom: (open) => set((state) => ({ bottomOpen: open ?? !state.bottomOpen })),
+      setBottomHeight: (height) => set({ bottomHeight: clamp(height, 120, 640) }),
+      setBottomTab: (tab) => set({ bottomTab: tab, bottomOpen: true }),
+      setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open, quickOpenOpen: false }),
+      setQuickOpenOpen: (open) => set({ quickOpenOpen: open, commandPaletteOpen: false }),
+      setMobilePane: (pane) => set({ mobilePane: pane, mobileDrawerOpen: false }),
+      setMobileDrawerOpen: (open) => set({ mobileDrawerOpen: open }),
+      resetLayout: () => set(DEFAULTS),
     }),
     {
-      name: 'codespace-ui',
-      partialize: (s) => ({
-        leftSidebarWidth: s.leftSidebarWidth,
-        rightSidebarWidth: s.rightSidebarWidth,
-        bottomPanelHeight: s.bottomPanelHeight,
-        previewSize: s.previewSize,
+      name: 'forge.layout',
+      // Persist geometry only — transient overlays must not reopen on reload.
+      partialize: (state) => ({
+        sidebarPanel: state.sidebarPanel,
+        sidebarOpen: state.sidebarOpen,
+        sidebarWidth: state.sidebarWidth,
+        previewOpen: state.previewOpen,
+        previewWidth: state.previewWidth,
+        bottomOpen: state.bottomOpen,
+        bottomHeight: state.bottomHeight,
+        bottomTab: state.bottomTab,
       }),
-    }
-  )
+    },
+  ),
 );

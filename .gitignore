@@ -21,3 +21,8 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+coverage
+.env.local
+.env.*.local
+e2e/artifacts

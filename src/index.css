@@ -1,126 +1,170 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import './fonts.css';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+@layer base {
+  /* Dark is the product's native theme; light is a first-class alternate. */
+  :root,
+  [data-theme='forge-dark'] {
+    color-scheme: dark;
+    --c-canvas: 8 11 17;
+    --c-surface: 14 18 26;
+    --c-surface-raised: 20 25 35;
+    --c-surface-sunken: 5 7 12;
+    --c-surface-overlay: 24 30 42;
+    --c-line: 33 41 56;
+    --c-line-strong: 52 63 82;
+    --c-ink: 226 232 245;
+    --c-ink-muted: 150 161 184;
+    --c-ink-faint: 104 116 140;
+    --c-accent: 96 143 255;
+    --c-accent-soft: 26 40 74;
+    --c-accent-ink: 8 11 17;
+    --c-positive: 74 222 128;
+    --c-caution: 250 204 21;
+    --c-danger: 248 113 113;
+  }
+
+  [data-theme='forge-light'] {
+    color-scheme: light;
+    --c-canvas: 247 248 251;
+    --c-surface: 255 255 255;
+    --c-surface-raised: 255 255 255;
+    --c-surface-sunken: 241 243 248;
+    --c-surface-overlay: 255 255 255;
+    --c-line: 223 227 236;
+    --c-line-strong: 197 203 216;
+    --c-ink: 22 27 38;
+    --c-ink-muted: 87 96 115;
+    --c-ink-faint: 130 139 158;
+    --c-accent: 42 91 224;
+    --c-accent-soft: 226 234 254;
+    --c-accent-ink: 255 255 255;
+    --c-positive: 21 143 74;
+    --c-caution: 176 122 8;
+    --c-danger: 200 45 45;
+  }
+
+  * {
+    border-color: rgb(var(--c-line));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: rgb(var(--c-canvas));
+    color: rgb(var(--c-ink));
+    font-family: theme('fontFamily.sans');
+    font-size: 13px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* The IDE owns its own scroll regions; the page itself never scrolls. */
+    overscroll-behavior: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 1px;
+    border-radius: 3px;
+  }
+
+  ::selection {
+    background: rgb(var(--c-accent) / 0.32);
+  }
+
+  /* Compact density trims vertical rhythm without changing font sizes. */
+  [data-density='compact'] {
+    --row-height: 22px;
+  }
+  [data-density='comfortable'] {
+    --row-height: 26px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  [data-reduced-motion='true'] *,
+  [data-reduced-motion='true'] *::before,
+  [data-reduced-motion='true'] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
-* {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  background-color: #05070d;
-  color: #dee2f1;
-  font-family: 'Inter', system-ui, sans-serif;
-  overflow: hidden;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(140, 144, 159, 0.2);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(140, 144, 159, 0.4);
-}
-
-/* Glass panel utility */
 @layer components {
-  .glass-panel {
-    background-color: #090d16;
-    border: 1px solid rgba(140, 144, 159, 0.08);
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-line-strong)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--c-line-strong));
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--c-ink-faint));
+    background-clip: content-box;
   }
 
-  .glass-elevated {
-    background-color: #111827;
-    border: 1px solid rgba(140, 144, 159, 0.12);
-    backdrop-filter: blur(12px);
+  .panel-label {
+    @apply text-2xs font-semibold uppercase tracking-[0.12em] text-ink-faint;
   }
 
-  .glow-active {
-    transition: all 0.2s ease;
+  .hairline {
+    @apply border-line;
   }
 
-  .glow-active:hover {
-    box-shadow: 0 0 8px 0px rgba(173, 198, 255, 0.4);
-    border-color: rgba(173, 198, 255, 0.3);
+  /* Subtle technical grid used behind hero and empty states. */
+  .grid-backdrop {
+    background-image:
+      linear-gradient(to right, rgb(var(--c-line) / 0.55) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--c-line) / 0.55) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
   }
 
-  .text-gradient {
-    background: linear-gradient(135deg, #adc6ff 0%, #60a5fa 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--c-surface-raised)) 25%,
+      rgb(var(--c-line)) 50%,
+      rgb(var(--c-surface-raised)) 75%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer rounded;
   }
 }
 
-/* Monaco editor overrides */
-.monaco-editor .monaco-editor-background,
-.monaco-editor .margin {
-  background-color: #090d16 !important;
+/* xterm.js ships its own stylesheet; these overrides align it with the theme. */
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+  background-color: transparent !important;
 }
-
-.monaco-editor,
-.monaco-editor-background,
-.monaco-editor .inputarea.ime-input {
-  background-color: #090d16 !important;
-}
-
-/* Resize handle */
-.resize-handle {
-  position: relative;
-  z-index: 10;
-}
-
-.resize-handle-h {
-  cursor: col-resize;
-  width: 4px;
-}
-
-.resize-handle-v {
-  cursor: row-resize;
-  height: 4px;
-}
-
-.resize-handle:hover {
-  background-color: rgba(173, 198, 255, 0.3);
-}
-
-.resize-handle.active {
-  background-color: rgba(173, 198, 255, 0.5);
-}
-
-/* No text selection during resize */
-.no-select {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* Focus ring */
-.focus-ring:focus-visible {
-  outline: 2px solid rgba(173, 198, 255, 0.5);
-  outline-offset: 2px;
+.xterm-screen {
+  padding: 4px 0;
 }

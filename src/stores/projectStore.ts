@@ -1,212 +1,152 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { Project, ProjectFile, ProjectTemplate, SceneObject } from '@/types';
-import { createTemplateFiles } from '@/lib/templates';
+import type { Project, ProjectMeta, TemplateId } from '@/types';
+import { getTemplate } from '@/lib/templates';
+import { detectProjectLanguage } from '@/lib/languages';
+import { repositoryFor } from '@/lib/repo';
+import { useAuthStore } from '@/stores/authStore';
+import { errorMessage, uid } from '@/lib/utils';
 
 interface ProjectState {
-  projects: Project[];
-  activeProjectId: string | null;
-  createProject: (name: string, description: string, template: ProjectTemplate) => string;
-  deleteProject: (id: string) => void;
-  setActiveProject: (id: string) => void;
-  updateProject: (id: string, updates: Partial<Project>) => void;
-  getActiveProject: () => Project | null;
-  addFile: (projectId: string, file: Omit<ProjectFile, 'id'>) => string;
-  updateFile: (projectId: string, fileId: string, updates: Partial<ProjectFile>) => void;
-  deleteFile: (projectId: string, fileId: string) => void;
-  renameFile: (projectId: string, fileId: string, name: string) => void;
-  addSceneObject: (projectId: string, obj: Omit<SceneObject, 'id'>) => void;
-  updateSceneObject: (projectId: string, objId: string, updates: Partial<SceneObject>) => void;
-  deleteSceneObject: (projectId: string, objId: string) => void;
+  projects: ProjectMeta[];
+  loading: boolean;
+  error: string | null;
+  load: () => Promise<void>;
+  create: (input: {
+    name: string;
+    description?: string;
+    template: TemplateId;
+    files?: Record<string, string>;
+    dirs?: string[];
+  }) => Promise<Project>;
+  rename: (id: string, name: string) => Promise<void>;
+  toggleStar: (id: string) => Promise<void>;
+  setStatus: (id: string, status: ProjectMeta['status']) => Promise<void>;
+  duplicate: (id: string) => Promise<Project>;
+  remove: (id: string) => Promise<void>;
+  upsertLocal: (meta: ProjectMeta) => void;
 }
 
-let idCounter = 0;
-const genId = (prefix: string) => `${prefix}_${Date.now()}_${idCounter++}`;
+function currentUser() {
+  const user = useAuthStore.getState().user;
+  if (!user) throw new Error('You must be signed in to manage projects.');
+  return user;
+}
 
-export const useProjectStore = create<ProjectState>()(
-  persist(
-    (set, get) => ({
-      projects: [],
-      activeProjectId: null,
+function repository() {
+  return repositoryFor(useAuthStore.getState().user?.provider);
+}
 
-      createProject: (name, description, template) => {
-        const id = genId('proj');
-        const now = Date.now();
-        const files = createTemplateFiles(template);
-        const project: Project = {
-          id,
-          name,
-          description,
-          template,
-          createdAt: now,
-          updatedAt: now,
-          files,
-          sceneObjects: template === 'threejs' || template === 'react-three'
-            ? [
-                {
-                  id: genId('obj'),
-                  name: 'Cube',
-                  type: 'box',
-                  position: [0, 0, 0],
-                  rotation: [0, 0, 0],
-                  scale: [1, 1, 1],
-                  color: '#4d8eff',
-                  metalness: 0.3,
-                  roughness: 0.5,
-                  visible: true,
-                },
-              ]
-            : [],
-        };
-        set((state) => ({ projects: [...state.projects, project] }));
-        return id;
-      },
+export function validateProjectName(name: string): string {
+  const clean = name.trim().replace(/\s+/g, ' ');
+  if (clean.length < 1) throw new Error('Project name cannot be empty.');
+  if (clean.length > 60) throw new Error('Project name must be 60 characters or fewer.');
+  return clean;
+}
 
-      deleteProject: (id) =>
-        set((state) => ({
-          projects: state.projects.filter((p) => p.id !== id),
-          activeProjectId: state.activeProjectId === id ? null : state.activeProjectId,
-        })),
+export const useProjectStore = create<ProjectState>()((set, get) => ({
+  projects: [],
+  loading: false,
+  error: null,
 
-      setActiveProject: (id) => set({ activeProjectId: id }),
+  async load() {
+    const user = useAuthStore.getState().user;
+    if (!user) {
+      set({ projects: [], loading: false });
+      return;
+    }
+    set({ loading: true, error: null });
+    try {
+      const projects = await repository().listProjects(user.id);
+      set({ projects, loading: false });
+    } catch (error) {
+      set({ error: errorMessage(error), loading: false });
+    }
+  },
 
-      updateProject: (id, updates) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id === id ? { ...p, ...updates, updatedAt: Date.now() } : p
-          ),
-        })),
+  async create({ name, description = '', template, files, dirs }) {
+    const user = currentUser();
+    const clean = validateProjectName(name);
+    const blueprint = getTemplate(template);
+    const projectFiles = files ?? { ...blueprint.files };
+    const projectDirs = dirs ?? [...(blueprint.dirs ?? [])];
+    const now = Date.now();
+    const project: Project = {
+      id: uid('prj'),
+      name: clean,
+      description: description.trim().slice(0, 280),
+      template,
+      language: detectProjectLanguage(Object.keys(projectFiles)),
+      visibility: 'private',
+      status: 'active',
+      starred: false,
+      createdAt: now,
+      updatedAt: now,
+      ownerId: user.id,
+      files: projectFiles,
+      dirs: projectDirs,
+    };
+    const created = await repository().createProject(project);
+    const { files: _f, dirs: _d, ...meta } = created;
+    set((state) => ({ projects: [meta, ...state.projects] }));
+    return created;
+  },
 
-      getActiveProject: () => {
-        const { projects, activeProjectId } = get();
-        return projects.find((p) => p.id === activeProjectId) ?? null;
-      },
+  async rename(id, name) {
+    const clean = validateProjectName(name);
+    await repository().updateProject(id, { name: clean });
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === id ? { ...p, name: clean, updatedAt: Date.now() } : p,
+      ),
+    }));
+  },
 
-      addFile: (projectId, file) => {
-        const fileId = genId('file');
-        set((state) => ({
-          projects: state.projects.map((p) => {
-            if (p.id !== projectId) return p;
-            const newFile: ProjectFile = { ...file, id: fileId };
-            const files = [...p.files, newFile];
-            if (file.parentId) {
-              return {
-                ...p,
-                files: files.map((f) =>
-                  f.id === file.parentId
-                    ? { ...f, children: [...(f.children ?? []), fileId] }
-                    : f
-                ),
-                updatedAt: Date.now(),
-              };
-            }
-            return { ...p, files, updatedAt: Date.now() };
-          }),
-        }));
-        return fileId;
-      },
+  async toggleStar(id) {
+    const project = get().projects.find((p) => p.id === id);
+    if (!project) throw new Error('That project no longer exists.');
+    const starred = !project.starred;
+    // Optimistic: the star is trivially reversible and must feel instant.
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, starred } : p)),
+    }));
+    try {
+      await repository().updateProject(id, { starred });
+    } catch (error) {
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === id ? { ...p, starred: !starred } : p)),
+      }));
+      throw error;
+    }
+  },
 
-      updateFile: (projectId, fileId, updates) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id !== projectId
-              ? p
-              : {
-                  ...p,
-                  files: p.files.map((f) =>
-                    f.id === fileId ? { ...f, ...updates } : f
-                  ),
-                  updatedAt: Date.now(),
-                }
-          ),
-        })),
+  async setStatus(id, status) {
+    await repository().updateProject(id, { status });
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, status } : p)),
+    }));
+  },
 
-      deleteFile: (projectId, fileId) =>
-        set((state) => ({
-          projects: state.projects.map((p) => {
-            if (p.id !== projectId) return p;
-            const file = p.files.find((f) => f.id === fileId);
-            if (!file) return p;
-            const toRemove = new Set<string>([fileId]);
-            const collectChildren = (id: string) => {
-              p.files.forEach((f) => {
-                if (f.parentId === id) {
-                  toRemove.add(f.id);
-                  collectChildren(f.id);
-                }
-              });
-            };
-            collectChildren(fileId);
-            return {
-              ...p,
-              files: p.files
-                .filter((f) => !toRemove.has(f.id))
-                .map((f) =>
-                  f.children
-                    ? { ...f, children: f.children.filter((c) => !toRemove.has(c)) }
-                    : f
-                ),
-              updatedAt: Date.now(),
-            };
-          }),
-        })),
+  async duplicate(id) {
+    const source = await repository().getProject(id);
+    if (!source) throw new Error('That project no longer exists.');
+    return get().create({
+      name: `${source.name} copy`,
+      description: source.description,
+      template: source.template,
+      files: { ...source.files },
+      dirs: [...source.dirs],
+    });
+  },
 
-      renameFile: (projectId, fileId, name) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id !== projectId
-              ? p
-              : {
-                  ...p,
-                  files: p.files.map((f) =>
-                    f.id === fileId ? { ...f, name } : f
-                  ),
-                  updatedAt: Date.now(),
-                }
-          ),
-        })),
+  async remove(id) {
+    await repository().deleteProject(id);
+    set((state) => ({ projects: state.projects.filter((p) => p.id !== id) }));
+  },
 
-      addSceneObject: (projectId, obj) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id !== projectId
-              ? p
-              : {
-                  ...p,
-                  sceneObjects: [...(p.sceneObjects ?? []), { ...obj, id: genId('obj') }],
-                  updatedAt: Date.now(),
-                }
-          ),
-        })),
-
-      updateSceneObject: (projectId, objId, updates) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id !== projectId
-              ? p
-              : {
-                  ...p,
-                  sceneObjects: (p.sceneObjects ?? []).map((o) =>
-                    o.id === objId ? { ...o, ...updates } : o
-                  ),
-                  updatedAt: Date.now(),
-                }
-          ),
-        })),
-
-      deleteSceneObject: (projectId, objId) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id !== projectId
-              ? p
-              : {
-                  ...p,
-                  sceneObjects: (p.sceneObjects ?? []).filter((o) => o.id !== objId),
-                  updatedAt: Date.now(),
-                }
-          ),
-        })),
-    }),
-    { name: 'codespace-projects' }
-  )
-);
+  upsertLocal: (meta) =>
+    set((state) => ({
+      projects: state.projects.some((p) => p.id === meta.id)
+        ? state.projects.map((p) => (p.id === meta.id ? meta : p))
+        : [meta, ...state.projects],
+    })),
+}));

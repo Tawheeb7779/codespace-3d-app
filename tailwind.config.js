@@ -1,118 +1,95 @@
 /** @type {import('tailwindcss').Config} */
+
+/**
+ * Colours are declared as RGB channel triples in `src/index.css` so a single
+ * `data-theme` attribute swaps the whole palette while Tailwind opacity
+ * modifiers (`bg-surface/60`) keep working.
+ */
+const channel = (name) => `rgb(var(${name}) / <alpha-value>)`;
+
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
-  darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        // Deep Space palette
-        background: '#0e131d',
+        canvas: channel('--c-canvas'),
         surface: {
-          DEFAULT: '#0e131d',
-          dim: '#0e131d',
-          bright: '#343944',
-          variant: '#303540',
-          lowest: '#090e18',
-          low: '#171c26',
-          DEFAULT2: '#1b202a',
-          high: '#252a35',
-          highest: '#303540',
+          DEFAULT: channel('--c-surface'),
+          raised: channel('--c-surface-raised'),
+          sunken: channel('--c-surface-sunken'),
+          overlay: channel('--c-surface-overlay'),
         },
-        'on-surface': {
-          DEFAULT: '#dee2f1',
-          variant: '#c2c6d6',
+        line: {
+          DEFAULT: channel('--c-line'),
+          strong: channel('--c-line-strong'),
         },
-        outline: {
-          DEFAULT: '#8c909f',
-          variant: '#424754',
+        ink: {
+          DEFAULT: channel('--c-ink'),
+          muted: channel('--c-ink-muted'),
+          faint: channel('--c-ink-faint'),
         },
-        primary: {
-          DEFAULT: '#adc6ff',
-          container: '#4d8eff',
-          fixed: '#d8e2ff',
-          'fixed-dim': '#adc6ff',
+        accent: {
+          DEFAULT: channel('--c-accent'),
+          soft: channel('--c-accent-soft'),
+          ink: channel('--c-accent-ink'),
         },
-        'on-primary': {
-          DEFAULT: '#002e6a',
-          container: '#00285d',
-          fixed: '#001a42',
-        },
-        secondary: {
-          DEFAULT: '#a4c9ff',
-          container: '#0267b8',
-          fixed: '#d4e3ff',
-          'fixed-dim': '#a4c9ff',
-        },
-        'on-secondary': {
-          DEFAULT: '#00315d',
-          container: '#d6e5ff',
-        },
-        tertiary: {
-          DEFAULT: '#ffb786',
-          container: '#df7412',
-          fixed: '#ffdcc6',
-          'fixed-dim': '#ffb786',
-        },
-        'on-tertiary': {
-          DEFAULT: '#502400',
-          container: '#461f00',
-        },
-        error: {
-          DEFAULT: '#ffb4ab',
-          container: '#93000a',
-        },
-        'on-error': {
-          DEFAULT: '#690005',
-          container: '#ffdad6',
-        },
-        success: '#4ade80',
-        warning: '#fbbf24',
+        positive: channel('--c-positive'),
+        caution: channel('--c-caution'),
+        danger: channel('--c-danger'),
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        sans: ['Inter var', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', 'monospace'],
       },
       fontSize: {
-        'display-lg': ['48px', { lineHeight: '56px', letterSpacing: '-0.02em', fontWeight: '700' }],
-        'headline-lg': ['32px', { lineHeight: '40px', letterSpacing: '-0.01em', fontWeight: '600' }],
-        'headline-md': ['24px', { lineHeight: '32px', fontWeight: '600' }],
-        'body-lg': ['18px', { lineHeight: '28px', fontWeight: '400' }],
-        'body-md': ['16px', { lineHeight: '24px', fontWeight: '400' }],
-        'code-sm': ['14px', { lineHeight: '20px', fontWeight: '400' }],
-        'label-caps': ['12px', { lineHeight: '16px', letterSpacing: '0.05em', fontWeight: '600' }],
+        '2xs': ['10px', { lineHeight: '14px', letterSpacing: '0.06em' }],
+        xs: ['11px', { lineHeight: '16px' }],
+        sm: ['12px', { lineHeight: '18px' }],
+        base: ['13px', { lineHeight: '20px' }],
+        md: ['14px', { lineHeight: '22px' }],
+        lg: ['16px', { lineHeight: '24px' }],
+        xl: ['20px', { lineHeight: '28px', letterSpacing: '-0.01em' }],
+        '2xl': ['26px', { lineHeight: '32px', letterSpacing: '-0.02em' }],
+        '3xl': ['34px', { lineHeight: '40px', letterSpacing: '-0.025em' }],
+        '4xl': ['46px', { lineHeight: '52px', letterSpacing: '-0.03em' }],
+        '5xl': ['60px', { lineHeight: '64px', letterSpacing: '-0.035em' }],
       },
       borderRadius: {
-        DEFAULT: '0.25rem',
-        lg: '0.5rem',
-        xl: '0.75rem',
+        DEFAULT: '6px',
+        sm: '4px',
+        lg: '10px',
+        xl: '14px',
       },
-      spacing: {
-        gutter: '20px',
-        unit: '4px',
-        'container-max': '1440px',
+      boxShadow: {
+        panel: '0 1px 0 0 rgb(var(--c-line) / 0.6)',
+        pop: '0 16px 48px -12px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(var(--c-line) / 0.9)',
+        glow: '0 0 0 1px rgb(var(--c-accent) / 0.35), 0 8px 32px -8px rgb(var(--c-accent) / 0.35)',
       },
       animation: {
-        'fade-in': 'fadeIn 0.2s ease-in-out',
-        'slide-in': 'slideIn 0.25s ease-out',
-        'slide-up': 'slideUp 0.25s ease-out',
-        'pulse-glow': 'pulseGlow 2s ease-in-out infinite',
+        'fade-in': 'fadeIn 140ms ease-out',
+        'scale-in': 'scaleIn 140ms cubic-bezier(0.16, 1, 0.3, 1)',
+        'slide-up': 'slideUp 180ms cubic-bezier(0.16, 1, 0.3, 1)',
+        'slide-right': 'slideRight 180ms cubic-bezier(0.16, 1, 0.3, 1)',
+        shimmer: 'shimmer 1.6s linear infinite',
+        spin: 'spin 900ms linear infinite',
       },
       keyframes: {
-        fadeIn: {
-          '0%': { opacity: '0' },
-          '100%': { opacity: '1' },
-        },
-        slideIn: {
-          '0%': { transform: 'translateX(-100%)', opacity: '0' },
-          '100%': { transform: 'translateX(0)', opacity: '1' },
+        fadeIn: { from: { opacity: '0' }, to: { opacity: '1' } },
+        scaleIn: {
+          from: { opacity: '0', transform: 'scale(0.97) translateY(-4px)' },
+          to: { opacity: '1', transform: 'scale(1) translateY(0)' },
         },
         slideUp: {
-          '0%': { transform: 'translateY(100%)', opacity: '0' },
-          '100%': { transform: 'translateY(0)', opacity: '1' },
+          from: { opacity: '0', transform: 'translateY(8px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
         },
-        pulseGlow: {
-          '0%, 100%': { boxShadow: '0 0 8px 0px rgba(173, 198, 255, 0.4)' },
-          '50%': { boxShadow: '0 0 16px 2px rgba(173, 198, 255, 0.6)' },
+        slideRight: {
+          from: { opacity: '0', transform: 'translateX(-12px)' },
+          to: { opacity: '1', transform: 'translateX(0)' },
+        },
+        shimmer: {
+          from: { backgroundPosition: '-200% 0' },
+          to: { backgroundPosition: '200% 0' },
         },
       },
     },

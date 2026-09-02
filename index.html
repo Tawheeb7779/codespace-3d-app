@@ -1,16 +1,41 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="forge-dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CodeSpace 3D Web IDE</title>
-    <meta property="og:image" content="https://bolt.new/static/og_default.png" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Forge IDE — a real development environment in the browser</title>
+    <meta
+      name="description"
+      content="Forge is a browser-based IDE with the Monaco editor, an in-browser esbuild bundler, a working shell, version control and a sandboxed live preview."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#080b11" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Fonts are self-hosted: no third-party request, no render-blocking
+         round trip, and the app still looks right offline. -->
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/inter-latin.woff2" crossorigin />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/fonts/jetbrains-mono-latin.woff2"
+      crossorigin
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Forge IDE" />
+    <meta
+      property="og:description"
+      content="Editor, terminal, bundler, version control and preview — running entirely in your browser."
+    />
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <p style="padding: 2rem; font-family: system-ui; color: #e2e8f5">
+        Forge IDE needs JavaScript. It compiles and runs your code in the browser, so there is no
+        server-rendered fallback.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

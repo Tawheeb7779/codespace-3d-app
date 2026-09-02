@@ -1,98 +1,129 @@
-export type ProjectTemplate = 'blank' | 'threejs' | 'react' | 'react-three' | 'html';
+/**
+ * Shared domain types for Forge IDE.
+ *
+ * The file system is *path based*: a project owns a flat map of
+ * `path -> content` for files and a set of directory paths. This mirrors how
+ * real tooling (esbuild, git, zip archives) addresses files and avoids the
+ * id/parent bookkeeping that makes tree mutations error prone.
+ */
 
-export interface ProjectFile {
-  id: string;
-  name: string;
-  type: 'file' | 'folder';
-  parentId: string | null;
-  content?: string;
-  language?: string;
-  children?: string[];
-}
+export type TemplateId =
+  | 'blank'
+  | 'vanilla'
+  | 'react'
+  | 'react-ts'
+  | 'vite-ts'
+  | 'node'
+  | 'next';
 
-export interface Project {
+export type ProjectVisibility = 'private' | 'team' | 'public';
+export type ProjectStatus = 'draft' | 'active' | 'archived';
+
+export interface ProjectMeta {
   id: string;
   name: string;
   description: string;
-  template: ProjectTemplate;
+  template: TemplateId;
+  language: string;
+  visibility: ProjectVisibility;
+  status: ProjectStatus;
+  starred: boolean;
   createdAt: number;
   updatedAt: number;
-  files: ProjectFile[];
-  sceneObjects?: SceneObject[];
+  ownerId: string;
 }
 
-export interface SceneObject {
+/** A project plus its complete working tree. */
+export interface Project extends ProjectMeta {
+  files: Record<string, string>;
+  /** Explicit directory entries so empty folders survive a round trip. */
+  dirs: string[];
+}
+
+export type MemberRole = 'owner' | 'admin' | 'editor' | 'viewer';
+
+export interface ProjectMember {
   id: string;
-  name: string;
-  type: 'box' | 'sphere' | 'cylinder' | 'cone' | 'torus' | 'plane' | 'group';
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-  color: string;
-  metalness: number;
-  roughness: number;
-  visible: boolean;
-  children?: string[];
+  projectId: string;
+  userId: string;
+  email: string;
+  displayName: string;
+  role: MemberRole;
+  addedAt: number;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl: string | null;
+  /** `local` means the session is a Local Development Mode account. */
+  provider: 'local' | 'email' | 'google' | 'github';
 }
 
 export interface EditorTab {
-  fileId: string;
-  dirty: boolean;
+  path: string;
+  /** Pinned tabs survive "close others". */
+  pinned: boolean;
 }
 
-export interface TeamMember {
-  id: string;
-  name: string;
-  email: string;
-  role: 'Owner' | 'Admin' | 'Developer' | 'Viewer';
-  online: boolean;
-  avatar: string;
-  lastSeen?: number;
-}
+export type ProblemSeverity = 'error' | 'warning' | 'info';
 
-export interface ChatChannel {
+export interface Problem {
   id: string;
-  name: string;
-  type: 'project' | 'team' | 'direct';
-  unread: number;
-  members: string[];
-}
-
-export interface ChatMessage {
-  id: string;
-  channelId: string;
-  authorId: string;
-  authorName: string;
-  content: string;
-  timestamp: number;
-}
-
-export interface AppNotification {
-  id: string;
-  type: 'project' | 'team' | 'system';
-  title: string;
+  path: string;
+  line: number;
+  column: number;
+  endLine: number;
+  endColumn: number;
+  severity: ProblemSeverity;
   message: string;
-  read: boolean;
+  source: string;
+}
+
+export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';
+
+export interface ConsoleEntry {
+  id: string;
+  level: ConsoleLevel;
+  /** `preview` = from the sandboxed iframe, `build` = bundler, `ide` = app. */
+  channel: 'preview' | 'build' | 'ide';
+  message: string;
   timestamp: number;
 }
 
-export interface Asset {
-  id: string;
+export interface SearchMatch {
+  path: string;
+  line: number;
+  column: number;
+  preview: string;
+  matchStart: number;
+  matchEnd: number;
+}
+
+export interface PackageEntry {
   name: string;
-  type: 'image' | 'model' | 'texture' | 'audio' | 'font' | 'file';
-  size: number;
-  location: string;
-  thumbnail?: string;
-  metadata: Record<string, string>;
+  version: string;
+  dev: boolean;
 }
 
-export interface TerminalLine {
+export interface RegistryPackage {
+  name: string;
+  version: string;
+  description: string;
+  publisher: string;
+  date: string;
+  links: { npm?: string; homepage?: string; repository?: string };
+}
+
+export type DevicepreSet = 'desktop' | 'tablet' | 'mobile';
+
+export interface ToastMessage {
   id: string;
-  type: 'input' | 'output' | 'error' | 'info';
-  content: string;
-  timestamp: number;
+  title: string;
+  description?: string;
+  variant: 'info' | 'success' | 'warning' | 'error';
+  /** Optional retry affordance for failed operations. */
+  action?: { label: string; run: () => void };
+  duration: number;
 }
-
-export type ViewMode = 'dashboard' | 'workspace' | 'projects' | 'assets' | 'storage' | 'team' | 'chat' | 'notifications' | 'search' | 'settings';
-export type CenterView = 'editor' | 'preview' | 'scene';
-export type BottomTab = 'terminal' | 'problems' | 'output' | 'logs';

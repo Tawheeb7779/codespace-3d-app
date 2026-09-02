@@ -1,107 +1,154 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { TerminalLine } from '@/types';
-import { useProjectStore } from '@/stores/projectStore';
+import { execute, type ShellLine, type ShellSession } from '@/lib/shell';
+import { createShellHost } from '@/lib/shellHost';
+import { uid } from '@/lib/utils';
 
-interface TerminalState {
-  lines: TerminalLine[];
-  addLine: (line: Omit<TerminalLine, 'id' | 'timestamp'>) => void;
-  clear: () => void;
-  executeCommand: (cmd: string) => void;
+export interface TerminalSession extends ShellSession {
+  id: string;
+  name: string;
+  lines: ShellLine[];
+  busy: boolean;
+  /** Incremented on every mutation so the xterm view can sync incrementally. */
+  revision: number;
 }
 
-const genId = () => `term_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+interface TerminalState {
+  sessions: TerminalSession[];
+  activeId: string | null;
+  createSession: () => string;
+  /** Create the first session only if none exists. Safe to call repeatedly. */
+  ensureSession: () => string;
+  killSession: (id: string) => void;
+  setActive: (id: string) => void;
+  run: (id: string, command: string) => Promise<void>;
+  append: (id: string, lines: ShellLine[]) => void;
+  clear: (id: string) => void;
+  recentOutput: (limit?: number) => string;
+}
 
-export const useTerminalStore = create<TerminalState>()(
-  persist(
-    (set, get) => ({
-      lines: [
-        {
-          id: genId(),
-          type: 'info' as const,
-          content: 'CodeSpace 3D Terminal v1.0.0 — Type "help" for available commands.',
-          timestamp: Date.now(),
-        },
-      ],
+const BANNER: ShellLine[] = [
+  { kind: 'info', text: 'Forge Shell — commands operate on this project\'s virtual file system.' },
+  { kind: 'info', text: 'Type "help" for the full list. Unlisted commands are not simulated.' },
+];
 
-      addLine: (line) =>
-        set((state) => ({
-          lines: [...state.lines, { ...line, id: genId(), timestamp: Date.now() }],
-        })),
+const MAX_LINES = 3000;
 
-      clear: () => set({ lines: [] }),
+function newSession(index: number): TerminalSession {
+  return {
+    id: uid('term'),
+    name: index === 0 ? 'forge' : `forge ${index + 1}`,
+    cwd: '',
+    history: [],
+    lines: [...BANNER],
+    busy: false,
+    revision: 0,
+  };
+}
 
-      executeCommand: (cmd) => {
-        const trimmed = cmd.trim();
-        if (!trimmed) return;
+export const useTerminalStore = create<TerminalState>()((set, get) => ({
+  sessions: [],
+  activeId: null,
 
-        const addLine = get().addLine;
-        addLine({ type: 'input', content: trimmed });
+  createSession() {
+    const session = newSession(get().sessions.length);
+    set((state) => ({ sessions: [...state.sessions, session], activeId: session.id }));
+    return session.id;
+  },
 
-        const parts = trimmed.split(/\s+/);
-        const command = parts[0].toLowerCase();
-        const args = parts.slice(1);
+  ensureSession() {
+    const { sessions, activeId } = get();
+    if (sessions.length) return activeId ?? sessions[0].id;
+    return get().createSession();
+  },
 
-        switch (command) {
-          case 'help':
-            addLine({ type: 'output', content: 'Available commands:' });
-            addLine({ type: 'output', content: '  help     — Show this help message' });
-            addLine({ type: 'output', content: '  clear    — Clear the terminal' });
-            addLine({ type: 'output', content: '  ls       — List project files' });
-            addLine({ type: 'output', content: '  pwd      — Print working directory' });
-            addLine({ type: 'output', content: '  echo     — Print text' });
-            addLine({ type: 'output', content: '  project  — Show project info' });
-            addLine({ type: 'output', content: '  date     — Show current date/time' });
-            addLine({ type: 'output', content: '  whoami   — Show current user' });
-            addLine({ type: 'output', content: '  version  — Show CodeSpace 3D version' });
-            break;
-          case 'clear':
-            set({ lines: [] });
-            break;
-          case 'ls': {
-            const project = useProjectStore.getState().getActiveProject();
-            if (!project) {
-              addLine({ type: 'error', content: 'No active project' });
-              break;
+  killSession(id) {
+    set((state) => {
+      const sessions = state.sessions.filter((s) => s.id !== id);
+      const activeId =
+        state.activeId === id ? (sessions[sessions.length - 1]?.id ?? null) : state.activeId;
+      return { sessions, activeId };
+    });
+  },
+
+  setActive: (id) => set({ activeId: id }),
+
+  append(id, lines) {
+    if (!lines.length) return;
+    set((state) => ({
+      sessions: state.sessions.map((session) => {
+        if (session.id !== id) return session;
+        const next = [...session.lines, ...lines];
+        return {
+          ...session,
+          lines: next.length > MAX_LINES ? next.slice(-MAX_LINES) : next,
+          revision: session.revision + 1,
+        };
+      }),
+    }));
+  },
+
+  clear(id) {
+    set((state) => ({
+      sessions: state.sessions.map((session) =>
+        session.id === id ? { ...session, lines: [], revision: session.revision + 1 } : session,
+      ),
+    }));
+  },
+
+  async run(id, command) {
+    const session = get().sessions.find((s) => s.id === id);
+    if (!session || session.busy) return;
+    const trimmed = command.trim();
+
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              busy: true,
+              history: trimmed && s.history[s.history.length - 1] !== trimmed
+                ? [...s.history, trimmed].slice(-200)
+                : s.history,
+              lines: [...s.lines, { kind: 'command' as const, text: `${s.cwd}$ ${command}` }],
+              revision: s.revision + 1,
             }
-            const rootFiles = project.files.filter((f) => f.parentId === null);
-            rootFiles.forEach((f) => {
-              addLine({ type: 'output', content: `${f.type === 'folder' ? '📁' : '📄'} ${f.name}` });
-            });
-            break;
-          }
-          case 'pwd':
-            addLine({ type: 'output', content: '/workspace/codespace-3d' });
-            break;
-          case 'echo':
-            addLine({ type: 'output', content: args.join(' ') });
-            break;
-          case 'project': {
-            const project = useProjectStore.getState().getActiveProject();
-            if (!project) {
-              addLine({ type: 'error', content: 'No active project' });
-              break;
-            }
-            addLine({ type: 'output', content: `Name: ${project.name}` });
-            addLine({ type: 'output', content: `Template: ${project.template}` });
-            addLine({ type: 'output', content: `Files: ${project.files.length}` });
-            addLine({ type: 'output', content: `Created: ${new Date(project.createdAt).toISOString()}` });
-            break;
-          }
-          case 'date':
-            addLine({ type: 'output', content: new Date().toString() });
-            break;
-          case 'whoami':
-            addLine({ type: 'output', content: 'developer@codespace3d' });
-            break;
-          case 'version':
-            addLine({ type: 'output', content: 'CodeSpace 3D v1.0.0 (browser-ide)' });
-            break;
-          default:
-            addLine({ type: 'error', content: `Command not found: ${command}. Type "help" for available commands.` });
-        }
-      },
-    }),
-    { name: 'codespace-terminal' }
-  )
-);
+          : s,
+      ),
+    }));
+
+    if (!trimmed) {
+      set((state) => ({
+        sessions: state.sessions.map((s) => (s.id === id ? { ...s, busy: false } : s)),
+      }));
+      return;
+    }
+
+    // The shell mutates `cwd` on the session object it is handed.
+    const working: ShellSession = { cwd: session.cwd, history: [...session.history, trimmed] };
+    const result = await execute(trimmed, working, createShellHost());
+
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== id) return s;
+        const lines = result.control === 'clear' ? [] : [...s.lines, ...result.lines];
+        return {
+          ...s,
+          cwd: working.cwd,
+          busy: false,
+          lines: lines.length > MAX_LINES ? lines.slice(-MAX_LINES) : lines,
+          revision: s.revision + 1,
+        };
+      }),
+    }));
+  },
+
+  recentOutput(limit = 120) {
+    const { sessions, activeId } = get();
+    const session = sessions.find((s) => s.id === activeId) ?? sessions[0];
+    if (!session) return '';
+    return session.lines
+      .slice(-limit)
+      .map((line) => line.text)
+      .join('\n');
+  },
+}));
