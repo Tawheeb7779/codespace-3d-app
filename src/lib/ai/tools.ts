@@ -27,6 +27,31 @@ export interface ToolContext {
   deletePath(path: string): void;
   runShell(command: string): Promise<string>;
   terminalOutput(): string;
+  /**
+   * Ask the user, in the moment, about an action that cannot be undone.
+   *
+   * Optional: without it the session-wide `allowDestructive` flag is the only
+   * gate, which is the behaviour every non-interactive caller gets. When the
+   * agent supplies it, the user sees what will happen before it does.
+   */
+  requestApproval?(action: string, affects: string[]): Promise<boolean>;
+  /**
+   * Compile the project for real, through the same bundler the preview uses.
+   * Absent in contexts with no build available.
+   */
+  runBuild?(): Promise<{ ok: boolean; report: string }>;
+  /** Current editor diagnostics, newest analysis. */
+  diagnostics?(): string;
+  /** Called after any tool changes a file, for the task's change ledger. */
+  onChange?(path: string, kind: 'created' | 'modified' | 'deleted', before: string, after: string): void;
+  /**
+   * Given a file the agent is about to be shown, return what to actually send.
+   *
+   * Lets the task skip resending a file the agent already has in context. It
+   * must return the real content whenever the file has changed — the saving is
+   * never allowed to cost correctness.
+   */
+  onRead?(path: string, content: string): { text: string; cached: boolean };
 }
 
 /** Matches the per-file limit the database enforces on project_files.content. */
@@ -63,11 +88,47 @@ export class ToolError extends Error {
 function requirePath(input: Record<string, unknown>, key = 'path'): string {
   const raw = input[key];
   if (typeof raw !== 'string') throw new ToolError(`"${key}" must be a string`);
-  const path = normalizePath(raw);
+
+  /*
+   * Refuse an absolute path outright rather than letting it be reinterpreted.
+   *
+   * `normalizePath` treats a leading slash as "project root", which is the
+   * right convention for the explorer and the shell — `cd /` means the project
+   * root there. It is the wrong one here: a model that emits `/etc/passwd`
+   * means the host file system, and quietly turning that into `etc/passwd`
+   * inside the project would create a file the user never asked for while
+   * looking like it succeeded. The agent gets project-relative paths only.
+   */
+  const candidate = raw.trim().replace(/\\/g, '/');
+  if (candidate.startsWith('/')) {
+    throw new ToolError(
+      `"${raw}" is an absolute path. Use a project-relative path such as "src/app.ts".`,
+    );
+  }
+  if (/^[A-Za-z]:/.test(candidate)) {
+    throw new ToolError(`"${raw}" is an absolute path. Use a project-relative path.`);
+  }
+
+  const path = normalizePath(candidate);
   if (isSensitivePath(path)) {
     throw new ToolError(`Access to "${path}" is blocked by the workspace policy.`);
   }
   return path;
+}
+
+/**
+ * The files an agent tool may look inside.
+ *
+ * `read_file` refuses a protected path, but a content search would happily
+ * print the same lines — an indirect read of exactly the files the policy
+ * exists to protect. Both paths filter through here.
+ */
+function readableFiles(files: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    if (!isSensitivePath(path)) out[path] = content;
+  }
+  return out;
 }
 
 function requireString(input: Record<string, unknown>, key: string): string {
@@ -87,8 +148,26 @@ function requireContent(input: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function requireApproval(action: string, ctx: ToolContext): void {
+/**
+ * Gate an irreversible action.
+ *
+ * Order matters. A standing session approval short-circuits, so a user who has
+ * opted in is not asked repeatedly. Otherwise the interactive prompt runs when
+ * the caller provides one. Only when there is neither does this fall back to
+ * refusing outright — which is what any non-interactive caller gets, and is
+ * the conservative default.
+ */
+async function requireApproval(
+  action: string,
+  affects: string[],
+  ctx: ToolContext,
+): Promise<void> {
   if (ctx.allowDestructive) return;
+  if (ctx.requestApproval) {
+    const granted = await ctx.requestApproval(action, affects);
+    if (granted) return;
+    throw new ToolError(`${action} was declined.`);
+  }
   throw new ToolError(
     `${action} is blocked: destructive actions are off for this session. ` +
       'Turn on "Allow destructive actions" in the assistant panel to permit it.',
@@ -133,6 +212,8 @@ export const TOOLS: ToolDefinition[] = [
       const path = requirePath(input);
       const content = ctx.files[path];
       if (content === undefined) throw new ToolError(`No such file: ${path}`);
+      const view = ctx.onRead?.(path, content);
+      if (view?.cached) return view.text;
       return content
         .split('\n')
         .map((line, index) => `${String(index + 1).padStart(4)}| ${line}`)
@@ -153,7 +234,7 @@ export const TOOLS: ToolDefinition[] = [
     mutates: false,
     run: (input, ctx) => {
       const query = requireString(input, 'query');
-      const result = searchContents(ctx.files, {
+      const result = searchContents(readableFiles(ctx.files), {
         ...DEFAULT_SEARCH_OPTIONS,
         query,
         regex: input.regex === 'true' || input.regex === true,
@@ -181,7 +262,9 @@ export const TOOLS: ToolDefinition[] = [
     run: (input, ctx) => {
       const path = requirePath(input);
       const content = requireContent(input, 'content');
+      const before = ctx.files[path];
       ctx.writeFile(path, content);
+      ctx.onChange?.(path, before === undefined ? 'created' : 'modified', before ?? '', content);
       return `Wrote ${path} (${content.split('\n').length} lines)`;
     },
   },
@@ -217,6 +300,7 @@ export const TOOLS: ToolDefinition[] = [
         throw new ToolError(`The edit would push ${path} over the per-file size limit`);
       }
       ctx.writeFile(path, updated);
+      ctx.onChange?.(path, 'modified', content, updated);
       return `Edited ${path}`;
     },
   },
@@ -229,11 +313,13 @@ export const TOOLS: ToolDefinition[] = [
       required: ['path'],
     },
     mutates: true,
-    run: (input, ctx) => {
+    run: async (input, ctx) => {
       const path = requirePath(input);
       if (!(path in ctx.files)) throw new ToolError(`No such file: ${path}`);
-      requireApproval(`Deleting ${path}`, ctx);
+      const before = ctx.files[path];
+      await requireApproval(`Deleting ${path}`, [path], ctx);
       ctx.deletePath(path);
+      ctx.onChange?.(path, 'deleted', before, '');
       return `Deleted ${path}`;
     },
   },
@@ -247,9 +333,11 @@ export const TOOLS: ToolDefinition[] = [
       required: ['command'],
     },
     mutates: true,
-    run: (input, ctx) => {
+    run: async (input, ctx) => {
       const command = requireString(input, 'command');
-      if (isDestructiveCommand(command)) requireApproval(`Running "${command}"`, ctx);
+      if (isDestructiveCommand(command)) {
+        await requireApproval(`Running "${command}"`, [command], ctx);
+      }
       return ctx.runShell(command);
     },
   },
@@ -259,6 +347,37 @@ export const TOOLS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
     mutates: false,
     run: (_input, ctx) => ctx.terminalOutput() || '(the terminal has no output yet)',
+  },
+  {
+    name: 'run_build',
+    /*
+     * Real verification, not a claim of one. This compiles the project with
+     * the same esbuild-wasm pipeline the preview uses, so a reported success
+     * means the code actually built and a reported failure carries the real
+     * diagnostics. There is no Node process in the browser, so `npm test` and
+     * `tsc` are not available here — the agent is told that rather than being
+     * given a tool that pretends.
+     */
+    description:
+      'Compile the project with the real bundler and return the result. Use this to verify a change actually builds.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: async (_input, ctx) => {
+      if (!ctx.runBuild) return 'A build is not available in this context.';
+      const result = await ctx.runBuild();
+      return result.report;
+    },
+  },
+  {
+    name: 'get_diagnostics',
+    description:
+      'Read the current editor problems (type errors, syntax errors) for the project.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: (_input, ctx) => {
+      if (!ctx.diagnostics) return 'Diagnostics are not available in this context.';
+      return ctx.diagnostics() || 'No problems reported.';
+    },
   },
 ];
 

@@ -20,7 +20,9 @@
     "test:e2e:preview": "node e2e/preview-matrix.mjs",
     "test:rls": "bash scripts/run-rls-tests.sh",
     "test:e2e:github": "node e2e/github.mjs",
-    "github:test-api": "vite-node e2e/github-server.ts"
+    "github:test-api": "vite-node e2e/github-server.ts",
+    "test:e2e:agent": "node e2e/agent.mjs",
+    "agent:test-provider": "node e2e/agent-provider.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

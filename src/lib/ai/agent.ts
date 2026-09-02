@@ -28,9 +28,39 @@ export interface AgentActivity {
 export interface AgentTurn {
   onActivity: (activity: AgentActivity) => void;
   onText: (text: string) => void;
+  /** Fired before a tool runs, so the task can move to the right phase. */
+  onToolStart?: (tool: string, input: Record<string, unknown>) => void;
+  /** The plan the agent stated before acting, when it produced one. */
+  onPlan?: (plan: string[]) => void;
 }
 
 export const MAX_STEPS = 12;
+
+/**
+ * How many times the agent may react to a failing verification before it has
+ * to stop and explain. Without a bound, a model that cannot fix a build error
+ * will keep editing and rebuilding until the step limit, burning tokens and
+ * churning the project.
+ */
+export const MAX_FIX_ATTEMPTS = 3;
+
+/**
+ * Pull a plan out of the model's prose.
+ *
+ * The agent is asked for a numbered or bulleted plan before it acts on a
+ * non-trivial task. This reads that back for the UI without a second model
+ * call — a structured "plan tool" would cost a round trip for something the
+ * text already contains.
+ */
+export function extractPlan(text: string): string[] {
+  const lines = text.split('\n');
+  const steps: string[] = [];
+  for (const line of lines) {
+    const match = /^\s*(?:\d+[.)]|[-*])\s+(.{3,200})$/.exec(line);
+    if (match) steps.push(match[1].trim());
+  }
+  return steps.slice(0, 12);
+}
 
 const SYSTEM_PROMPT = `You are the coding assistant inside Forge IDE, working on the user's project.
 
@@ -39,7 +69,13 @@ Rules:
 - Use edit_file for targeted changes and write_file only for new or fully rewritten files.
 - Never claim you changed a file unless a tool call actually succeeded.
 - Keep answers short. Point at file paths and line numbers instead of pasting large blocks.
-- If a request needs a capability you do not have, say so plainly.`;
+- If a request needs a capability you do not have, say so plainly.
+- For anything beyond a one-line change, state a short numbered plan first, then carry it out.
+- Verify your work: after editing code, call run_build (a real compile) or get_diagnostics, and
+  read the result. Only say a change works once a check has actually passed.
+- There is no Node process here, so npm test, tsc and npm run <script> do not exist. run_build and
+  get_diagnostics are the real checks available. Never claim to have run anything else.
+- If a check fails twice and you still cannot fix it, stop and explain what is wrong.`;
 
 function describe(tool: string, input: Record<string, unknown>): string {
   const path = typeof input.path === 'string' ? input.path : '';
@@ -62,6 +98,10 @@ function describe(tool: string, input: Record<string, unknown>): string {
       return 'Reading project structure';
     case 'get_terminal_output':
       return 'Reading terminal output';
+    case 'run_build':
+      return 'Building the project';
+    case 'get_diagnostics':
+      return 'Reading editor problems';
     default:
       return tool;
   }
@@ -93,6 +133,11 @@ export async function runAgent(
     if (response.text) {
       finalText = response.text;
       turn.onText(response.text);
+      // The first substantive message is where a plan appears, if there is one.
+      if (steps === 1 && turn.onPlan) {
+        const plan = extractPlan(response.text);
+        if (plan.length > 1) turn.onPlan(plan);
+      }
     }
 
     if (!response.toolCalls.length) {
@@ -106,6 +151,7 @@ export async function runAgent(
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
       const activityId = uid('act');
       const detail = describe(call.name, call.input);
+      turn.onToolStart?.(call.name, call.input);
       turn.onActivity({ id: activityId, tool: call.name, detail, state: 'running' });
 
       let result: string;
@@ -118,6 +164,10 @@ export async function runAgent(
         result = errorMessage(error);
         turn.onActivity({ id: activityId, tool: call.name, detail, state: 'error', result });
       }
+
+      // A tool that resolved while the user was cancelling must not feed its
+      // result back and provoke another model call.
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
       messages.push(
         toolResultMessage(

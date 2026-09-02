@@ -273,6 +273,18 @@ try {
     });
 
     await openFile('CHANGELOG.md');
+    // Type only once the editor really shows the pre-edit content. Without
+    // this the step can race a slow model load and silently edit stale text,
+    // which produces a clean merge and a confusing failure two steps later.
+    await page
+      .locator('.monaco-editor .view-lines')
+      .first()
+      .filter({ hasText: '# changes' })
+      .waitFor({ timeout: 20000 });
+    const baseline = await page.locator('.monaco-editor .view-lines').first().innerText();
+    if (/from github/.test(baseline)) {
+      throw new Error(`the editor already shows the remote edit: ${baseline.slice(0, 120)}`);
+    }
     await typeAtEnd('from forge\n');
     await commitAll('Local edit');
 

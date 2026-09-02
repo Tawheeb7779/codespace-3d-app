@@ -7,6 +7,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input, Select, Switch } from '@/components/ui/Field';
 import { useAiStore } from '@/stores/aiStore';
 import { useFileStore } from '@/stores/fileStore';
+import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
 import { readApiKey, type ProviderKind } from '@/lib/ai/provider';
 import type { AgentActivity } from '@/lib/ai/agent';
 import { cx } from '@/lib/utils';
@@ -195,6 +196,8 @@ export function AssistantPanel() {
           />
         </div>
       )}
+
+      <AgentTaskBar />
 
       <div ref={scrollRef} className="scrollbar-thin flex-1 overflow-y-auto p-2.5">
         {!messages.length ? (

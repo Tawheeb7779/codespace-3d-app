@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Field';
 import { Badge } from '@/components/ui/Primitives';
 import { useAuthStore } from '@/stores/authStore';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { isSupabaseConfigured, supabaseConfigDetail } from '@/lib/supabase';
 
 interface AuthPageProps {
   mode: 'signin' | 'signup' | 'callback';
@@ -142,6 +142,12 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 Supabase is not configured, so email and OAuth sign-in are unavailable. Continue
                 locally and your projects will be stored in this browser only.
               </p>
+              {/*
+                Name the specific reason. "Not configured" is true for a missing
+                variable, a malformed URL and a rejected service-role key alike,
+                and an operator staring at a typo needs to know which.
+              */}
+              <p className="mt-1.5 font-mono text-xs text-ink-faint">{supabaseConfigDetail}</p>
               <Button
                 variant="primary"
                 size="sm"

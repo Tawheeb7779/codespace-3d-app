@@ -342,7 +342,7 @@ not the boundary — the database is.
 npm run test
 ```
 
-351 unit and integration tests cover the parts where a mistake is expensive:
+420 unit and integration tests cover the parts where a mistake is expensive:
 
 | Suite | Focus |
 | --- | --- |
@@ -359,6 +359,9 @@ npm run test
 | `lib/github/objects.test.ts` | Proves the GitHub test harness stores real git objects, by checking its ids against the `git` binary. |
 | `lib/github/sync.test.ts` | Fetch, pull and push end to end against that harness: fast-forward, divergence, conflicts, rejection, empty repositories, races. |
 | `lib/github/security.test.ts` | Identifier validation, hostile repository contents, error taxonomy, and that no AI tool can reach GitHub. |
+| `lib/supabase.test.ts` | Configuration detection: a missing variable, a malformed URL and a service-role key each fall back to Local Development Mode with a named reason. |
+| `lib/ai/agent.test.ts` | The agent loop against real tools: plan, read, edit, verify, recover from a failing build, stop on cancel, and the change ledger and read cache. |
+| `lib/ai/agentSecurity.test.ts` | Path escapes, protected files, the search leak, permission enforcement, approval gating, the task lock and cancellation. |
 
 ### End-to-end
 
@@ -526,6 +529,47 @@ supabase functions deploy github-proxy
 supabase db push        # applies 0002_github_remote.sql
 ```
 
+## The coding agent
+
+The assistant is a task-driven coding agent, not a chat window. A request runs
+through an explicit lifecycle — planning, reading, editing, running, verifying —
+and the panel shows the phase the task is *actually* in, derived from the tool
+being executed rather than from anything the model claims.
+
+### What it can verify
+
+Forge runs in a browser, so there is no Node process: `npm test`, `tsc` and
+`npm run <script>` do not exist here and the agent is told so rather than being
+handed a tool that pretends. The checks it does have are real:
+
+| Tool | What it actually does |
+| --- | --- |
+| `run_build` | Compiles the project with the same esbuild-wasm pipeline the preview uses. Real errors, real success. |
+| `get_diagnostics` | Reads the editor's live TypeScript/JavaScript problems. |
+
+A task reports "verified" only when one of those passed, and the evidence is
+shown next to the result.
+
+### Approval
+
+Reading is free. Editing is recoverable — the change ledger keeps the content
+from before the task and the existing diff viewer shows it — so edits run
+unattended. Everything irreversible stops and asks, naming what will happen,
+why, and which files or command it affects: deleting a file, `rm`, anything
+that acts outside the editor (`git commit`, `npm install`), and a run that has
+already touched ten files. The agent genuinely blocks on the answer.
+
+### Boundaries
+
+The agent reaches the project and nothing else. Paths go through the shared VFS
+validator, absolute paths are refused outright rather than reinterpreted, and
+protected files (`.env`, `.git/`, `node_modules/`, `.ssh/`) are unreadable —
+including through a content search. It has no GitHub tool, no access to any
+credential, and no host shell: `run_command` reaches the Forge Shell over the
+project's virtual file system. One task holds a project at a time, and
+cancelling stops the loop, settles any pending approval and reports what was
+completed.
+
 ## Honest limitations
 
 These are deliberate, and the UI says so where a user would otherwise be misled:
@@ -549,6 +593,9 @@ These are deliberate, and the UI says so where a user would otherwise be misled:
   Anything else returns `command not found` instead of plausible output.
 - **The assistant needs your own provider.** Without one the panel says it is
   not connected. Nothing is generated locally.
+- **The agent cannot run a test suite.** There is no Node process in the
+  browser, so its verification is the real bundler and the real editor
+  diagnostics — not `npm test`. It says so rather than claiming otherwise.
 - **Collaboration is schema-complete, not live.** Members, teams, roles and
   activity ship with enforced policies; real-time multi-cursor editing does not
   exist yet and is not advertised as if it does.
