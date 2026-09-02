@@ -454,12 +454,64 @@ describe('version control integration', () => {
     await expect(useGitStore.getState().checkout('other')).rejects.toThrow(/uncommitted changes/);
   });
 
-  it('refuses network git operations with an explanation', async () => {
+  it('refuses a push with no remote, and says how to get one', async () => {
     const project = await freshProject();
     await useGitStore.getState().load(project.id);
     await useGitStore.getState().init();
     const lines = await useGitStore.getState().runCommand(['push']);
     expect(lines.some((l) => l.kind === 'stderr')).toBe(true);
+    const text = lines.map((l) => l.text).join(' ');
+    expect(text).toContain('no remote configured');
+    expect(text).toMatch(/Source Control/);
+  });
+
+  it('still refuses clone, which has no in-browser equivalent', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    const lines = await useGitStore.getState().runCommand(['clone']);
     expect(lines.map((l) => l.text).join(' ')).toContain('not available');
+  });
+
+  it('reports no remote until one is connected', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    expect(useGitStore.getState().remote).toBeNull();
+    expect(useGitStore.getState().sync().state).toBe('unlinked');
+    const lines = await useGitStore.getState().runCommand(['remote']);
+    expect(lines.map((l) => l.text).join(' ')).toContain('No remote configured');
+  });
+
+  it('connects a repository, persists it, and reloads it with the project', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    await useGitStore.getState().connectRemote({
+      id: 42,
+      owner: 'octocat',
+      name: 'demo',
+      fullName: 'octocat/demo',
+      private: false,
+      defaultBranch: 'main',
+      description: '',
+      updatedAt: '',
+      canPush: true,
+      empty: false,
+    });
+    expect(useGitStore.getState().remote?.repo).toBe('demo');
+    expect(useGitStore.getState().sync().state).toBe('never-fetched');
+
+    await useGitStore.getState().load(project.id);
+    expect(useGitStore.getState().remote?.owner).toBe('octocat');
+    expect(useGitStore.getState().remote?.branch).toBe('main');
+
+    const lines = await useGitStore.getState().runCommand(['remote']);
+    expect(lines.map((l) => l.text).join(' ')).toContain('octocat/demo');
+
+    await useGitStore.getState().disconnectRemote();
+    expect(useGitStore.getState().remote).toBeNull();
+    await useGitStore.getState().load(project.id);
+    expect(useGitStore.getState().remote).toBeNull();
   });
 });

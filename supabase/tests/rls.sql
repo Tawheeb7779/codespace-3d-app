@@ -506,6 +506,213 @@ begin
   end;
 end $$;
 
+-- --------------------------------------------------------------------------
+-- GitHub credentials — unreachable from any client role
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as_admin();
+
+insert into private.github_tokens (user_id, access_token)
+values ('11111111-1111-1111-1111-111111111111', 'gho_secret_value');
+
+insert into public.github_connections (user_id, github_login, github_user_id, scopes)
+values
+  ('11111111-1111-1111-1111-111111111111', 'owner-gh',  501, '{repo}'),
+  ('22222222-2222-2222-2222-222222222222', 'editor-gh', 502, '{repo}');
+
+insert into public.project_remotes
+  (project_id, owner, repo, repo_id, default_branch, branch, connected_by)
+values
+  ('prj_test_alpha', 'octocat', 'demo', 9001, 'main', 'main',
+   '11111111-1111-1111-1111-111111111111');
+
+-- The credential table lives in a schema no client role has rights on, so the
+-- token cannot be read even by the user it belongs to.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+do $$
+begin
+  begin
+    perform 1 from private.github_tokens;
+    raise exception 'FAIL  a signed-in user could read the GitHub token table';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    the GitHub token table is unreachable from a user session';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    perform 1 from private.github_oauth_states;
+    raise exception 'FAIL  a signed-in user could read pending OAuth states';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    OAuth state is unreachable from a user session';
+  end;
+end $$;
+
+select pg_temp.assert(
+  (select count(*) from public.github_connections) = 1,
+  'a user sees only their own GitHub connection');
+
+select pg_temp.assert(
+  (select github_login from public.github_connections) = 'owner-gh',
+  'the visible connection is the caller''s own');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.github_connections) = 0,
+  'an outsider sees no GitHub connections at all');
+
+-- A browser cannot claim a GitHub identity: there is no insert policy.
+do $$
+begin
+  begin
+    insert into public.github_connections (user_id, github_login, github_user_id)
+    values ('44444444-4444-4444-4444-444444444444', 'forged', 999);
+    raise exception 'FAIL  a user could forge a GitHub connection row';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot forge a GitHub connection';
+  end;
+end $$;
+
+-- --------------------------------------------------------------------------
+-- Project remotes
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+select pg_temp.assert(
+  (select count(*) from public.project_remotes where project_id = 'prj_test_alpha') = 1,
+  'a viewer can see which repository the project is connected to');
+
+do $$
+begin
+  begin
+    update public.project_remotes set last_synced_sha = repeat('a', 40)
+    where project_id = 'prj_test_alpha';
+    if found then
+      raise exception 'FAIL  a viewer could record a push';
+    end if;
+    raise notice 'ok    a viewer cannot record remote sync state';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a viewer cannot record remote sync state';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    delete from public.project_remotes where project_id = 'prj_test_alpha';
+    if found then
+      raise exception 'FAIL  a viewer could disconnect the repository';
+    end if;
+    raise notice 'ok    a viewer cannot disconnect the repository';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a viewer cannot disconnect the repository';
+  end;
+end $$;
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+-- The project is public by this point in the suite, which is exactly the case
+-- worth checking: public readability must not expose a private repository.
+select pg_temp.assert(
+  (select visibility from public.projects where id = 'prj_test_alpha') = 'public',
+  'the fixture project is public, so the next assertion is meaningful');
+select pg_temp.assert(
+  (select count(*) from public.project_remotes where project_id = 'prj_test_alpha') = 0,
+  'a public project does not expose its remote to non-members');
+
+-- An editor may record sync state, because that is what a push produces.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+update public.project_remotes set last_synced_sha = repeat('b', 40)
+where project_id = 'prj_test_alpha';
+select pg_temp.assert(
+  (select last_synced_sha from public.project_remotes where project_id = 'prj_test_alpha')
+    = repeat('b', 40),
+  'an editor can record the result of a push');
+
+-- but may not use that same update to repoint the project elsewhere.
+do $$
+begin
+  begin
+    update public.project_remotes set repo = 'somewhere-else'
+    where project_id = 'prj_test_alpha';
+    raise exception 'FAIL  an editor could repoint the project at another repository';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    an editor cannot repoint the project at another repository';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    insert into public.project_remotes
+      (project_id, owner, repo, repo_id, default_branch, branch)
+    values ('prj_test_alpha', 'octocat', 'other', 9002, 'main', 'main');
+    raise exception 'FAIL  an editor could connect a repository';
+  exception
+    when insufficient_privilege then raise notice 'ok    an editor cannot connect a repository';
+    when unique_violation then raise notice 'ok    an editor cannot connect a repository';
+  end;
+end $$;
+
+-- An admin may repoint it.
+select pg_temp.act_as('55555555-5555-5555-5555-555555555555');
+select pg_temp.act_as_admin();
+insert into public.project_members (project_id, user_id, role)
+values ('prj_test_alpha', '55555555-5555-5555-5555-555555555555', 'admin')
+on conflict (project_id, user_id) do update set role = 'admin';
+select pg_temp.act_as('55555555-5555-5555-5555-555555555555');
+update public.project_remotes set repo = 'renamed' where project_id = 'prj_test_alpha';
+select pg_temp.assert(
+  (select repo from public.project_remotes where project_id = 'prj_test_alpha') = 'renamed',
+  'an admin can repoint the project at another repository');
+
+-- Identifier shapes are constrained in the database, not only in the client.
+select pg_temp.act_as_admin();
+do $$
+begin
+  begin
+    insert into public.project_remotes
+      (project_id, owner, repo, repo_id, default_branch, branch)
+    values ('prj_test_beta', '../../etc', 'demo', 9003, 'main', 'main');
+    raise exception 'FAIL  a traversing owner was accepted';
+  exception
+    when check_violation then raise notice 'ok    a traversing owner is rejected';
+    when foreign_key_violation then raise notice 'ok    a traversing owner is rejected';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    insert into public.projects (id, owner_id, name)
+    values ('prj_test_beta', '11111111-1111-1111-1111-111111111111', 'Beta');
+    insert into public.project_remotes
+      (project_id, owner, repo, repo_id, default_branch, branch)
+    values ('prj_test_beta', 'octocat', 'demo', 9003, 'main', 'feature/../../etc');
+    raise exception 'FAIL  a traversing branch name was accepted';
+  exception
+    when check_violation then raise notice 'ok    a traversing branch name is rejected';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    insert into public.project_remotes
+      (project_id, owner, repo, repo_id, default_branch, branch, last_synced_sha)
+    values ('prj_test_beta', 'octocat', 'demo', 9003, 'main', 'main', 'not-a-sha');
+    raise exception 'FAIL  a malformed commit id was accepted';
+  exception
+    when check_violation then raise notice 'ok    a malformed commit id is rejected';
+  end;
+end $$;
+
 select pg_temp.act_as_admin();
 select pg_temp.assert(true, 'all authorization assertions passed');
 

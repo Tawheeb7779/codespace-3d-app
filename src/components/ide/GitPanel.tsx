@@ -16,6 +16,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Field';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { DiffViewer } from '@/components/ide/DiffViewer';
+import { RemoteBar } from '@/components/github/RemoteBar';
 import { useGitStore } from '@/stores/gitStore';
 import { useFileStore } from '@/stores/fileStore';
 import { toast } from '@/stores/toastStore';
@@ -110,7 +111,10 @@ export function GitPanel() {
     checkout,
     merge,
     select,
+    commitAndPush,
   } = useGitStore();
+  const remote = useGitStore((s) => s.remote);
+  const remoteBusy = useGitStore((s) => s.remoteBusy);
   const files = useFileStore((s) => s.files);
   const canWrite = useFileStore((s) => s.canWrite());
 
@@ -239,6 +243,7 @@ export function GitPanel() {
 
       {tab === 'changes' ? (
         <div className="flex min-h-0 flex-1 flex-col">
+          <RemoteBar />
           <div className="border-b border-line p-2.5">
             <textarea
               value={message}
@@ -273,6 +278,34 @@ export function GitPanel() {
               >
                 Stage all
               </Button>
+            </div>
+            <div className="mt-1.5 flex gap-1.5">
+              {remote && (
+                <Button
+                  size="sm"
+                  className="flex-1"
+                  loading={remoteBusy === 'push'}
+                  disabled={
+                    !canWrite || !message.trim() || !status.staged.length || remoteBusy !== null
+                  }
+                  onClick={() =>
+                    void guard('Commit and push failed', async () => {
+                      const result = await commitAndPush(message);
+                      if (result.ok) {
+                        setMessage('');
+                        toast.success(result.message, result.detail);
+                      } else {
+                        // The commit survives even when the push does not, so
+                        // say so rather than implying the work was lost.
+                        toast.error(result.message, result.detail);
+                        setMessage('');
+                      }
+                    })
+                  }
+                >
+                  Commit &amp; Push
+                </Button>
+              )}
             </div>
             {!status.staged.length && !status.clean && (
               <p className="mt-1.5 text-sm text-ink-faint">Stage a file to enable committing.</p>
@@ -371,8 +404,9 @@ export function GitPanel() {
       )}
 
       <p className="border-t border-line px-2.5 py-1.5 text-sm text-ink-faint">
-        Local version control. Push, pull and clone against a git remote are not available — use
-        Export ZIP to move work out.
+        {remote
+          ? `Commits are local until you push. Fetch, pull and push act on ${remote.owner}/${remote.repo}@${remote.branch}.`
+          : 'Local version control. Connect a GitHub repository above to fetch, pull and push, or export a ZIP.'}
       </p>
 
       <Modal

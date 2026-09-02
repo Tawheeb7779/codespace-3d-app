@@ -205,6 +205,43 @@ export function commit(
   };
 }
 
+/**
+ * Record a complete working tree as a commit with explicit parents.
+ *
+ * `commit()` above always builds on the index and the current branch tip,
+ * which is right for a user commit. Bringing remote history in needs the other
+ * shape: a known tree, and parents that may include a commit the user never
+ * made locally. Both funnel into the same commit and blob representation.
+ */
+export function commitFiles(
+  repo: Repo,
+  files: Record<string, string>,
+  message: string,
+  author: { name: string; email: string },
+  parents: string[],
+  timestamp = Date.now(),
+): { repo: Repo; commit: Commit } {
+  const staged = stage({ ...repo, index: {} }, files);
+  const id = hashContent(`${parents.join('+')}|${message}|${timestamp}|${Object.entries(staged.index).sort().join(',')}`);
+  const created: Commit = {
+    id,
+    message,
+    author: author.name,
+    email: author.email,
+    timestamp,
+    parents: parents.filter(Boolean),
+    tree: { ...staged.index },
+  };
+  return {
+    repo: {
+      ...staged,
+      commits: { ...staged.commits, [id]: created },
+      branches: { ...staged.branches, [staged.head]: id },
+    },
+    commit: created,
+  };
+}
+
 export function log(repo: Repo, branch = repo.head, limit = 200): Commit[] {
   const out: Commit[] = [];
   const seen = new Set<string>();
@@ -292,6 +329,60 @@ export function mergeBase(repo: Repo, a: string, b: string): string | null {
   return null;
 }
 
+export interface TreeMerge {
+  files: Record<string, string>;
+  /** Paths whose merge left conflict markers in the text. */
+  conflicts: string[];
+}
+
+/**
+ * Three-way merge of whole working trees.
+ *
+ * This is the single implementation of Forge's merge semantics: branch merges
+ * and remote pulls both come through here, so a conflict looks and resolves
+ * identically no matter where the other side came from.
+ *
+ * A path deleted on one side and edited on the other is a conflict git also
+ * refuses to decide; Forge keeps the surviving content and names the path.
+ */
+export function mergeTrees(
+  base: Record<string, string>,
+  ours: Record<string, string>,
+  theirs: Record<string, string>,
+): TreeMerge {
+  const paths = new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)]);
+  const files: Record<string, string> = {};
+  const conflicts: string[] = [];
+
+  for (const path of paths) {
+    const inBase = base[path];
+    const inOurs = ours[path];
+    const inTheirs = theirs[path];
+    if (inOurs === undefined && inTheirs === undefined) continue;
+    if (inOurs === undefined) {
+      if (inBase === undefined || inBase === inTheirs) files[path] = inTheirs!;
+      else {
+        conflicts.push(path);
+        files[path] = inTheirs!;
+      }
+      continue;
+    }
+    if (inTheirs === undefined) {
+      if (inBase === undefined || inBase === inOurs) files[path] = inOurs;
+      else {
+        conflicts.push(path);
+        files[path] = inOurs;
+      }
+      continue;
+    }
+    const result = mergeThreeWay(inBase ?? '', inOurs, inTheirs);
+    files[path] = result.text;
+    if (result.conflicted) conflicts.push(path);
+  }
+
+  return { files, conflicts: conflicts.sort() };
+}
+
 export interface MergeOutcome {
   repo: Repo;
   files: Record<string, string>;
@@ -346,42 +437,11 @@ export function merge(
     };
   }
 
-  const baseFiles = base ? checkoutTree(repo, base) : {};
-  const ourFiles = checkoutTree(repo, oursId);
-  const theirFiles = checkoutTree(repo, theirsId);
-  const paths = new Set([
-    ...Object.keys(baseFiles),
-    ...Object.keys(ourFiles),
-    ...Object.keys(theirFiles),
-  ]);
-
-  const merged: Record<string, string> = {};
-  const conflicts: string[] = [];
-  for (const path of paths) {
-    const inBase = baseFiles[path];
-    const inOurs = ourFiles[path];
-    const inTheirs = theirFiles[path];
-    if (inOurs === undefined && inTheirs === undefined) continue;
-    if (inOurs === undefined) {
-      if (inBase === undefined || inBase === inTheirs) merged[path] = inTheirs!;
-      else {
-        conflicts.push(path);
-        merged[path] = inTheirs!;
-      }
-      continue;
-    }
-    if (inTheirs === undefined) {
-      if (inBase === undefined || inBase === inOurs) merged[path] = inOurs;
-      else {
-        conflicts.push(path);
-        merged[path] = inOurs;
-      }
-      continue;
-    }
-    const result = mergeThreeWay(inBase ?? '', inOurs, inTheirs);
-    merged[path] = result.text;
-    if (result.conflicted) conflicts.push(path);
-  }
+  const { files: merged, conflicts } = mergeTrees(
+    base ? checkoutTree(repo, base) : {},
+    checkoutTree(repo, oursId),
+    checkoutTree(repo, theirsId),
+  );
 
   let nextRepo = { ...repo };
   if (!conflicts.length) {

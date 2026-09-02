@@ -13,6 +13,7 @@ import AuthPage from '@/routes/AuthPage';
 const DashboardPage = lazy(() => import('@/routes/DashboardPage'));
 const WorkspacePage = lazy(() => import('@/routes/WorkspacePage'));
 const SettingsPage = lazy(() => import('@/routes/SettingsPage'));
+const GithubCallbackPage = lazy(() => import('@/routes/GithubCallbackPage'));
 
 function FullPageSpinner({ label }: { label: string }) {
   return (
@@ -63,6 +64,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <SettingsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/settings/github/callback"
+            element={
+              <RequireAuth>
+                <GithubCallbackPage />
               </RequireAuth>
             }
           />

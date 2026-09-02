@@ -1,5 +1,6 @@
 import type { Project, ProjectMeta } from '@/types';
 import type { Repo } from '@/lib/vcs';
+import type { RemoteRef } from '@/lib/github/remote';
 
 /**
  * Storage boundary for projects. Two implementations exist:
@@ -23,4 +24,8 @@ export interface ProjectRepository {
   deleteProject(id: string): Promise<void>;
   loadVcs(id: string): Promise<Repo | null>;
   saveVcs(id: string, repo: Repo): Promise<void>;
+  /** The GitHub repository this project tracks, if any. */
+  loadRemote(id: string): Promise<RemoteRef | null>;
+  saveRemote(id: string, remote: RemoteRef): Promise<void>;
+  clearRemote(id: string): Promise<void>;
 }

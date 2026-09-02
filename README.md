@@ -342,7 +342,7 @@ not the boundary — the database is.
 npm run test
 ```
 
-192 unit and integration tests cover the parts where a mistake is expensive:
+351 unit and integration tests cover the parts where a mistake is expensive:
 
 | Suite | Focus |
 | --- | --- |
@@ -356,6 +356,9 @@ npm run test
 | `lib/packages.test.ts` | Manifest parsing, name validation, registry error handling. |
 | `lib/preview.test.ts` | Entry detection, dependency pinning, template integrity. |
 | `stores/stores.test.ts` | Project lifecycle, file operations, persistence, tab behaviour, VCS integration, read-only enforcement. |
+| `lib/github/objects.test.ts` | Proves the GitHub test harness stores real git objects, by checking its ids against the `git` binary. |
+| `lib/github/sync.test.ts` | Fetch, pull and push end to end against that harness: fast-forward, divergence, conflicts, rejection, empty repositories, races. |
+| `lib/github/security.test.ts` | Identifier validation, hostile repository contents, error taxonomy, and that no AI tool can reach GitHub. |
 
 ### End-to-end
 
@@ -469,6 +472,60 @@ supabase/
 
 ---
 
+## GitHub integration
+
+A project can track a real GitHub repository and fetch, pull and push against
+it. Pushing builds real git objects through the Git Data API — blobs, trees,
+commits — and moves the branch with `force: false`, so **GitHub** performs the
+fast-forward check. Forge never reports a push as successful before GitHub has
+confirmed the ref update, and never forces.
+
+### Where the credential lives
+
+| Deployment | Credential | Reaches the browser? |
+| --- | --- | --- |
+| Supabase configured | `private.github_tokens`, readable only by the service role | No |
+| Local Development Mode | `sessionStorage`, this tab only | Yes, the one you paste |
+
+With Supabase configured, the browser never sees a GitHub token. Two Edge
+Functions do the work:
+
+- `github-oauth` — starts the flow with a server-generated `state` bound to the
+  signed-in user, exchanges the code with the client secret, stores the token,
+  and revokes it on disconnect.
+- `github-proxy` — the only path from a browser session to GitHub. It verifies
+  the Supabase JWT, matches the request against an allowlist of routes,
+  re-validates every identifier, requires the editor role on the project for
+  any write, and requires that write to target the repository the project is
+  actually connected to.
+
+The `private` schema has no grants for `anon` or `authenticated`, so the token
+table is unreachable through PostgREST under any policy. `supabase/tests/rls.sql`
+asserts this, along with the rest of the boundary.
+
+Local Development Mode has no server to mediate, so it asks for a personal
+access token and says plainly where it is kept and how long it survives. That
+is the honest fallback for working offline, not the deployment posture.
+
+### What the assistant can do with it
+
+Nothing. The AI agent has no GitHub tool, no access to the credential, and no
+way to move a remote branch; `lib/github/security.test.ts` asserts the tool
+registry stays that way.
+
+### Setup
+
+Register a GitHub OAuth app with the callback
+`<your-origin>/settings/github/callback`, then:
+
+```bash
+supabase secrets set GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+  FORGE_APP_ORIGIN=https://your-forge-deployment.example
+supabase functions deploy github-oauth
+supabase functions deploy github-proxy
+supabase db push        # applies 0002_github_remote.sql
+```
+
 ## Honest limitations
 
 These are deliberate, and the UI says so where a user would otherwise be misled:
@@ -478,8 +535,13 @@ These are deliberate, and the UI says so where a user would otherwise be misled:
   package is recorded in `package.json` and loaded from a CDN at preview time;
   without network access those imports fail with a named, actionable error.
   Packages relying on Node built-ins or install scripts will not run at all.
-- **No git remote.** Forge VCS is local. Use Export ZIP to move work out, or
-  Import from GitHub to bring a public repository in.
+- **The git remote is GitHub over REST, not the git wire protocol.** Fetch,
+  pull and push are real — they create genuine git blobs, trees and commits
+  through GitHub's Git Data API, and GitHub itself performs the fast-forward
+  check on every ref update. What Forge does not implement is `git clone` over
+  smart HTTP, arbitrary git hosts, force pushing, tags, submodules or LFS. A
+  divergent pull merges with Forge's own three-way merge, so the local history
+  graph is Forge's, not a byte-identical copy of the remote's.
 - **Node and Next.js templates cannot preview.** They need a server process.
   Editing, search, version control and export work normally; the preview panel
   explains why it is unavailable rather than showing a blank frame.

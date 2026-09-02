@@ -188,4 +188,73 @@ export const supabaseRepository: ProjectRepository = {
       .upsert({ project_id: id, snapshot: repo, updated_at: new Date().toISOString() });
     if (error) fail('Could not save version history', error);
   },
+
+  /**
+   * The remote lives in its own table so row level security can treat it
+   * separately: reading it needs membership, connecting it needs admin, and
+   * recording a push needs write access. The commit-to-SHA map and the synced
+   * tree ride along in `project_vcs`, since they are local bookkeeping rather
+   * than shared configuration.
+   */
+  async loadRemote(id) {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('project_remotes')
+      .select('owner, repo, repo_id, default_branch, branch, last_fetched_sha, last_synced_sha, last_fetched_at, tracking')
+      .eq('project_id', id)
+      .maybeSingle();
+    if (error) fail('Could not load the connected repository', error);
+    if (!data) return null;
+    const tracking = (data.tracking ?? {}) as {
+      syncedTree?: Record<string, string> | null;
+      pushedUpTo?: string | null;
+      merging?: { sha: string; tree: Record<string, string> } | null;
+      commitShas?: Record<string, string>;
+    };
+    return {
+      provider: 'github',
+      owner: data.owner as string,
+      repo: data.repo as string,
+      repoId: Number(data.repo_id),
+      defaultBranch: data.default_branch as string,
+      branch: data.branch as string,
+      lastFetchedSha: (data.last_fetched_sha as string | null) ?? null,
+      lastSyncedSha: (data.last_synced_sha as string | null) ?? null,
+      lastFetchedAt: data.last_fetched_at ? Date.parse(data.last_fetched_at as string) : null,
+      syncedTree: tracking.syncedTree ?? null,
+      pushedUpTo: tracking.pushedUpTo ?? null,
+      merging: tracking.merging ?? null,
+      commitShas: tracking.commitShas ?? {},
+    };
+  },
+
+  async saveRemote(id, remote) {
+    const client = requireSupabase();
+    const { error } = await client.from('project_remotes').upsert({
+      project_id: id,
+      provider: remote.provider,
+      owner: remote.owner,
+      repo: remote.repo,
+      repo_id: remote.repoId,
+      default_branch: remote.defaultBranch,
+      branch: remote.branch,
+      last_fetched_sha: remote.lastFetchedSha,
+      last_synced_sha: remote.lastSyncedSha,
+      last_fetched_at: remote.lastFetchedAt ? new Date(remote.lastFetchedAt).toISOString() : null,
+      tracking: {
+        syncedTree: remote.syncedTree,
+        pushedUpTo: remote.pushedUpTo,
+        merging: remote.merging,
+        commitShas: remote.commitShas,
+      },
+      updated_at: new Date().toISOString(),
+    });
+    if (error) fail('Could not save the connected repository', error);
+  },
+
+  async clearRemote(id) {
+    const client = requireSupabase();
+    const { error } = await client.from('project_remotes').delete().eq('project_id', id);
+    if (error) fail('Could not disconnect the repository', error);
+  },
 };

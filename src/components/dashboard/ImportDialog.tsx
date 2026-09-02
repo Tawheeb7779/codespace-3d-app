@@ -5,11 +5,12 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Field';
 import { fetchGithubZip, importZip, parseRepoSpec, type ImportReport } from '@/lib/archive';
+import { GithubRepoImport } from '@/components/github/GithubRepoImport';
 import { useProjectStore } from '@/stores/projectStore';
 import { toast } from '@/stores/toastStore';
 import { cx, errorMessage, formatBytes } from '@/lib/utils';
 
-type Source = 'zip' | 'github';
+type Source = 'zip' | 'github' | 'account';
 
 export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
@@ -100,9 +101,11 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           <Button onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!report || busy} loading={busy} onClick={() => void finish()}>
-            Create project
-          </Button>
+          {source !== 'account' && (
+            <Button variant="primary" disabled={!report || busy} loading={busy} onClick={() => void finish()}>
+              Create project
+            </Button>
+          )}
         </>
       }
     >
@@ -111,7 +114,8 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           {(
             [
               ['zip', 'ZIP archive', FileArchive],
-              ['github', 'Public GitHub repo', Github],
+              ['account', 'Your GitHub', Github],
+              ['github', 'Public repo', Github],
             ] as const
           ).map(([value, label, Icon]) => (
             <button
@@ -134,7 +138,9 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           ))}
         </div>
 
-        {source === 'zip' ? (
+        {source === 'account' ? (
+          <GithubRepoImport onDone={onClose} />
+        ) : source === 'zip' ? (
           <div
             onDragOver={(event) => {
               event.preventDefault();

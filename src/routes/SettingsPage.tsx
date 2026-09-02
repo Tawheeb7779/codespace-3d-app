@@ -12,6 +12,7 @@ import {
   type EsmCdn,
 } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
+import { GithubConnection } from '@/components/github/GithubConnection';
 import { useAuthStore } from '@/stores/authStore';
 import { toast } from '@/stores/toastStore';
 import { chordFromEvent, formatChord } from '@/hooks/useKeyboardShortcuts';
@@ -19,13 +20,14 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 import { persistenceStatus } from '@/lib/idb';
 import { cx, errorMessage } from '@/lib/utils';
 
-const SECTIONS = ['editor', 'appearance', 'runtime', 'keyboard', 'account'] as const;
+const SECTIONS = ['editor', 'appearance', 'runtime', 'integrations', 'keyboard', 'account'] as const;
 type Section = (typeof SECTIONS)[number];
 
 const LABELS: Record<Section, string> = {
   editor: 'Editor',
   appearance: 'Appearance',
   runtime: 'Runtime',
+  integrations: 'Integrations',
   keyboard: 'Keyboard',
   account: 'Account',
 };
@@ -258,6 +260,23 @@ export default function SettingsPage() {
               />
             </Group>
           )}
+
+          {section === 'integrations' && (
+
+            <Group
+
+              title="GitHub"
+
+              description="Connect an account once; each project then points at a repository it can reach."
+
+            >
+
+              <GithubConnection />
+
+            </Group>
+
+          )}
+
 
           {section === 'keyboard' && (
             <Group

@@ -16,15 +16,22 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOOTSTRAP="$ROOT/supabase/tests/00-bootstrap.sql"
-MIGRATION="$ROOT/supabase/migrations/0001_init.sql"
 TESTS="$ROOT/supabase/tests/rls.sql"
+
+# Every migration, in order, so the suite tests the schema as deployed.
+apply_migrations() {
+  local target="$1"
+  for migration in "$ROOT"/supabase/migrations/*.sql; do
+    run_sql -d "$target" -f "$migration" >/dev/null
+  done
+}
 
 run_sql() { psql -q -v ON_ERROR_STOP=1 "$@"; }
 
 if [[ -n "${DATABASE_URL:-}" ]]; then
   echo "==> Using DATABASE_URL"
   run_sql -d "$DATABASE_URL" -f "$BOOTSTRAP" >/dev/null
-  run_sql -d "$DATABASE_URL" -f "$MIGRATION" >/dev/null
+  apply_migrations "$DATABASE_URL"
   psql -v ON_ERROR_STOP=1 -d "$DATABASE_URL" -f "$TESTS" 2>&1 |
     grep -E 'NOTICE|ERROR' | sed 's/.*NOTICE:  //; s/.*ERROR:  /ERROR: /'
   exit "${PIPESTATUS[0]}"
@@ -37,7 +44,7 @@ createdb "$DB"
 trap 'dropdb --if-exists "$DB" >/dev/null 2>&1 || true' EXIT
 
 run_sql -d "$DB" -f "$BOOTSTRAP" >/dev/null
-run_sql -d "$DB" -f "$MIGRATION" >/dev/null
+apply_migrations "$DB"
 echo "==> Running authorization tests"
 psql -v ON_ERROR_STOP=1 -d "$DB" -f "$TESTS" 2>&1 |
   grep -E 'NOTICE|ERROR' | sed 's/.*NOTICE:  //; s/.*ERROR:  /ERROR: /'

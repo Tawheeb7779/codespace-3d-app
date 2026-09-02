@@ -2,6 +2,7 @@ import { idbAll, idbDelete, idbGet, idbSet } from '@/lib/idb';
 import type { Project, ProjectMeta } from '@/types';
 import type { Repo } from '@/lib/vcs';
 import type { ProjectRepository } from '@/lib/repo/types';
+import type { RemoteRef } from '@/lib/github/remote';
 
 const toMeta = (project: Project): ProjectMeta => {
   const { files: _files, dirs: _dirs, ...meta } = project;
@@ -43,6 +44,7 @@ export const localRepository: ProjectRepository = {
   async deleteProject(id) {
     await idbDelete('projects', id);
     await idbDelete('repos', id);
+    await idbDelete('kv', `remote:${id}`);
   },
 
   async loadVcs(id) {
@@ -51,5 +53,17 @@ export const localRepository: ProjectRepository = {
 
   async saveVcs(id, repo) {
     await idbSet('repos', id, repo);
+  },
+
+  async loadRemote(id) {
+    return (await idbGet<RemoteRef>('kv', `remote:${id}`)) ?? null;
+  },
+
+  async saveRemote(id, remote) {
+    await idbSet('kv', `remote:${id}`, remote);
+  },
+
+  async clearRemote(id) {
+    await idbDelete('kv', `remote:${id}`);
   },
 };
