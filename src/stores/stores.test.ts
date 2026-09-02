@@ -245,6 +245,152 @@ describe('version control integration', () => {
     expect(after.map((l) => l.text).join('\n')).toContain('On branch main');
   });
 
+  it('branches, diverges and merges cleanly through the store', async () => {
+    const project = await freshProject();
+    const git = useGitStore.getState();
+    const files = useFileStore.getState();
+    await git.load(project.id);
+    await git.init();
+    await git.stage();
+    await git.commit('base');
+
+    // A feature branch edits one file…
+    await useGitStore.getState().createBranch('feature', true);
+    files.writeFile('src/main.js', '// feature edit\n');
+    await files.flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('feature edit');
+
+    // …while main edits a different one.
+    await useGitStore.getState().checkout('main');
+    expect(useFileStore.getState().files['src/main.js']).not.toContain('feature edit');
+    useFileStore.getState().writeFile('README.md', '# main edit\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('main edit');
+
+    const outcome = await useGitStore.getState().merge('feature');
+    expect(outcome.conflicts).toEqual([]);
+    expect(outcome.upToDate).toBe(false);
+    expect(useFileStore.getState().files['src/main.js']).toContain('feature edit');
+    expect(useFileStore.getState().files['README.md']).toContain('main edit');
+    expect(useGitStore.getState().status.clean).toBe(true);
+  });
+
+  it('writes conflict markers and lets the user resolve and commit', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    useFileStore.getState().writeFile('conflict.txt', 'line1\nshared\nline3\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('base');
+
+    await useGitStore.getState().createBranch('theirs', true);
+    useFileStore.getState().writeFile('conflict.txt', 'line1\nTHEIRS\nline3\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('theirs edit');
+
+    await useGitStore.getState().checkout('main');
+    useFileStore.getState().writeFile('conflict.txt', 'line1\nOURS\nline3\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('ours edit');
+
+    const outcome = await useGitStore.getState().merge('theirs');
+    expect(outcome.conflicts).toEqual(['conflict.txt']);
+
+    // The conflict is written into the working tree for the user to resolve.
+    const conflicted = useFileStore.getState().files['conflict.txt'];
+    expect(conflicted).toContain('<<<<<<< ours');
+    expect(conflicted).toContain('OURS');
+    expect(conflicted).toContain('=======');
+    expect(conflicted).toContain('THEIRS');
+    expect(conflicted).toContain('>>>>>>> theirs');
+
+    // No merge commit was created while the conflict stands.
+    expect(useGitStore.getState().history[0].message).toBe('ours edit');
+    useGitStore.getState().refresh();
+    expect(useGitStore.getState().status.clean).toBe(false);
+
+    // Resolving is an ordinary edit, stage, commit.
+    useFileStore.getState().writeFile('conflict.txt', 'line1\nRESOLVED\nline3\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    const resolved = await useGitStore.getState().commit('resolve conflict');
+    expect(resolved.message).toBe('resolve conflict');
+    useGitStore.getState().refresh();
+    expect(useGitStore.getState().status.clean).toBe(true);
+    expect(useFileStore.getState().files['conflict.txt']).not.toContain('<<<<<<<');
+  });
+
+  it('abandons a conflicted merge by discarding the working tree', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    useFileStore.getState().writeFile('c.txt', 'base\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('base');
+
+    await useGitStore.getState().createBranch('side', true);
+    useFileStore.getState().writeFile('c.txt', 'side\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('side');
+
+    await useGitStore.getState().checkout('main');
+    useFileStore.getState().writeFile('c.txt', 'main\n');
+    await useFileStore.getState().flush();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('main');
+
+    const outcome = await useGitStore.getState().merge('side');
+    expect(outcome.conflicts).toEqual(['c.txt']);
+
+    // Discard restores from the index, which still holds the pre-merge commit.
+    await useGitStore.getState().discard(['c.txt']);
+    expect(useFileStore.getState().files['c.txt']).toBe('main\n');
+    useGitStore.getState().refresh();
+    expect(useGitStore.getState().status.clean).toBe(true);
+  });
+
+  it('stages and unstages individual paths', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('base');
+
+    useFileStore.getState().writeFile('src/main.js', '// one\n');
+    useFileStore.getState().writeFile('README.md', '# two\n');
+    await useFileStore.getState().flush();
+    useGitStore.getState().refresh();
+    expect(useGitStore.getState().status.unstaged).toHaveLength(2);
+
+    await useGitStore.getState().stage(['src/main.js']);
+    expect(useGitStore.getState().status.staged.map((c) => c.path)).toEqual(['src/main.js']);
+    expect(useGitStore.getState().status.unstaged.map((c) => c.path)).toEqual(['README.md']);
+
+    await useGitStore.getState().unstage(['src/main.js']);
+    expect(useGitStore.getState().status.staged).toHaveLength(0);
+    expect(useGitStore.getState().status.unstaged).toHaveLength(2);
+  });
+
+  it('refuses to switch branches with uncommitted work', async () => {
+    const project = await freshProject();
+    await useGitStore.getState().load(project.id);
+    await useGitStore.getState().init();
+    await useGitStore.getState().stage();
+    await useGitStore.getState().commit('base');
+    await useGitStore.getState().createBranch('other', false);
+
+    useFileStore.getState().writeFile('README.md', 'dirty\n');
+    await useFileStore.getState().flush();
+    await expect(useGitStore.getState().checkout('other')).rejects.toThrow(/uncommitted changes/);
+  });
+
   it('refuses network git operations with an explanation', async () => {
     const project = await freshProject();
     await useGitStore.getState().load(project.id);

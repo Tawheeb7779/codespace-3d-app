@@ -35,12 +35,12 @@ limitation instead of miming the behaviour.
 | Area | What is actually implemented |
 | --- | --- |
 | **Editor** | Monaco with language workers, IntelliSense, folding, multi-cursor, find/replace, go-to-symbol, breadcrumbs, split view, per-file view state, format-on-save. |
-| **Build** | `esbuild-wasm` compiles the project's real source in a worker. Diagnostics carry file, line and column, and clicking one jumps there. |
+| **Build** | `esbuild-wasm` compiles the project's real source in a worker. React and its JSX runtimes are bundled in from this origin, so React previews need no network. Diagnostics carry file, line and column, and clicking one jumps there. |
 | **Preview** | A sandboxed iframe (`allow-scripts` only, no `allow-same-origin`). Console output, runtime errors and unhandled rejections are piped back. Device presets, refresh, open-in-tab. |
 | **Terminal** | xterm.js over *Forge Shell*, a command interpreter that mutates the real virtual file system. History, tab completion, multiple sessions. |
 | **Version control** | *Forge VCS*: content-addressed blobs, commits, branches, staging, three-way merge with conflict markers, line-level diff viewer. |
 | **Search** | Project-wide search in a worker: regex, whole word, case, include/exclude globs, replace across files. |
-| **Packages** | Live npm registry search and version resolution, written into `package.json`; the preview imports those exact versions from a CDN. |
+| **Packages** | Live npm registry search and version resolution, written into `package.json`; anything not in the local runtime is imported at that exact version from a CDN, and an unreachable CDN produces a named, actionable error rather than a blank frame. |
 | **AI assistant** | An agent loop over nine real tools. Bring your own provider; every tool call and its result are shown. |
 | **Auth** | Supabase email/password plus Google and GitHub OAuth, with a graceful Local Development Mode when Supabase is absent. |
 | **Import/export** | ZIP in and out, plus import from a public GitHub repository. Traversal and sensitive paths are blocked at the boundary. |
@@ -56,9 +56,13 @@ directory paths. This mirrors how esbuild, ZIP archives and git address files,
 and it removes the id/parent bookkeeping that makes tree mutations error prone.
 
 Every path that enters the workspace — from the UI, an archive, the shell or an
-AI tool — passes through `normalizePath` in `src/lib/vfs.ts`. That single choke
-point rejects traversal, absolute paths, Windows separators, control characters
-and reserved device names. Nothing else is trusted to sanitise a path.
+AI tool — passes through `src/lib/vfs.ts`. `normalizePath` rejects traversal,
+absolute paths, Windows separators, control characters and reserved device
+names outright; `resolveRelative` handles *references* such as `../shared`,
+collapsing the `..` segments while still refusing to climb past the project
+root. The shell and the bundler both resolve through it, so there is one
+implementation of the rule rather than three. Nothing else is trusted to
+sanitise a path.
 
 ### State is split by concern
 
@@ -99,8 +103,10 @@ persistence is off, rather than silently losing work.
 ```
 files ──► findEntry() ──► esbuild-wasm ──► bundle + CSS
                                 │
-                                ├─ relative imports resolved from the VFS
-                                └─ bare imports left external
+                                ├─ relative imports  → resolved from the VFS
+                                ├─ react, react-dom, → compiled in from
+                                │  react/jsx-runtime   /preview-runtime
+                                └─ everything else   → left external
                                           │
                        import map ────────┘   (esm.sh or jsDelivr, version
                                                pinned from package.json)
@@ -110,9 +116,25 @@ files ──► findEntry() ──► esbuild-wasm ──► bundle + CSS
                                        postMessage bridge ──► Output panel
 ```
 
+**Local packages.** `scripts/build-preview-runtime.mjs` pre-bundles React, React
+DOM and the JSX runtimes into ES modules under `public/preview-runtime/`, using
+code splitting so all of them share one React instance — two copies would break
+hooks the moment a component rendered. The IDE fetches those modules from its own
+origin (same-origin, no CORS) and the bundler compiles them straight into the
+preview. A React preview therefore makes **no network request at all**, which is
+what makes the React, React + TypeScript and Vite templates work offline and
+behind a CDN block.
+
+Anything the manifest does not list still goes to the configured CDN. Before
+serving a preview with unresolved externals, the build probes the CDN once per
+session; if it is unreachable the preview shows a build-failed page naming the
+exact packages and the ways to proceed, instead of an empty frame.
+
 The iframe has no `allow-same-origin`, so it runs in an opaque origin: project
 code cannot read the IDE's storage, cookies or DOM. Messages are accepted only
-when `event.source` is that exact frame.
+when `event.source` is that exact frame. Uncaught exceptions, unhandled
+rejections and failed resource loads are reported to the Output panel and drawn
+as an overlay inside the preview.
 
 ### Forge VCS
 
@@ -146,6 +168,7 @@ corresponding call returns.
 | Styling | Tailwind over CSS variables | One `data-theme` attribute swaps the palette; opacity modifiers still work. |
 | Icons | `lucide-react` | Consistent, tree-shakeable. |
 | Archives | `jszip` | Import/export. |
+| Preview runtime | `esbuild` (native, build-time only) | Pre-bundles React for the offline preview. |
 | Backend | Supabase (Postgres, Auth, RLS) | Auth and row-level authorization without a bespoke server. |
 
 Nothing else is a dependency.
@@ -241,10 +264,16 @@ npm run lint         # eslint
 npm run test         # vitest
 npm run test:watch
 npm run test:coverage
-npm run build        # typecheck, then production build
+npm run test:rls     # authorization tests against PostgreSQL
+npm run build        # preview runtime, typecheck, then production build
 npm run preview      # serve the production build
 npm run verify       # typecheck + lint + test + build
+npm run build:preview-runtime   # regenerate public/preview-runtime
 ```
+
+`predev` and `prebuild` regenerate `public/preview-runtime/` automatically, so
+`npm run dev` and `npm run build` are all you normally need. The directory is
+generated output and is not committed.
 
 ---
 
@@ -330,18 +359,21 @@ npm run test
 
 ### End-to-end
 
-`e2e/smoke.mjs` drives a real browser through sign-in, project creation, the
-editor, a genuine build and preview, the shell, search, version control, the
-command palette, the Problems panel, settings and the mobile layout. It fails on
-any uncaught page error or console error, so a runtime-only regression still
-breaks the run.
+Two Playwright suites drive a real browser. Both fail on any uncaught page error
+or console error, so a runtime-only regression still breaks the run.
+
+| Suite | Covers |
+| --- | --- |
+| `npm run test:e2e` | Sign-in, project creation, the editor, a real build and preview, the shell, terminal remounting, filesystem escape attempts, search, version control, the command palette, the Problems panel, settings and the mobile layout. |
+| `npm run test:e2e:preview` | The preview matrix: every runnable template rendered and interacted with, multi-file/relative/CSS/JSON imports, runtime exceptions, build and syntax errors, a missing dependency, rebuild on edit, and stop/run/refresh. |
 
 Playwright is not an app dependency, so install it first:
 
 ```bash
 npm i -D playwright && npx playwright install chromium
-npm run dev            # in another shell
+npm run dev                 # in another shell
 npm run test:e2e
+npm run test:e2e:preview
 ```
 
 Screenshots land in `e2e/artifacts/`.
@@ -351,14 +383,37 @@ Screenshots land in `e2e/artifacts/`.
 RLS boundaries are tested in SQL, where they are actually enforced:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/rls.sql
+npm run test:rls                        # scratch database on a local PostgreSQL
+DATABASE_URL=postgres://… npm run test:rls
 ```
 
-The script creates an owner, an editor, a viewer and an outsider, then asserts —
-as each of them, with a real `auth.uid()` — that reads are scoped, viewers
-cannot write, editors cannot escalate or delete, outsiders see nothing, public
-visibility grants read but never write, and activity cannot be attributed to
-someone else. Everything rolls back at the end.
+`supabase/tests/00-bootstrap.sql` provides the small Supabase shim the policies
+depend on — the `authenticated` role, an `auth.users` table and `auth.uid()` —
+so the suite runs against a plain PostgreSQL instance. Against a real Supabase
+database it is a no-op.
+
+45 assertions run as an owner, an admin, an editor, a viewer and an unrelated
+outsider, each with a real `auth.uid()`, covering:
+
+- **projects** — reads are scoped; requesting another user's project id returns
+  nothing; only the owner may delete; nobody can create a project owned by
+  someone else.
+- **project_files** — editors write, viewers and outsiders cannot.
+- **project_members** — an editor cannot promote themselves; only an owner may
+  grant the owner role.
+- **ownership transfer** — an editor is stopped by the row policy, an admin by
+  the trigger, and the owner can transfer and transfer back.
+- **project_settings** — members read, only admins and owners write.
+- **project_vcs** — follows write permission, not mere membership.
+- **teams / team_members** — members see the team, a team editor cannot add
+  members, outsiders see nothing and cannot create a team under another owner.
+- **profiles** — collaborators can see each other, strangers cannot, and nobody
+  can rename another profile.
+- **project_activity** — append-only, and cannot be attributed to another user.
+- **path constraints** — traversing and absolute paths are rejected by check
+  constraints, independently of the client.
+
+Everything rolls back at the end, so the suite is safe to re-run.
 
 ---
 
@@ -378,7 +433,8 @@ src/
   hooks/           useTheme, useKeyboardShortcuts, useMediaQuery
   lib/
     vfs.ts         path normalisation and the tree model  ← security choke point
-    bundler.ts     esbuild-wasm wrapper
+    bundler.ts     esbuild-wasm wrapper and module resolver
+    previewRuntime.ts  loads the locally hosted React bundles
     preview.ts     preview document assembly and the sandbox bridge
     shell.ts       command interpreter (pure)
     shellHost.ts   binds the interpreter to live stores
@@ -398,9 +454,17 @@ src/
                    SettingsPage
   stores/          the eleven state slices
   workers/         search.worker.ts
+scripts/
+  build-preview-runtime.mjs  pre-bundles React for the offline preview
+  run-rls-tests.sh           applies the schema and runs the RLS suite
+e2e/
+  smoke.mjs        end-to-end walkthrough of the major flows
+  preview-matrix.mjs  every template, import kind and error path
 supabase/
   migrations/      schema, policies, triggers
-  tests/           RLS authorization assertions
+  tests/
+    00-bootstrap.sql  Supabase shim so the suite runs on plain PostgreSQL
+    rls.sql           45 authorization assertions
 ```
 
 ---
@@ -409,9 +473,11 @@ supabase/
 
 These are deliberate, and the UI says so where a user would otherwise be misled:
 
-- **No `node_modules`.** Installing records the resolved version in
-  `package.json`; the preview loads that version from a CDN. Packages relying on
-  Node built-ins or install scripts will not run.
+- **No `node_modules`.** React, React DOM and the JSX runtimes are served from
+  this origin and compiled into the preview, so they work offline. Every other
+  package is recorded in `package.json` and loaded from a CDN at preview time;
+  without network access those imports fail with a named, actionable error.
+  Packages relying on Node built-ins or install scripts will not run at all.
 - **No git remote.** Forge VCS is local. Use Export ZIP to move work out, or
   Import from GitHub to bring a public repository in.
 - **Node and Next.js templates cannot preview.** They need a server process.

@@ -12,13 +12,17 @@ import { escapeHtml } from '@/lib/utils';
  */
 
 import { ESM_CDN_URLS, useSettingsStore } from '@/stores/settingsStore';
+import { loadPreviewRuntime, runtimeLoadError } from '@/lib/previewRuntime';
 
 export interface PreviewBuild {
   html: string;
   entry: string;
   errors: BuildDiagnostic[];
   warnings: BuildDiagnostic[];
+  /** Bare specifiers the preview must fetch from the package CDN at runtime. */
   externals: string[];
+  /** Bare specifiers compiled in from the locally hosted runtime. */
+  bundledPackages: string[];
   durationMs: number;
 }
 
@@ -154,6 +158,51 @@ function importMap(externals: string[], pins: Record<string, string>): string {
   return `<script type="importmap">${JSON.stringify({ imports })}</script>`;
 }
 
+type Reachability = 'unknown' | 'reachable' | 'unreachable';
+
+let cdnState: Reachability = 'unknown';
+let cdnProbe: Promise<Reachability> | null = null;
+
+/** Test seam: forget what we learned about the CDN. */
+export function resetCdnReachability(): void {
+  cdnState = 'unknown';
+  cdnProbe = null;
+}
+
+export function cdnReachability(): Reachability {
+  return cdnState;
+}
+
+/**
+ * Check whether the configured package CDN can be reached, once per session.
+ *
+ * Without this, a blocked CDN produces a preview that builds cleanly and then
+ * renders nothing, because the import map's URLs fail inside the sandbox where
+ * we cannot see the failure until the runtime bridge reports it. Probing lets
+ * the build itself explain what is wrong.
+ */
+async function probeCdn(spec: string): Promise<Reachability> {
+  if (cdnState !== 'unknown') return cdnState;
+  if (cdnProbe) return cdnProbe;
+  cdnProbe = (async () => {
+    const cdn = ESM_CDN_URLS[useSettingsStore.getState().runtime.esmCdn] ?? ESM_CDN_URLS['esm.sh'];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      // Any HTTP answer means the host is reachable; only a network-level
+      // failure (blocked, offline, DNS) counts as unreachable.
+      await fetch(cdn(spec), { signal: controller.signal, cache: 'force-cache' });
+      cdnState = 'reachable';
+    } catch {
+      cdnState = 'unreachable';
+    } finally {
+      clearTimeout(timer);
+    }
+    return cdnState;
+  })();
+  return cdnProbe;
+}
+
 /** Read dependency pins out of package.json, ignoring range prefixes. */
 export function readDependencyPins(files: Record<string, string>): Record<string, string> {
   const raw = files['package.json'];
@@ -241,6 +290,7 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
         errors: [],
         warnings: [],
         externals: [],
+        bundledPackages: [],
         durationMs: 0,
       };
     }
@@ -252,11 +302,13 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
       errors: [],
       warnings: [],
       externals: [],
+      bundledPackages: [],
       durationMs: 0,
     };
   }
 
-  const result = await bundle(files, entry);
+  const runtime = await loadPreviewRuntime();
+  const result = await bundle(files, entry, runtime);
   if (result.errors.length) {
     return {
       html: errorDocument(result.errors),
@@ -264,8 +316,45 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
       errors: result.errors,
       warnings: result.warnings,
       externals: result.externals,
+      bundledPackages: result.bundledPackages,
       durationMs: result.durationMs,
     };
+  }
+
+  // Anything still external has to come over the network. Find out now, so a
+  // blocked CDN produces a readable error page instead of a blank frame.
+  if (result.externals.length) {
+    const reach = await probeCdn(result.externals[0]);
+    if (reach === 'unreachable') {
+      const cdnName = useSettingsStore.getState().runtime.esmCdn;
+      const missing = result.externals.join(', ');
+      const errors: BuildDiagnostic[] = [
+        {
+          path: entry,
+          line: 1,
+          column: 1,
+          severity: 'error',
+          message:
+            `Cannot reach ${cdnName} to load ${result.externals.length} package(s): ${missing}.\n\n` +
+            'The build succeeded — only the runtime dependencies are missing. Options:\n' +
+            '  • Settings → Runtime → switch the package CDN (esm.sh ↔ jsDelivr).\n' +
+            '  • Remove the import, or replace it with code in this project.\n' +
+            (runtime.react
+              ? `  • React ${runtime.react} and its JSX runtimes are served locally and need no CDN.`
+              : '  • The local preview runtime did not load, so even React needs the CDN: ' +
+                `${runtimeLoadError() ?? 'reason unknown'}. Run "npm run build:preview-runtime".`),
+        },
+      ];
+      return {
+        html: errorDocument(errors),
+        entry,
+        errors,
+        warnings: result.warnings,
+        externals: result.externals,
+        bundledPackages: result.bundledPackages,
+        durationMs: result.durationMs,
+      };
+    }
   }
 
   const pins = readDependencyPins(files);
@@ -299,6 +388,7 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
     errors: [],
     warnings: result.warnings,
     externals: result.externals,
+    bundledPackages: result.bundledPackages,
     durationMs: result.durationMs,
   };
 }

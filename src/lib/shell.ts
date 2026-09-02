@@ -1,4 +1,11 @@
-import { basename, dirname, isDescendant, joinPath, normalizePath, VfsError } from '@/lib/vfs';
+import {
+  basename,
+  dirname,
+  isDescendant,
+  joinPath,
+  resolveRelative,
+  VfsError,
+} from '@/lib/vfs';
 import { formatBytes, byteLength } from '@/lib/utils';
 
 /**
@@ -105,21 +112,17 @@ export function resolve(session: ShellSession, target: string): string {
     if (!session.cwd) throw new VfsError('Already at the project root');
     return dirname(session.cwd);
   }
-  if (target.startsWith('/') || target.startsWith('~')) {
-    return normalizePath(target.replace(/^~/, ''));
+  // `~` means the project root here; there is no home directory.
+  const spec = target.startsWith('~') ? target.replace(/^~\/?/, '/') : target;
+  try {
+    return resolveRelative(session.cwd, spec);
+  } catch (error) {
+    // `cd /` and `cd ~` legitimately name the project root, which
+    // resolveRelative refuses to return as a path. Commands that cannot act on
+    // a directory reject the empty path themselves.
+    if (error instanceof VfsError && /resolves to the project root/.test(error.message)) return '';
+    throw error;
   }
-  // Walk `..` segments relative to cwd before normalizing, since normalizePath
-  // rejects `..` outright.
-  const parts = session.cwd ? session.cwd.split('/') : [];
-  for (const segment of target.split('/')) {
-    if (segment === '' || segment === '.') continue;
-    if (segment === '..') {
-      if (!parts.length) throw new VfsError(`Path escapes the project root: ${target}`);
-      parts.pop();
-    } else parts.push(segment);
-  }
-  if (!parts.length) return '';
-  return normalizePath(parts.join('/'));
 }
 
 function dirExists(host: ShellHost, path: string): boolean {

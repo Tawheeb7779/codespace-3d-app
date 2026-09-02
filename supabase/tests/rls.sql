@@ -9,6 +9,12 @@
 -- runs as `authenticated` with a specific `auth.uid()`, which is how Supabase
 -- evaluates a real request.
 
+-- Only the assertion notices should reach the terminal.
+\set QUIET on
+\pset tuples_only on
+\pset format unaligned
+\pset footer off
+
 begin;
 
 -- --------------------------------------------------------------------------
@@ -53,7 +59,8 @@ values
   ('11111111-1111-1111-1111-111111111111', 'owner@test.dev',    '{"full_name":"Owner"}'::jsonb),
   ('22222222-2222-2222-2222-222222222222', 'editor@test.dev',   '{"full_name":"Editor"}'::jsonb),
   ('33333333-3333-3333-3333-333333333333', 'viewer@test.dev',   '{"full_name":"Viewer"}'::jsonb),
-  ('44444444-4444-4444-4444-444444444444', 'outsider@test.dev', '{"full_name":"Outsider"}'::jsonb)
+  ('44444444-4444-4444-4444-444444444444', 'outsider@test.dev', '{"full_name":"Outsider"}'::jsonb),
+  ('55555555-5555-5555-5555-555555555555', 'admin@test.dev',    '{"full_name":"Admin"}'::jsonb)
 on conflict (id) do nothing;
 
 -- The auth trigger mirrors these into profiles; insert directly in case the
@@ -63,7 +70,8 @@ values
   ('11111111-1111-1111-1111-111111111111', 'owner@test.dev', 'Owner'),
   ('22222222-2222-2222-2222-222222222222', 'editor@test.dev', 'Editor'),
   ('33333333-3333-3333-3333-333333333333', 'viewer@test.dev', 'Viewer'),
-  ('44444444-4444-4444-4444-444444444444', 'outsider@test.dev', 'Outsider')
+  ('44444444-4444-4444-4444-444444444444', 'outsider@test.dev', 'Outsider'),
+  ('55555555-5555-5555-5555-555555555555', 'admin@test.dev', 'Admin')
 on conflict (id) do nothing;
 
 insert into public.projects (id, owner_id, name, description)
@@ -173,13 +181,267 @@ select pg_temp.assert(
   'editor cannot delete the project');
 
 select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
-insert into public.projects (id, owner_id, name)
-values ('prj_test_stolen', '11111111-1111-1111-1111-111111111111', 'Not mine')
-on conflict do nothing;
+do $$
+begin
+  begin
+    insert into public.projects (id, owner_id, name)
+    values ('prj_test_stolen', '11111111-1111-1111-1111-111111111111', 'Not mine');
+    raise exception 'FAIL  a project could be created under another owner';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot create a project owned by someone else';
+  end;
+end $$;
 select pg_temp.act_as_admin();
 select pg_temp.assert(
   (select count(*) from public.projects where id = 'prj_test_stolen') = 0,
-  'a user cannot create a project owned by someone else');
+  'the rejected project was not created');
+
+-- --------------------------------------------------------------------------
+-- Ownership transfer is owner-only, enforced by a trigger
+-- --------------------------------------------------------------------------
+
+-- An editor is stopped by the row policy: the row is not even visible to
+-- update, so the statement matches nothing.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+do $$
+begin
+  begin
+    update public.projects
+       set owner_id = '22222222-2222-2222-2222-222222222222'
+     where id = 'prj_test_alpha';
+    if found then raise exception 'FAIL  an editor transferred ownership'; end if;
+    raise notice 'ok    an editor cannot take ownership (no row visible to update)';
+  exception
+    when insufficient_privilege then raise notice 'ok    an editor cannot take ownership';
+  end;
+end $$;
+
+-- An admin passes the row policy, so the trigger is the layer that must stop
+-- them. This is the case the guard exists for.
+select pg_temp.act_as_admin();
+insert into public.project_members (project_id, user_id, role)
+values ('prj_test_alpha', '55555555-5555-5555-5555-555555555555', 'admin')
+on conflict (project_id, user_id) do update set role = 'admin';
+
+select pg_temp.act_as('55555555-5555-5555-5555-555555555555');
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_test_alpha') = 1,
+  'an admin can see the project');
+update public.projects set description = 'renamed by admin' where id = 'prj_test_alpha';
+select pg_temp.assert(
+  (select description from public.projects where id = 'prj_test_alpha') = 'renamed by admin',
+  'an admin can edit project metadata');
+do $$
+begin
+  begin
+    update public.projects
+       set owner_id = '55555555-5555-5555-5555-555555555555'
+     where id = 'prj_test_alpha';
+    raise exception 'FAIL  an admin transferred ownership';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    an admin cannot transfer ownership (trigger)';
+  end;
+end $$;
+
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select owner_id from public.projects where id = 'prj_test_alpha')
+    = '11111111-1111-1111-1111-111111111111',
+  'ownership is unchanged after both attempts');
+
+-- The owner may transfer, and may transfer it back.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+update public.projects set owner_id = '55555555-5555-5555-5555-555555555555'
+ where id = 'prj_test_alpha';
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select owner_id from public.projects where id = 'prj_test_alpha')
+    = '55555555-5555-5555-5555-555555555555',
+  'the owner can transfer ownership');
+update public.projects set owner_id = '11111111-1111-1111-1111-111111111111'
+ where id = 'prj_test_alpha';
+
+-- --------------------------------------------------------------------------
+-- Project settings: readable by members, writable by admins only
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as_admin();
+insert into public.project_settings (project_id, settings)
+values ('prj_test_alpha', '{"theme":"dark"}'::jsonb)
+on conflict (project_id) do update set settings = excluded.settings;
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+select pg_temp.assert(
+  (select count(*) from public.project_settings where project_id = 'prj_test_alpha') = 1,
+  'a viewer can read project settings');
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+do $$
+begin
+  begin
+    update public.project_settings set settings = '{"theme":"hacked"}'::jsonb
+     where project_id = 'prj_test_alpha';
+    if not found then
+      raise notice 'ok    an editor cannot change project settings (no rows visible for update)';
+    else
+      raise exception 'FAIL  an editor changed project settings';
+    end if;
+  exception
+    when insufficient_privilege then raise notice 'ok    an editor cannot change project settings';
+  end;
+end $$;
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select settings ->> 'theme' from public.project_settings where project_id = 'prj_test_alpha')
+    = 'dark',
+  'project settings were not modified by a non-admin');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+update public.project_settings set settings = '{"theme":"light"}'::jsonb
+ where project_id = 'prj_test_alpha';
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select settings ->> 'theme' from public.project_settings where project_id = 'prj_test_alpha')
+    = 'light',
+  'the owner can change project settings');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.project_settings where project_id = 'prj_test_alpha') = 0,
+  'an outsider cannot read project settings');
+
+-- --------------------------------------------------------------------------
+-- Version history follows write permission, not merely membership
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+insert into public.project_vcs (project_id, snapshot)
+values ('prj_test_alpha', '{"branches":{"main":""}}'::jsonb)
+on conflict (project_id) do update set snapshot = excluded.snapshot;
+select pg_temp.assert(true, 'an editor can write version history');
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+do $$
+begin
+  begin
+    insert into public.project_vcs (project_id, snapshot)
+    values ('prj_test_alpha', '{"tampered":true}'::jsonb)
+    on conflict (project_id) do update set snapshot = excluded.snapshot;
+    raise exception 'FAIL  a viewer wrote version history';
+  exception
+    when insufficient_privilege then raise notice 'ok    a viewer cannot write version history';
+  end;
+end $$;
+
+-- --------------------------------------------------------------------------
+-- Teams
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+insert into public.teams (id, name, slug, owner_id)
+values (
+  '99999999-9999-9999-9999-999999999999',
+  'Platform',
+  'platform',
+  '11111111-1111-1111-1111-111111111111'
+);
+insert into public.team_members (team_id, user_id, role)
+values ('99999999-9999-9999-9999-999999999999', '22222222-2222-2222-2222-222222222222', 'editor');
+
+select pg_temp.assert(
+  (select count(*) from public.teams where id = '99999999-9999-9999-9999-999999999999') = 1,
+  'a team owner sees their team');
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+select pg_temp.assert(
+  (select count(*) from public.teams where id = '99999999-9999-9999-9999-999999999999') = 1,
+  'a team member sees the team');
+do $$
+begin
+  begin
+    insert into public.team_members (team_id, user_id, role)
+    values ('99999999-9999-9999-9999-999999999999', '44444444-4444-4444-4444-444444444444', 'admin');
+    raise exception 'FAIL  a team editor added a member';
+  exception
+    when insufficient_privilege then raise notice 'ok    a team editor cannot add members';
+  end;
+end $$;
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.teams where id = '99999999-9999-9999-9999-999999999999') = 0,
+  'an outsider cannot see the team');
+select pg_temp.assert(
+  (select count(*) from public.team_members
+    where team_id = '99999999-9999-9999-9999-999999999999') = 0,
+  'an outsider cannot enumerate team members');
+do $$
+begin
+  begin
+    insert into public.teams (id, name, slug, owner_id)
+    values (
+      '88888888-8888-8888-8888-888888888888',
+      'Stolen',
+      'stolen',
+      '11111111-1111-1111-1111-111111111111'
+    );
+    raise exception 'FAIL  a team could be created under another owner';
+  exception
+    when insufficient_privilege then raise notice 'ok    a user cannot create a team owned by someone else';
+  end;
+end $$;
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+do $$
+begin
+  begin
+    delete from public.teams where id = '99999999-9999-9999-9999-999999999999';
+    if not found then
+      raise notice 'ok    a non-member cannot delete a team';
+    else
+      raise exception 'FAIL  a non-member deleted a team';
+    end if;
+  exception
+    when insufficient_privilege then raise notice 'ok    a non-member cannot delete a team';
+  end;
+end $$;
+
+-- --------------------------------------------------------------------------
+-- Profiles are visible to collaborators, not to strangers
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+select pg_temp.assert(
+  (select count(*) from public.profiles
+    where id = '22222222-2222-2222-2222-222222222222') = 1,
+  'collaborators on the same project can see each other');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.profiles
+    where id = '11111111-1111-1111-1111-111111111111') = 0,
+  'an outsider cannot read an unrelated profile');
+select pg_temp.assert(
+  (select count(*) from public.profiles
+    where id = '44444444-4444-4444-4444-444444444444') = 1,
+  'every user can read their own profile');
+
+do $$
+begin
+  begin
+    update public.profiles set display_name = 'Hacked'
+     where id = '11111111-1111-1111-1111-111111111111';
+    if not found then
+      raise notice 'ok    a user cannot rename another profile';
+    else
+      raise exception 'FAIL  a user renamed another profile';
+    end if;
+  exception
+    when insufficient_privilege then raise notice 'ok    a user cannot rename another profile';
+  end;
+end $$;
 
 -- --------------------------------------------------------------------------
 -- Public visibility grants read, never write

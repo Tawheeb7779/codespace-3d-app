@@ -61,11 +61,19 @@ export function PreviewPanel() {
   }, []);
 
   // Auto-rebuild after edits settle, when enabled.
+  //
+  // `status` is deliberately not a dependency, and the guard compares the file
+  // map the preview was actually built from. Re-running on every status change
+  // made the preview rebuild itself in a loop: each build flipped the status,
+  // which re-fired this effect, which scheduled another build.
   useEffect(() => {
-    if (!runtime.reloadOnSave || status === 'idle' || dirty.size) return;
+    if (!runtime.reloadOnSave || dirty.size) return;
+    const state = usePreviewStore.getState();
+    if (state.status === 'idle') return;
+    if (state.builtFrom === files) return;
     const timer = setTimeout(() => void run(), 400);
     return () => clearTimeout(timer);
-  }, [files, dirty.size, runtime.reloadOnSave, status, run]);
+  }, [files, dirty.size, runtime.reloadOnSave, run]);
 
   const size = DEVICE_SIZES[device];
   const frameStyle = useMemo(

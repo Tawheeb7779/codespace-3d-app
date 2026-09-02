@@ -64,6 +64,32 @@ export function normalizePath(input: string): string {
   return out.join('/');
 }
 
+/**
+ * Resolve a specifier against a directory, collapsing `..` as it goes.
+ *
+ * {@link normalizePath} rejects `..` outright, which is right for a stored
+ * path but wrong for a *relative reference*: `../shared` from `src/lib` is an
+ * ordinary import. This walks the segments instead, and still refuses to pop
+ * past the project root, so traversal remains impossible.
+ */
+export function resolveRelative(baseDir: string, spec: string): string {
+  if (typeof spec !== 'string') throw new VfsError('Path must be a string');
+  const normalizedSpec = spec.replace(/\\/g, '/');
+  // A leading slash means "from the project root", not "from the filesystem".
+  const parts = normalizedSpec.startsWith('/') || !baseDir ? [] : baseDir.split('/');
+  for (const segment of normalizedSpec.replace(/^\/+/, '').split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (!parts.length) throw new VfsError(`Path escapes the project root: ${spec}`);
+      parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  if (!parts.length) throw new VfsError(`Path resolves to the project root: ${spec}`);
+  return normalizePath(parts.join('/'));
+}
+
 /** `true` when `path` is safe; never throws. */
 export function isValidPath(path: string): boolean {
   try {

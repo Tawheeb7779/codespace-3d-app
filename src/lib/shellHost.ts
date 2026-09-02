@@ -64,8 +64,11 @@ export function createShellHost(): ShellHost {
       return [
         info(`built ${result.entry} in ${result.durationMs}ms`),
         ...result.warnings.map((w) => out(`  warning ${w.path}:${w.line} ${w.message}`)),
+        ...(result.bundledPackages.length
+          ? [out(`  bundled locally: ${result.bundledPackages.join(', ')}`)]
+          : []),
         ...(result.externals.length
-          ? [out(`  external packages resolved via esm.sh: ${result.externals.join(', ')}`)]
+          ? [out(`  fetched from the package CDN: ${result.externals.join(', ')}`)]
           : []),
       ];
     },
@@ -97,7 +100,7 @@ export function createShellHost(): ShellHost {
         const installed = listInstalled(store.files[manifestPath]);
         if (!installed.length) return [info('no dependencies declared in package.json')];
         return [
-          info('Declared dependencies (resolved at preview time from esm.sh):'),
+          info('Declared dependencies (React ships locally; the rest load from the package CDN):'),
           ...installed.map((p) => out(`  ${p.name}@${p.version}${p.dev ? '  (dev)' : ''}`)),
         ];
       }
@@ -122,7 +125,9 @@ export function createShellHost(): ShellHost {
             lines.push(err(`npm: ${errorMessage(error)}`));
           }
         }
-        lines.push(info('package.json updated. The preview loads these from esm.sh on next run.'));
+        lines.push(
+          info('package.json updated. The preview resolves these on the next run.'),
+        );
         return lines;
       }
 

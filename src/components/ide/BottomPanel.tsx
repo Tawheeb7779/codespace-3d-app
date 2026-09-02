@@ -187,7 +187,10 @@ function OutputList() {
 function PortsPanel() {
   const status = usePreviewStore((s) => s.status);
   const entry = usePreviewStore((s) => s.entry);
+  const bundledPackages = usePreviewStore((s) => s.bundledPackages);
+  const externals = usePreviewStore((s) => s.externals);
   const port = useSettingsStore((s) => s.runtime.devServerPort);
+  const cdn = useSettingsStore((s) => s.runtime.esmCdn);
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto p-3">
@@ -211,6 +214,22 @@ function PortsPanel() {
             <td className="py-2 text-ink">Entry point</td>
             <td className="py-2 font-mono text-ink-muted">{entry || '—'}</td>
             <td className="py-2 text-ink-faint">bundled by esbuild-wasm</td>
+          </tr>
+          <tr className="border-t border-line">
+            <td className="py-2 align-top text-ink">Local packages</td>
+            <td className="py-2 font-mono text-ink-muted">
+              {bundledPackages.length ? bundledPackages.join(', ') : '—'}
+            </td>
+            <td className="py-2 align-top text-ink-faint">served from this origin, no network</td>
+          </tr>
+          <tr className="border-t border-line">
+            <td className="py-2 align-top text-ink">CDN packages</td>
+            <td className="py-2 font-mono text-ink-muted">
+              {externals.length ? externals.join(', ') : '—'}
+            </td>
+            <td className="py-2 align-top text-ink-faint">
+              {externals.length ? `fetched from ${cdn}` : 'none required'}
+            </td>
           </tr>
         </tbody>
       </table>

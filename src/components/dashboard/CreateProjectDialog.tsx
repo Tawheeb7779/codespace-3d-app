@@ -69,6 +69,9 @@ export function CreateProjectDialog({ open, onClose }: { open: boolean; onClose:
                 <button
                   key={item.id}
                   type="button"
+                  // Without this the accessible name concatenates the title,
+                  // badge and description into one long string.
+                  aria-label={item.name}
                   aria-pressed={active}
                   onClick={() => setTemplate(item.id)}
                   className={cx(

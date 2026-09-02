@@ -4,7 +4,7 @@ import { PanelHeader, EmptyState, Badge } from '@/components/ui/Primitives';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
-import { Input, Select } from '@/components/ui/Field';
+import { Input, Select, Switch } from '@/components/ui/Field';
 import { useAiStore } from '@/stores/aiStore';
 import { useFileStore } from '@/stores/fileStore';
 import { readApiKey, type ProviderKind } from '@/lib/ai/provider';
@@ -121,7 +121,8 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
 }
 
 export function AssistantPanel() {
-  const { messages, running, provider, apiKeyPresent, send, cancel, reset } = useAiStore();
+  const { messages, running, provider, apiKeyPresent, allowDestructive, setAllowDestructive, send, cancel, reset } =
+    useAiStore();
   const canWrite = useFileStore((s) => s.canWrite());
   const [prompt, setPrompt] = useState('');
   const [connectOpen, setConnectOpen] = useState(false);
@@ -182,6 +183,17 @@ export function AssistantPanel() {
         <p className="border-b border-line px-2.5 py-1.5 text-sm text-ink-muted">
           You have read-only access, so the assistant can read and search but cannot edit files.
         </p>
+      )}
+
+      {connected && canWrite && (
+        <div className="border-b border-line px-2.5 py-1">
+          <Switch
+            label="Allow destructive actions"
+            description="Off by default. Required before the assistant may delete a file or run rm. Resets when you reload."
+            checked={allowDestructive}
+            onChange={setAllowDestructive}
+          />
+        </div>
       )}
 
       <div ref={scrollRef} className="scrollbar-thin flex-1 overflow-y-auto p-2.5">

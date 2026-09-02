@@ -27,6 +27,12 @@ export interface AssistantMessage {
 interface AiState {
   provider: ProviderConfig;
   apiKeyPresent: boolean;
+  /**
+   * Session-scoped approval for irreversible tool calls: deleting a file, or
+   * running a destructive shell command. Deliberately not persisted, so it
+   * resets to off every time the app loads.
+   */
+  allowDestructive: boolean;
   messages: AssistantMessage[];
   transcript: ChatMessage[];
   running: boolean;
@@ -34,6 +40,7 @@ interface AiState {
 
   setProvider: (patch: Partial<ProviderConfig>) => void;
   setApiKey: (key: string) => void;
+  setAllowDestructive: (allowed: boolean) => void;
   send: (prompt: string) => Promise<void>;
   cancel: () => void;
   reset: () => void;
@@ -48,6 +55,7 @@ function toolContext(): ToolContext {
     files: fileStore.files,
     dirs: fileStore.dirs,
     canWrite: fileStore.canWrite(),
+    allowDestructive: useAiStore.getState().allowDestructive,
     writeFile(path, content) {
       const store = useFileStore.getState();
       if (path in store.files) store.writeFile(path, content);
@@ -76,6 +84,7 @@ export const useAiStore = create<AiState>()(
     (set, get) => ({
       provider: DEFAULT_PROVIDER,
       apiKeyPresent: typeof window !== 'undefined' && Boolean(readApiKey()),
+      allowDestructive: false,
       messages: [],
       transcript: [],
       running: false,
@@ -87,6 +96,8 @@ export const useAiStore = create<AiState>()(
         writeApiKey(key.trim());
         set({ apiKeyPresent: Boolean(key.trim()) });
       },
+
+      setAllowDestructive: (allowed) => set({ allowDestructive: allowed }),
 
       async send(prompt) {
         const text = prompt.trim();

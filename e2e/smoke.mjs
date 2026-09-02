@@ -150,6 +150,49 @@ try {
     await page.getByText('notes.txt', { exact: true }).first().waitFor({ timeout: 8000 });
   });
 
+  await step('terminal survives a remount without duplicating instances', async () => {
+    const before = await page.locator('.xterm-screen').innerText();
+    if (!before.includes('notes.txt')) throw new Error('expected prior scrollback');
+
+    // Switching panels unmounts and remounts the terminal view.
+    await page.getByRole('tab', { name: /Problems/i }).click();
+    await page.waitForTimeout(400);
+    await page.getByRole('tab', { name: /Terminal/i }).click();
+    await page.waitForTimeout(600);
+
+    const instances = await page.locator('.xterm').count();
+    if (instances !== 1) throw new Error(`expected one xterm instance, found ${instances}`);
+
+    const after = await page.locator('.xterm-screen').innerText();
+    if (!after.includes('notes.txt')) throw new Error('scrollback was lost across the remount');
+
+    // The reattached terminal still accepts input.
+    await page.locator('.xterm-screen').first().click();
+    await page.keyboard.type('pwd');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(700);
+    const text = await page.locator('.xterm-screen').innerText();
+    if (!/\n\/\s*$|\/\n/.test(text) && !text.includes('pwd')) {
+      throw new Error('terminal stopped accepting input after the remount');
+    }
+  });
+
+  await step('filesystem escape attempts are refused in the terminal', async () => {
+    await page.locator('.xterm-screen').first().click();
+    for (const command of ['cat ../../../etc/passwd', 'touch ../escape.ts', 'mkdir ../../evil']) {
+      await page.keyboard.type(command);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(500);
+    }
+    const text = await page.locator('.xterm-screen').innerText();
+    if (!/escapes the project root|no such/i.test(text)) {
+      throw new Error(`traversal was not refused:\n${text.slice(-600)}`);
+    }
+    // Nothing outside the project appeared in the tree.
+    const stray = await page.getByText('escape.ts', { exact: true }).count();
+    if (stray > 0) throw new Error('a traversing path created a file');
+  });
+
   await step('command palette opens and filters', async () => {
     await page.keyboard.press('Control+K');
     const dialog = page.getByRole('dialog', { name: /Command palette/i });

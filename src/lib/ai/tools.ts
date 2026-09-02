@@ -17,10 +17,27 @@ export interface ToolContext {
   dirs: string[];
   /** Permission of the signed-in user on this project. */
   canWrite: boolean;
+  /**
+   * Whether the user has approved irreversible actions for this session.
+   * Deleting a file has no undo in the workspace, so it is opt-in rather than
+   * something the model can decide on its own.
+   */
+  allowDestructive: boolean;
   writeFile(path: string, content: string): void;
   deletePath(path: string): void;
   runShell(command: string): Promise<string>;
   terminalOutput(): string;
+}
+
+/** Matches the per-file limit the database enforces on project_files.content. */
+export const MAX_WRITE_BYTES = 2 * 1024 * 1024;
+
+/** Shell commands that destroy work irreversibly. */
+const DESTRUCTIVE_COMMANDS = new Set(['rm']);
+
+export function isDestructiveCommand(command: string): boolean {
+  const head = command.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  return DESTRUCTIVE_COMMANDS.has(head);
 }
 
 export interface ToolDefinition {
@@ -57,6 +74,25 @@ function requireString(input: Record<string, unknown>, key: string): string {
   const raw = input[key];
   if (typeof raw !== 'string') throw new ToolError(`"${key}" must be a string`);
   return raw;
+}
+
+function requireContent(input: Record<string, unknown>, key: string): string {
+  const value = requireString(input, key);
+  const bytes = new TextEncoder().encode(value).length;
+  if (bytes > MAX_WRITE_BYTES) {
+    throw new ToolError(
+      `"${key}" is ${Math.round(bytes / 1024)} KB, over the ${MAX_WRITE_BYTES / 1024 / 1024} MB per-file limit`,
+    );
+  }
+  return value;
+}
+
+function requireApproval(action: string, ctx: ToolContext): void {
+  if (ctx.allowDestructive) return;
+  throw new ToolError(
+    `${action} is blocked: destructive actions are off for this session. ` +
+      'Turn on "Allow destructive actions" in the assistant panel to permit it.',
+  );
 }
 
 function renderTree(nodes: TreeNode[], depth = 0, out: string[] = []): string[] {
@@ -144,7 +180,7 @@ export const TOOLS: ToolDefinition[] = [
     mutates: true,
     run: (input, ctx) => {
       const path = requirePath(input);
-      const content = requireString(input, 'content');
+      const content = requireContent(input, 'content');
       ctx.writeFile(path, content);
       return `Wrote ${path} (${content.split('\n').length} lines)`;
     },
@@ -176,7 +212,11 @@ export const TOOLS: ToolDefinition[] = [
           `old_string appears ${occurrences} times in ${path}; include more context to make it unique`,
         );
       }
-      ctx.writeFile(path, content.replace(oldString, newString));
+      const updated = content.replace(oldString, newString);
+      if (new TextEncoder().encode(updated).length > MAX_WRITE_BYTES) {
+        throw new ToolError(`The edit would push ${path} over the per-file size limit`);
+      }
+      ctx.writeFile(path, updated);
       return `Edited ${path}`;
     },
   },
@@ -192,6 +232,7 @@ export const TOOLS: ToolDefinition[] = [
     run: (input, ctx) => {
       const path = requirePath(input);
       if (!(path in ctx.files)) throw new ToolError(`No such file: ${path}`);
+      requireApproval(`Deleting ${path}`, ctx);
       ctx.deletePath(path);
       return `Deleted ${path}`;
     },
@@ -206,7 +247,11 @@ export const TOOLS: ToolDefinition[] = [
       required: ['command'],
     },
     mutates: true,
-    run: (input, ctx) => ctx.runShell(requireString(input, 'command')),
+    run: (input, ctx) => {
+      const command = requireString(input, 'command');
+      if (isDestructiveCommand(command)) requireApproval(`Running "${command}"`, ctx);
+      return ctx.runShell(command);
+    },
   },
   {
     name: 'get_terminal_output',
