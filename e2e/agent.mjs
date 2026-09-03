@@ -10,11 +10,15 @@
  *   node e2e/agent-provider.mjs &
  *   node e2e/agent.mjs
  */
+import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const BASE = process.env.FORGE_E2E_BASE ?? 'http://127.0.0.1:5173';
 const PROVIDER = process.env.FORGE_AGENT_API ?? 'http://127.0.0.1:8866';
-const OUT = process.env.FORGE_E2E_ARTIFACTS ?? '.';
+// Alongside the other suites, and git-ignored: a failed run should not
+// leave a dozen screenshots loose in the repository root.
+const OUT = process.env.FORGE_E2E_ARTIFACTS ?? 'e2e/artifacts';
+mkdirSync(OUT, { recursive: true });
 const CHROMIUM = process.env.FORGE_E2E_CHROMIUM;
 
 const consoleErrors = [];
