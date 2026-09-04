@@ -32,6 +32,20 @@ const browser = await chromium.launch(
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
 
+/**
+ * Dismiss the first-run tour.
+ *
+ * A first-time user really does see it, so every suite that opens a project
+ * for the first time has to get past it the same way a person would.
+ */
+const skipOnboarding = async () => {
+  const skip = page.getByRole('button', { name: 'Skip', exact: true });
+  if (await skip.isVisible().catch(() => false)) {
+    await skip.click();
+    await page.waitForTimeout(400);
+  }
+};
+
 page.on('console', (msg) => {
   if (msg.type() === 'error') consoleErrors.push(msg.text());
 });
@@ -47,6 +61,8 @@ const step = async (name, fn) => {
     throw error;
   }
 };
+
+
 
 try {
   await step('landing page renders', async () => {
@@ -83,6 +99,7 @@ try {
 
   await step('workspace opens with monaco', async () => {
     await page.locator('.monaco-editor').first().waitFor({ timeout: 40000 });
+    await skipOnboarding();
   });
 
   await step('file explorer lists template files', async () => {
@@ -287,6 +304,7 @@ try {
     await page.waitForTimeout(400);
     await page.keyboard.press('Enter');
     await page.locator('.monaco-editor').first().waitFor({ timeout: 20000 });
+    await skipOnboarding();
   });
 
   await step('settings page renders and toggles theme', async () => {

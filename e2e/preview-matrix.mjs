@@ -18,6 +18,20 @@ const browser = await chromium.launch(
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
 
+/**
+ * Dismiss the first-run tour.
+ *
+ * A first-time user really does see it, so every suite that opens a project
+ * for the first time has to get past it the same way a person would.
+ */
+const skipOnboarding = async () => {
+  const skip = page.getByRole('button', { name: 'Skip', exact: true });
+  if (await skip.isVisible().catch(() => false)) {
+    await skip.click();
+    await page.waitForTimeout(400);
+  }
+};
+
 const consoleErrors = [];
 const pageErrors = [];
 const failedRequests = [];
@@ -63,6 +77,7 @@ async function createProject(templateName, name) {
   await page.getByRole('button', { name: /Create project/i }).click();
   await page.waitForURL('**/project/**', { timeout: 30000 });
   await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
 }
 
 async function waitForRunning() {
@@ -116,6 +131,8 @@ async function problemsText() {
   await page.waitForTimeout(500);
   return page.locator('section[aria-label="Panel"]').innerText();
 }
+
+
 
 try {
   await signIn();

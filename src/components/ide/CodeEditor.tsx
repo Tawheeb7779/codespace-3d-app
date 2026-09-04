@@ -4,6 +4,7 @@ import type { editor } from 'monaco-editor';
 import { setupMonaco, monaco as monacoApi } from '@/lib/monaco';
 import { monacoLanguage } from '@/lib/languages';
 import { useFileStore } from '@/stores/fileStore';
+import { useAiStore } from '@/stores/aiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useMonacoTheme } from '@/hooks/useTheme';
@@ -85,6 +86,16 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
 
     instance.onDidChangeCursorPosition((event) => {
       setCursor(event.position.lineNumber, event.position.column);
+    });
+
+    // Mirror the selection so an assistant workflow can quote exactly what the
+    // user highlighted, rather than guessing from the cursor.
+    instance.onDidChangeCursorSelection(() => {
+      const model = instance.getModel();
+      const selection = instance.getSelection();
+      useAiStore
+        .getState()
+        .setSelection(model && selection ? model.getValueInRange(selection) : '');
     });
 
     // Ctrl/Cmd+S is owned by the app shell, but the editor swallows it first.

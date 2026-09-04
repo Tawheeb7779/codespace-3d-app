@@ -22,7 +22,17 @@ import { usePreviewStore } from '@/stores/previewStore';
 import { buildPreview } from '@/lib/preview';
 import { useAgentStore, projectContextHeader, readCache } from '@/stores/agentStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { recordActivity } from '@/stores/activityStore';
 import { WIDE_CHANGE_THRESHOLD } from '@/lib/ai/approval';
+import {
+  buildContextSections,
+  DEFAULT_CONTEXT,
+  renderContextSections,
+  type ContextChoices,
+  type ContextSection,
+  type ContextSource,
+} from '@/lib/ai/contextControl';
+import { workflowById, type WorkflowId } from '@/lib/ai/workflows';
 import { errorMessage, uid } from '@/lib/utils';
 
 export interface AssistantMessage {
@@ -56,11 +66,23 @@ interface AiState {
   retryAt: number | null;
   /** The prompt of the last turn, so a failed task can be retried as sent. */
   lastPrompt: string | null;
+  /**
+   * What the user chose to send. These narrow what leaves the browser; they
+   * can never widen it, because protected paths are filtered before this is
+   * consulted.
+   */
+  context: ContextChoices;
+  /** Text selected in the editor, mirrored here for workflows to quote. */
+  selection: string;
 
   setProvider: (patch: Partial<ProviderConfig>) => void;
   setApiKey: (key: string) => void;
   setAllowDestructive: (allowed: boolean) => void;
   send: (prompt: string) => Promise<void>;
+  /** Run a named workflow through the same agent loop as a typed request. */
+  runWorkflow: (id: WorkflowId) => Promise<void>;
+  setContextSource: (source: ContextSource, enabled: boolean) => void;
+  setSelection: (selection: string) => void;
   retry: () => Promise<void>;
   cancel: () => void;
   reset: () => void;
@@ -115,6 +137,7 @@ function toolContext(): ToolContext {
     async runBuild() {
       const result = await buildPreview(useFileStore.getState().files);
       const ok = result.errors.length === 0;
+      recordActivity('build.completed', ok ? 'succeeded' : `${result.errors.length} error(s)`);
       const report = ok
         ? `Build succeeded: ${result.entry} in ${result.durationMs}ms.`
         : [
@@ -159,13 +182,31 @@ function toolContext(): ToolContext {
   };
 }
 
+/** What the current turn would send, given the user's context choices. */
+export function currentContextSections(): ContextSection[] {
+  const fileStore = useFileStore.getState();
+  const editor = useEditorStore.getState();
+  const git = useGitStore.getState();
+  return buildContextSections(useAiStore.getState().context, {
+    currentPath: editor.activePath,
+    selection: useAiStore.getState().selection,
+    openPaths: editor.tabs.map((tab) => tab.path),
+    files: fileStore.files,
+    diagnostics: editor.problems.map(
+      (problem) => `${problem.path}:${problem.line} ${problem.severity}: ${problem.message}`,
+    ),
+    changedPaths: [...git.status.staged, ...git.status.unstaged].map((change) => change.path),
+    terminalOutput: useTerminalStore.getState().recentOutput(),
+  });
+}
+
 /** The compact, targeted header the agent is given about the workspace. */
 function contextMessage(): string {
   const fileStore = useFileStore.getState();
   const meta = fileStore.meta;
   const git = useGitStore.getState();
   const problems = useEditorStore.getState().problems;
-  return projectContextHeader({
+  const header = projectContextHeader({
     name: meta?.name ?? useProjectStore.getState().projects[0]?.name ?? 'Untitled project',
     template: meta?.template ?? 'blank',
     language: meta?.language ?? 'Plain Text',
@@ -176,6 +217,8 @@ function contextMessage(): string {
       .slice(0, 10)
       .map((p) => `${p.path}:${p.line} ${p.severity}: ${p.message}`),
   });
+  const chosen = renderContextSections(currentContextSections());
+  return chosen ? `${header}\n\n${chosen}` : header;
 }
 
 export const useAiStore = create<AiState>()(
@@ -191,6 +234,8 @@ export const useAiStore = create<AiState>()(
       errorKind: null,
       retryAt: null,
       lastPrompt: null,
+      context: DEFAULT_CONTEXT,
+      selection: '',
 
       setProvider: (patch) => set((state) => ({ provider: { ...state.provider, ...patch } })),
 
@@ -200,6 +245,35 @@ export const useAiStore = create<AiState>()(
       },
 
       setAllowDestructive: (allowed) => set({ allowDestructive: allowed }),
+
+      setContextSource: (source, enabled) =>
+        set((state) => ({ context: { ...state.context, [source]: enabled } })),
+
+      setSelection: (selection) => set({ selection }),
+
+      /**
+       * A workflow is a prepared prompt, nothing more: it goes through `send`,
+       * so it obeys the same tools, approvals, cancellation and verification
+       * as anything typed by hand.
+       */
+      async runWorkflow(id) {
+        const workflow = workflowById(id);
+        if (!workflow) return;
+        const editor = useEditorStore.getState();
+        const git = useGitStore.getState();
+        const scope = {
+          path: editor.activePath,
+          selection: get().selection,
+          hasDiagnostics: editor.problems.length > 0,
+          hasChanges: !git.status.clean,
+        };
+        const blocked = workflow.unavailable(scope);
+        if (blocked) {
+          set({ error: blocked, errorKind: null });
+          return;
+        }
+        await get().send(workflow.prompt(scope));
+      },
 
       async send(prompt) {
         const text = prompt.trim();
@@ -240,6 +314,7 @@ export const useAiStore = create<AiState>()(
           retryAt: null,
           lastPrompt: text,
         }));
+        recordActivity('agent.started', text);
 
         const patch = (updater: (message: AssistantMessage) => AssistantMessage) =>
           set((state) => ({
@@ -279,7 +354,12 @@ export const useAiStore = create<AiState>()(
           );
           set({ transcript: result.transcript, running: false });
           await useFileStore.getState().flush();
+          const finished = useAgentStore.getState().task;
           useAgentStore.getState().finish('completed');
+          recordActivity(
+            'agent.completed',
+            `${finished?.changes.length ?? 0} file(s) changed`,
+          );
         } catch (error) {
           const cancelled = error instanceof DOMException && error.name === 'AbortError';
           const message = cancelled ? 'Cancelled.' : errorMessage(error);
@@ -346,7 +426,7 @@ export const useAiStore = create<AiState>()(
     {
       name: 'forge.ai',
       // The API key is deliberately excluded: it lives in sessionStorage only.
-      partialize: (state) => ({ provider: state.provider }),
+      partialize: (state) => ({ provider: state.provider, context: state.context }),
     },
   ),
 );

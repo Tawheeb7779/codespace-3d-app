@@ -5,6 +5,7 @@ import { repositoryFor } from '@/lib/repo';
 import { useAuthStore } from '@/stores/authStore';
 import { useFileStore } from '@/stores/fileStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { recordActivity } from '@/stores/activityStore';
 import { errorMessage } from '@/lib/utils';
 import type { ShellLine } from '@/lib/shell';
 import { githubClient } from '@/lib/github/gateway';
@@ -246,6 +247,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
     const created = vcs.log(repo)[0];
     set({ repo, status: vcs.status(repo, useFileStore.getState().files), history: vcs.log(repo) });
     await persist(repo);
+    recordActivity('commit.created', `${created.id.slice(0, 7)} ${created.message}`);
 
     // A commit made while a pull is conflicted is the resolution, and it is
     // what completes that merge — the same role `git commit` plays after a
@@ -264,12 +266,14 @@ export const useGitStore = create<GitState>()((set, get) => ({
     if (checkoutAfter) repo = { ...repo, head: name.trim() };
     set({ repo, status: vcs.status(repo, useFileStore.getState().files), history: vcs.log(repo) });
     await persist(repo);
+    recordActivity('branch.created', name.trim());
   },
 
   async deleteBranch(name) {
     const repo = vcs.deleteBranch(get().repo, name);
     set({ repo });
     await persist(repo);
+    recordActivity('branch.deleted', name);
   },
 
   async checkout(branch) {
@@ -290,6 +294,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
       history: vcs.log(result.repo),
     });
     await persist(result.repo);
+    recordActivity('branch.switched', branch);
   },
 
   async merge(branch) {
@@ -428,6 +433,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
           conflicts: outcome.conflicts,
         };
       }
+      recordActivity('remote.pulled', `${remote.owner}/${remote.repo} ${remote.branch}`);
       return {
         ok: true,
         message: outcome.kind === 'fast-forward' ? 'Fast-forwarded.' : 'Merged successfully.',
@@ -455,6 +461,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
         }
         set({ remote: outcome.remote, incoming: [], behind: 0 });
         await persistRemote(outcome.remote);
+        recordActivity('remote.pushed', `${remote.owner}/${remote.repo} ${remote.branch}`);
         return {
           ok: true,
           message: outcome.createdBranch

@@ -24,6 +24,20 @@ let failed = 0;
 const browser = await chromium.launch({ ...(CHROMIUM ? { executablePath: CHROMIUM } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
+
+/**
+ * Dismiss the first-run tour.
+ *
+ * A first-time user really does see it, so every suite that opens a project
+ * for the first time has to get past it the same way a person would.
+ */
+const skipOnboarding = async () => {
+  const skip = page.getByRole('button', { name: 'Skip', exact: true });
+  if (await skip.isVisible().catch(() => false)) {
+    await skip.click();
+    await page.waitForTimeout(400);
+  }
+};
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
 page.on('pageerror', (e) => pageErrors.push(e.stack || e.message));
 
@@ -70,6 +84,8 @@ const editorText = async () => {
   return raw.replace(/\u00a0/g, ' ');
 };
 
+
+
 try {
   await step('1. sign in and open a project', async () => {
     await page.goto(`${BASE}/signin`, { waitUntil: 'domcontentloaded' });
@@ -85,6 +101,7 @@ try {
     await page.getByRole('button', { name: /Create project/i }).click();
     await page.waitForURL('**/project/**', { timeout: 40000 });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
     await page.waitForTimeout(2500);
   });
 
@@ -147,6 +164,7 @@ try {
     await page.waitForTimeout(400);
     await page.goBack({ waitUntil: 'domcontentloaded' });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
     await page.waitForTimeout(2500);
 
     await page.locator('.monaco-editor').first().click();
@@ -297,6 +315,7 @@ try {
     await page.goBack({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
     await page.keyboard.press('Control+J');
     await page.waitForTimeout(1500);
     const size = await page.evaluate(() => {
@@ -317,6 +336,7 @@ try {
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
     await page.waitForTimeout(3500);
     const tabs = await page.locator('[role="tab"]').allInnerTexts();
     if (!tabs.some((tab) => tab.includes('palette-made.ts'))) {

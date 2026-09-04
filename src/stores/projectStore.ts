@@ -4,6 +4,8 @@ import { getTemplate } from '@/lib/templates';
 import { detectProjectLanguage } from '@/lib/languages';
 import { repositoryFor } from '@/lib/repo';
 import { useAuthStore } from '@/stores/authStore';
+import { recordActivity } from '@/stores/activityStore';
+import { useFileStore } from '@/stores/fileStore';
 import { errorMessage, uid } from '@/lib/utils';
 
 interface ProjectState {
@@ -21,6 +23,7 @@ interface ProjectState {
   rename: (id: string, name: string) => Promise<void>;
   toggleStar: (id: string) => Promise<void>;
   setStatus: (id: string, status: ProjectMeta['status']) => Promise<void>;
+  setVisibility: (id: string, visibility: ProjectMeta['visibility']) => Promise<void>;
   duplicate: (id: string) => Promise<Project>;
   remove: (id: string) => Promise<void>;
   upsertLocal: (meta: ProjectMeta) => void;
@@ -94,6 +97,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   async rename(id, name) {
     const clean = validateProjectName(name);
     await repository().updateProject(id, { name: clean });
+    recordActivity('project.renamed', clean);
     set((state) => ({
       projects: state.projects.map((p) =>
         p.id === id ? { ...p, name: clean, updatedAt: Date.now() } : p,
@@ -121,9 +125,23 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
   async setStatus(id, status) {
     await repository().updateProject(id, { status });
+    recordActivity(status === 'archived' ? 'project.archived' : 'project.restored');
     set((state) => ({
       projects: state.projects.map((p) => (p.id === id ? { ...p, status } : p)),
     }));
+  },
+
+  async setVisibility(id, visibility) {
+    await repository().updateProject(id, { visibility });
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, visibility } : p)),
+    }));
+    // Keep the open project's own copy of the metadata in step.
+    const fileStore = useFileStore.getState();
+    if (fileStore.projectId === id && fileStore.meta) {
+      useFileStore.setState({ meta: { ...fileStore.meta, visibility } });
+    }
+    recordActivity('project.visibility', visibility);
   },
 
   async duplicate(id) {

@@ -9,10 +9,10 @@
  */
 
 const DB_NAME = 'forge-ide';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-export type StoreName = 'projects' | 'repos' | 'kv';
-const STORES: StoreName[] = ['projects', 'repos', 'kv'];
+export type StoreName = 'projects' | 'repos' | 'kv' | 'members' | 'activity' | 'workspaces';
+const STORES: StoreName[] = ['projects', 'repos', 'kv', 'members', 'activity', 'workspaces'];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let unavailableReason: string | null = null;

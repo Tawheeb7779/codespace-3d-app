@@ -1,5 +1,11 @@
 import { idbAll, idbDelete, idbGet, idbSet } from '@/lib/idb';
-import type { Project, ProjectMeta } from '@/types';
+import type {
+  ActivityEvent,
+  Project,
+  ProjectMember,
+  ProjectMeta,
+  Workspace,
+} from '@/types';
 import type { Repo } from '@/lib/vcs';
 import type { ProjectRepository } from '@/lib/repo/types';
 import type { RemoteRef } from '@/lib/github/remote';
@@ -65,5 +71,75 @@ export const localRepository: ProjectRepository = {
 
   async clearRemote(id) {
     await idbDelete('kv', `remote:${id}`);
+  },
+
+  // -- Membership -----------------------------------------------------------
+  //
+  // Local Development Mode has exactly one account, so the only membership
+  // that exists is the owner's own. Storing it anyway keeps this backend
+  // answering the same questions as the cloud one, which is what lets the
+  // stores stay free of `if (local)` branches.
+
+  async listMembers(projectId) {
+    const all = await idbAll<ProjectMember>('members');
+    return all
+      .filter((member) => member.projectId === projectId)
+      .sort((a, b) => a.addedAt - b.addedAt);
+  },
+
+  async roleFor(projectId, userId) {
+    const project = await idbGet<Project>('projects', projectId);
+    if (!project) return null;
+    if (project.ownerId === userId) return 'owner';
+    const all = await idbAll<ProjectMember>('members');
+    const member = all.find((m) => m.projectId === projectId && m.userId === userId);
+    return member?.role ?? null;
+  },
+
+  async addMember(member) {
+    await idbSet('members', `${member.projectId}:${member.userId}`, member);
+    return member;
+  },
+
+  async setMemberRole(projectId, userId, role) {
+    const key = `${projectId}:${userId}`;
+    const existing = await idbGet<ProjectMember>('members', key);
+    if (!existing) throw new Error('That person is not a member of this project.');
+    await idbSet('members', key, { ...existing, role });
+  },
+
+  async removeMember(projectId, userId) {
+    await idbDelete('members', `${projectId}:${userId}`);
+  },
+
+  // -- Activity -------------------------------------------------------------
+
+  async listActivity(projectId, limit) {
+    const all = await idbAll<ActivityEvent>('activity');
+    return all
+      .filter((event) => event.projectId === projectId)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
+  },
+
+  async recordActivity(event) {
+    await idbSet('activity', event.id, event);
+  },
+
+  // -- Workspaces -----------------------------------------------------------
+
+  async listWorkspaces(ownerId) {
+    const all = await idbAll<Workspace>('workspaces');
+    return all
+      .filter((workspace) => workspace.ownerId === ownerId)
+      .sort((a, b) => b.openedAt - a.openedAt);
+  },
+
+  async saveWorkspace(workspace) {
+    await idbSet('workspaces', workspace.id, workspace);
+  },
+
+  async deleteWorkspace(id) {
+    await idbDelete('workspaces', id);
   },
 };

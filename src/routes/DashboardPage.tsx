@@ -5,6 +5,7 @@ import {
   ArchiveRestore,
   Copy,
   Hammer,
+  Layers,
   LogOut,
   MoreHorizontal,
   Plus,
@@ -17,7 +18,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { IconButton, IconLink } from '@/components/ui/IconButton';
-import { Input } from '@/components/ui/Field';
+import { Input, Select } from '@/components/ui/Field';
 import { Badge, EmptyState, ErrorState, SkeletonRows } from '@/components/ui/Primitives';
 import { Menu, type MenuItem } from '@/components/ui/Menu';
 import { useContextMenu } from '@/hooks/useContextMenu';
@@ -25,6 +26,8 @@ import { Modal } from '@/components/ui/Modal';
 import { CreateProjectDialog } from '@/components/dashboard/CreateProjectDialog';
 import { ImportDialog } from '@/components/dashboard/ImportDialog';
 import { useProjectStore } from '@/stores/projectStore';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
+import { WorkspaceBar } from '@/components/dashboard/WorkspaceBar';
 import { useAuthStore } from '@/stores/authStore';
 import { toast } from '@/stores/toastStore';
 import type { ProjectMeta } from '@/types';
@@ -32,6 +35,13 @@ import { cx, errorMessage, formatTimeAgo } from '@/lib/utils';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
 type Filter = 'all' | 'starred' | 'archived';
+type Sort = 'updated' | 'created' | 'name';
+
+const SORT_LABELS: Record<Sort, string> = {
+  updated: 'Last updated',
+  created: 'Newest',
+  name: 'Name',
+};
 
 function ProjectCard({
   project,
@@ -95,6 +105,14 @@ export default function DashboardPage() {
 
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [sort, setSort] = useState<Sort>('updated');
+  const [workspaceId, setWorkspaceId] = useState<string | null>(
+    useWorkspaceStore.getState().activeId,
+  );
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const addToWorkspace = useWorkspaceStore((s) => s.addProject);
+  const removeFromWorkspace = useWorkspaceStore((s) => s.removeProject);
+  const workspace = workspaces.find((entry) => entry.id === workspaceId) ?? null;
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [renaming, setRenaming] = useState<ProjectMeta | null>(null);
@@ -126,8 +144,14 @@ export default function DashboardPage() {
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
+    // A workspace narrows the list; it never widens it. Every project here was
+    // already visible to this account.
+    const inWorkspace = workspace
+      ? new Set(workspace.projectIds)
+      : null;
     return projects
       .filter((project) => {
+        if (inWorkspace && !inWorkspace.has(project.id)) return false;
         if (filter === 'starred' && !project.starred) return false;
         if (filter === 'archived') return project.status === 'archived';
         if (project.status === 'archived') return false;
@@ -138,8 +162,12 @@ export default function DashboardPage() {
           project.language.toLowerCase().includes(needle)
         );
       })
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [projects, query, filter]);
+      .sort((a, b) => {
+        if (sort === 'name') return a.name.localeCompare(b.name);
+        if (sort === 'created') return b.createdAt - a.createdAt;
+        return b.updatedAt - a.updatedAt;
+      });
+  }, [projects, query, filter, sort, workspace]);
 
   const openMenu = useCallback(
     (event: React.MouseEvent, project: ProjectMeta) => {
@@ -176,6 +204,42 @@ export default function DashboardPage() {
               .catch((caught) => toast.error('Could not duplicate', errorMessage(caught)));
           },
         },
+        ...(workspace
+          ? [
+              workspace.projectIds.includes(target.id)
+                ? {
+                    id: 'workspace-remove',
+                    label: `Remove from ${workspace.name}`,
+                    icon: <Layers className="h-3.5 w-3.5" />,
+                    onSelect: () => {
+                      void removeFromWorkspace(workspace.id, target.id).catch((caught) =>
+                        toast.error('Could not update workspace', errorMessage(caught)),
+                      );
+                    },
+                  }
+                : {
+                    id: 'workspace-add',
+                    label: `Add to ${workspace.name}`,
+                    icon: <Layers className="h-3.5 w-3.5" />,
+                    onSelect: () => {
+                      void addToWorkspace(workspace.id, target.id).catch((caught) =>
+                        toast.error('Could not update workspace', errorMessage(caught)),
+                      );
+                    },
+                  },
+            ]
+          : workspaces.map((entry) => ({
+              id: `workspace-add-${entry.id}`,
+              label: `Add to ${entry.name}`,
+              icon: <Layers className="h-3.5 w-3.5" />,
+              onSelect: () => {
+                void addToWorkspace(entry.id, target.id)
+                  .then(() => toast.success('Added to workspace', entry.name))
+                  .catch((caught) =>
+                    toast.error('Could not update workspace', errorMessage(caught)),
+                  );
+              },
+            }))),
         {
           id: 'archive',
           label: target.status === 'archived' ? 'Restore' : 'Archive',
@@ -270,7 +334,9 @@ export default function DashboardPage() {
             <div>
               <h1 className="text-xl font-semibold text-ink">Projects</h1>
               <p className="mt-1 text-base text-ink-muted">
-                {projects.length} project{projects.length === 1 ? '' : 's'} in your workspace
+                {workspace
+                  ? `${visible.length} of ${projects.length} project${projects.length === 1 ? '' : 's'} in ${workspace.name}`
+                  : `${projects.length} project${projects.length === 1 ? '' : 's'}`}
               </p>
             </div>
             <div className="flex gap-2">
@@ -323,6 +389,19 @@ export default function DashboardPage() {
                 </button>
               ))}
             </div>
+            <Select
+              aria-label="Sort projects"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as Sort)}
+              options={(Object.keys(SORT_LABELS) as Sort[]).map((value) => ({
+                value,
+                label: SORT_LABELS[value],
+              }))}
+            />
+          </div>
+
+          <div className="mt-4">
+            <WorkspaceBar activeId={workspaceId} onSelect={setWorkspaceId} />
           </div>
 
           <div className="mt-6">

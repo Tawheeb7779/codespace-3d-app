@@ -713,6 +713,163 @@ begin
   end;
 end $$;
 
+-- --------------------------------------------------------------------------
+-- Workspaces
+--
+-- A workspace is private to its owner and grants no access to anything: it is
+-- an ordering hint over projects the caller can already read. The assertions
+-- that matter are that nobody else can see it, and that listing a project id
+-- inside one does not make that project readable.
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as_admin();
+insert into public.workspaces (id, owner_id, name, project_ids)
+values ('ws_owner', '11111111-1111-1111-1111-111111111111', 'Owner space',
+        array['prj_test_alpha', 'prj_test_private']);
+
+insert into public.projects (id, owner_id, name, visibility)
+values ('prj_test_private', '44444444-4444-4444-4444-444444444444', 'Outsider private', 'private')
+on conflict (id) do nothing;
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select pg_temp.assert(
+  (select count(*) from public.workspaces where id = 'ws_owner') = 1,
+  'an owner sees their own workspace');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.workspaces) = 0,
+  'a workspace is invisible to everyone but its owner');
+
+-- The important one: naming a project inside a workspace must not grant a
+-- read on that project.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_test_private') = 0,
+  'listing a project in a workspace does not grant access to it');
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+do $$
+begin
+  begin
+    insert into public.workspaces (id, owner_id, name)
+    values ('ws_forged', '11111111-1111-1111-1111-111111111111', 'Forged');
+    raise exception 'FAIL  a workspace could be created under another owner';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a workspace cannot be created under another owner';
+  end;
+end $$;
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+update public.workspaces set name = 'stolen' where id = 'ws_owner';
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select name from public.workspaces where id = 'ws_owner') = 'Owner space',
+  'an outsider cannot rename a workspace they do not own');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+delete from public.workspaces where id = 'ws_owner';
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select count(*) from public.workspaces where id = 'ws_owner') = 1,
+  'an outsider cannot delete a workspace they do not own');
+
+-- An owner cannot hand their row to somebody else, which would otherwise be a
+-- way to write into another account's list.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+do $$
+begin
+  begin
+    update public.workspaces
+       set owner_id = '44444444-4444-4444-4444-444444444444'
+     where id = 'ws_owner';
+    if found then
+      raise exception 'FAIL  a workspace could be reassigned to another owner';
+    end if;
+    raise notice 'ok    a workspace cannot be reassigned to another owner';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a workspace cannot be reassigned to another owner';
+  end;
+end $$;
+
+select pg_temp.act_as_admin();
+do $$
+begin
+  begin
+    insert into public.workspaces (id, owner_id, name)
+    values ('ws_nameless', '11111111-1111-1111-1111-111111111111', '');
+    raise exception 'FAIL  a nameless workspace was accepted';
+  exception
+    when check_violation then raise notice 'ok    a nameless workspace is rejected';
+  end;
+end $$;
+
+-- --------------------------------------------------------------------------
+-- Activity is append-only, and attributable only to the acting user
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+insert into public.project_activity (project_id, actor_id, action, detail)
+values ('prj_test_alpha', '22222222-2222-2222-2222-222222222222', 'commit.created',
+        '{"subject":"fixture"}'::jsonb);
+select pg_temp.assert(true, 'an editor can record activity as themselves');
+
+do $$
+begin
+  begin
+    update public.project_activity set action = 'project.renamed'
+     where project_id = 'prj_test_alpha';
+    if found then
+      raise exception 'FAIL  activity could be rewritten';
+    end if;
+    raise notice 'ok    activity cannot be rewritten after the fact';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    activity cannot be rewritten after the fact';
+  end;
+end $$;
+
+-- The alpha fixture was made public earlier in this suite, and public
+-- visibility grants reading — of the code and of the timeline alike, which is
+-- the documented model. What must hold is that a *private* project's activity
+-- stays invisible.
+select pg_temp.act_as_admin();
+insert into public.projects (id, owner_id, name, visibility)
+values ('prj_test_secret', '11111111-1111-1111-1111-111111111111', 'Secret', 'private');
+insert into public.project_members (project_id, user_id, role)
+values ('prj_test_secret', '11111111-1111-1111-1111-111111111111', 'owner')
+on conflict (project_id, user_id) do nothing;
+insert into public.project_activity (project_id, actor_id, action, detail)
+values ('prj_test_secret', '11111111-1111-1111-1111-111111111111', 'commit.created',
+        '{"subject":"private work"}'::jsonb);
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.project_activity where project_id = 'prj_test_secret') = 0,
+  'an outsider cannot read a private project''s activity');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select pg_temp.assert(
+  (select count(*) from public.project_activity where project_id = 'prj_test_secret') = 1,
+  'the owner can read their own private project''s activity');
+
+-- An actor cannot file activity under somebody else's identity.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+do $$
+begin
+  begin
+    insert into public.project_activity (project_id, actor_id, action, detail)
+    values ('prj_test_alpha', '11111111-1111-1111-1111-111111111111', 'commit.created',
+            '{"subject":"impersonated"}'::jsonb);
+    raise exception 'FAIL  activity could be filed under another identity';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    activity cannot be filed under another identity';
+  end;
+end $$;
+
 select pg_temp.act_as_admin();
 select pg_temp.assert(true, 'all authorization assertions passed');
 

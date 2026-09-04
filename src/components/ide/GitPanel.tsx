@@ -129,6 +129,8 @@ export function GitPanel() {
   const [mergeFrom, setMergeFrom] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmDeleteBranch, setConfirmDeleteBranch] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState<string | null>(null);
+  const [inspectPath, setInspectPath] = useState<string | null>(null);
   const [tab, setTab] = useState<'changes' | 'history'>('changes');
 
   useEffect(() => {
@@ -172,6 +174,10 @@ export function GitPanel() {
   // With stage-on-commit on, any change is committable; otherwise the index
   // has to hold something.
   const readyToCommit = stageAllOnCommit ? !status.clean : status.staged.length > 0;
+
+  // Built from the repository, never from a claim: a commit's own tree against
+  // its first parent's is what actually changed.
+  const detail = inspecting ? vcs.commitDetail(repo, inspecting) : null;
 
   const selectedBefore = selectedPath ? vcs.headContent(repo, selectedPath) : '';
   const selectedAfter = selectedPath ? (files[selectedPath] ?? '') : '';
@@ -404,7 +410,15 @@ export function GitPanel() {
             <EmptyState title="No commits yet" description="Stage some files and make your first commit." />
           ) : (
             history.map((entry) => (
-              <div key={entry.id} className="border-b border-line px-2.5 py-2">
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => {
+                  setInspecting(entry.id);
+                  setInspectPath(null);
+                }}
+                className="block w-full border-b border-line px-2.5 py-2 text-left hover:bg-surface-raised"
+              >
                 <div className="flex items-center gap-2">
                   <GitCommitHorizontal className="h-3.5 w-3.5 shrink-0 text-accent" />
                   <p className="min-w-0 flex-1 truncate text-base text-ink">{entry.message}</p>
@@ -416,7 +430,7 @@ export function GitPanel() {
                   {entry.author} · {formatTimeAgo(entry.timestamp)} ·{' '}
                   {Object.keys(entry.tree).length} files
                 </p>
-              </div>
+              </button>
             ))
           )}
         </div>
@@ -517,6 +531,96 @@ export function GitPanel() {
           Files that both branches changed are merged line by line. Overlapping edits are written
           with conflict markers for you to resolve.
         </p>
+      </Modal>
+
+      <Modal
+        open={Boolean(detail)}
+        onClose={() => {
+          setInspecting(null);
+          setInspectPath(null);
+        }}
+        title={detail ? detail.commit.message : ''}
+        description={
+          detail
+            ? `${detail.commit.author} · ${new Date(detail.commit.timestamp).toLocaleString()}`
+            : ''
+        }
+        size="lg"
+        footer={
+          <Button
+            onClick={() => {
+              setInspecting(null);
+              setInspectPath(null);
+            }}
+          >
+            Close
+          </Button>
+        }
+      >
+        {detail && (
+          <div className="space-y-3">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+              <dt className="text-ink-faint">Commit</dt>
+              <dd className="font-mono text-ink">{detail.commit.id}</dd>
+              <dt className="text-ink-faint">Parent</dt>
+              <dd className="font-mono text-ink-muted">
+                {detail.parent ? detail.parent.id : 'none (root commit)'}
+              </dd>
+              <dt className="text-ink-faint">Author</dt>
+              <dd className="text-ink">
+                {detail.commit.author}
+                {detail.commit.email && (
+                  <span className="text-ink-faint"> &lt;{detail.commit.email}&gt;</span>
+                )}
+              </dd>
+              <dt className="text-ink-faint">Changes</dt>
+              <dd className="text-ink">
+                {detail.changes.length} file{detail.changes.length === 1 ? '' : 's'}{' '}
+                <span className="font-mono text-positive">+{detail.additions}</span>{' '}
+                <span className="font-mono text-danger">−{detail.deletions}</span>
+              </dd>
+            </dl>
+
+            <div className="overflow-hidden rounded border border-line">
+              {detail.changes.length ? (
+                detail.changes.map((change) => (
+                  <button
+                    key={change.path}
+                    type="button"
+                    aria-current={inspectPath === change.path}
+                    onClick={() =>
+                      setInspectPath(inspectPath === change.path ? null : change.path)
+                    }
+                    className={cx(
+                      'flex w-full items-center gap-1.5 px-2 py-1 text-left text-sm',
+                      inspectPath === change.path
+                        ? 'bg-accent-soft text-ink'
+                        : 'text-ink-muted hover:bg-surface-raised',
+                    )}
+                  >
+                    <FileIcon path={change.path} />
+                    <span className="min-w-0 flex-1 truncate font-mono">{change.path}</span>
+                    <span className="shrink-0 text-xs text-ink-faint">{change.status}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="p-2 text-sm text-ink-faint">
+                  This commit changed no files against its parent.
+                </p>
+              )}
+            </div>
+
+            {inspectPath && (
+              <div className="h-64 overflow-hidden rounded border border-line">
+                <DiffViewer
+                  before={vcs.commitContent(repo, detail.parent, inspectPath)}
+                  after={vcs.commitContent(repo, detail.commit, inspectPath)}
+                  emptyLabel="No textual change in this file."
+                />
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal

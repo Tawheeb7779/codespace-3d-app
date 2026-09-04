@@ -52,6 +52,60 @@ export interface ProjectMember {
   addedAt: number;
 }
 
+/**
+ * A named grouping of projects, with the layout and preferences that go with
+ * them. Workspaces are owned by one account; sharing happens per project.
+ */
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  ownerId: string;
+  /** Projects belonging to this workspace, in the owner's chosen order. */
+  projectIds: string[];
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** Last time the owner opened it, for the recent list. */
+  openedAt: number;
+}
+
+/**
+ * Application-level events worth showing on a timeline.
+ *
+ * Deliberately a closed set: an open string would let any caller write
+ * anything into a record that is meant to be safe to persist server-side.
+ */
+export type ActivityAction =
+  | 'project.created'
+  | 'project.renamed'
+  | 'project.archived'
+  | 'project.restored'
+  | 'project.visibility'
+  | 'branch.created'
+  | 'branch.switched'
+  | 'branch.deleted'
+  | 'commit.created'
+  | 'remote.pushed'
+  | 'remote.pulled'
+  | 'build.completed'
+  | 'agent.started'
+  | 'agent.completed'
+  | 'member.added'
+  | 'member.removed'
+  | 'member.role';
+
+export interface ActivityEvent {
+  id: string;
+  projectId: string;
+  actorId: string;
+  actorName: string;
+  action: ActivityAction;
+  /** Short human-readable subject: a branch name, a commit summary, a path. */
+  subject: string;
+  createdAt: number;
+}
+
 export interface AuthUser {
   id: string;
   email: string;

@@ -29,6 +29,20 @@ let failed = 0;
 const browser = await chromium.launch({ ...(CHROMIUM ? { executablePath: CHROMIUM } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
+
+/**
+ * Dismiss the first-run tour.
+ *
+ * A first-time user really does see it, so every suite that opens a project
+ * for the first time has to get past it the same way a person would.
+ */
+const skipOnboarding = async () => {
+  const skip = page.getByRole('button', { name: 'Skip', exact: true });
+  if (await skip.isVisible().catch(() => false)) {
+    await skip.click();
+    await page.waitForTimeout(400);
+  }
+};
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
 page.on('pageerror', (e) => pageErrors.push(e.stack || e.message));
 
@@ -56,7 +70,7 @@ const connect = async (scenario) => {
   await page.getByRole('dialog').waitFor();
   await page.getByLabel('Provider', { exact: true }).selectOption('openai');
   await page.getByLabel('Base URL').fill(`${PROVIDER}/${scenario}`);
-  await page.getByLabel('Model').fill('scripted');
+  await page.getByLabel('Model', { exact: true }).fill('scripted');
   await page.getByLabel('API key').fill('test');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await page.waitForTimeout(500);
@@ -105,6 +119,8 @@ const openFileContent = async (name) => {
   return page.locator('.monaco-editor .view-lines').first().innerText();
 };
 
+
+
 try {
   await step('1. sign in and open a project', async () => {
     await page.goto(`${BASE}/signin`, { waitUntil: 'domcontentloaded' });
@@ -120,6 +136,7 @@ try {
     await page.getByRole('button', { name: /Create project/i }).click();
     await page.waitForURL('**/project/**', { timeout: 40000 });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
     await page.waitForTimeout(2500);
   });
 

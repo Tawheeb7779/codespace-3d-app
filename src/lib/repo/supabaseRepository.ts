@@ -1,5 +1,15 @@
 import { requireSupabase } from '@/lib/supabase';
-import type { ProjectMeta, ProjectStatus, ProjectVisibility, TemplateId } from '@/types';
+import type {
+  ActivityAction,
+  ActivityEvent,
+  MemberRole,
+  ProjectMember,
+  ProjectMeta,
+  ProjectStatus,
+  ProjectVisibility,
+  TemplateId,
+  Workspace,
+} from '@/types';
 import type { Repo } from '@/lib/vcs';
 import type { ProjectRepository } from '@/lib/repo/types';
 
@@ -40,6 +50,84 @@ const rowToMeta = (row: ProjectRow): ProjectMeta => ({
   starred: row.starred,
   createdAt: new Date(row.created_at).getTime(),
   updatedAt: new Date(row.updated_at).getTime(),
+});
+
+/**
+ * An embedded profile arrives as an object for a to-one relation, but the
+ * generated types describe it as an array. Accept both rather than asserting
+ * one and being wrong on the other.
+ */
+type Embedded<T> = T | T[] | null;
+
+function one<T>(value: Embedded<T>): T | null {
+  if (!value) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+interface MemberRow {
+  id: string;
+  project_id: string;
+  user_id: string;
+  role: string;
+  created_at: string;
+  profiles: Embedded<{ email: string | null; display_name: string | null }>;
+}
+
+const rowToMember = (row: MemberRow): ProjectMember => {
+  const profile = one(row.profiles);
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    userId: row.user_id,
+    email: profile?.email ?? '',
+    displayName: profile?.display_name ?? profile?.email ?? 'Unknown',
+    role: row.role as MemberRole,
+    addedAt: new Date(row.created_at).getTime(),
+  };
+};
+
+interface ActivityRow {
+  id: string;
+  project_id: string;
+  actor_id: string | null;
+  action: string;
+  detail: { subject?: string } | null;
+  created_at: string;
+  profiles: Embedded<{ display_name: string | null }>;
+}
+
+const rowToActivity = (row: ActivityRow): ActivityEvent => ({
+  id: row.id,
+  projectId: row.project_id,
+  actorId: row.actor_id ?? '',
+  actorName: one(row.profiles)?.display_name ?? 'Someone',
+  action: row.action as ActivityAction,
+  subject: row.detail?.subject ?? '',
+  createdAt: new Date(row.created_at).getTime(),
+});
+
+interface WorkspaceRow {
+  id: string;
+  owner_id: string;
+  name: string;
+  description: string | null;
+  project_ids: string[] | null;
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+  opened_at: string;
+}
+
+const rowToWorkspace = (row: WorkspaceRow): Workspace => ({
+  id: row.id,
+  ownerId: row.owner_id,
+  name: row.name,
+  description: row.description ?? '',
+  projectIds: row.project_ids ?? [],
+  pinned: row.pinned,
+  createdAt: new Date(row.created_at).getTime(),
+  updatedAt: new Date(row.updated_at).getTime(),
+  openedAt: new Date(row.opened_at).getTime(),
 });
 
 function fail(context: string, error: { message: string; code?: string } | null): never {
@@ -256,5 +344,124 @@ export const supabaseRepository: ProjectRepository = {
     const client = requireSupabase();
     const { error } = await client.from('project_remotes').delete().eq('project_id', id);
     if (error) fail('Could not disconnect the repository', error);
+  },
+
+  // -- Membership -----------------------------------------------------------
+  //
+  // No query here filters by user for authorization: the membership policies
+  // decide what comes back. A write that the caller is not entitled to make is
+  // rejected by Postgres, not by this file.
+
+  async listMembers(projectId) {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('project_members')
+      .select('id, project_id, user_id, role, created_at, profiles (email, display_name)')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true });
+    if (error) fail('Could not load members', error);
+    return (data as unknown as MemberRow[]).map(rowToMember);
+  },
+
+  async roleFor(projectId, userId) {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('project_members')
+      .select('role')
+      .eq('project_id', projectId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) fail('Could not read your role on this project', error);
+    return (data?.role as MemberRole | undefined) ?? null;
+  },
+
+  async addMember(member) {
+    const client = requireSupabase();
+    const { error } = await client.from('project_members').insert({
+      project_id: member.projectId,
+      user_id: member.userId,
+      role: member.role,
+    });
+    if (error) fail('Could not add that member', error);
+    return member;
+  },
+
+  async setMemberRole(projectId, userId, role) {
+    const client = requireSupabase();
+    const { error } = await client
+      .from('project_members')
+      .update({ role })
+      .eq('project_id', projectId)
+      .eq('user_id', userId);
+    if (error) fail('Could not change that role', error);
+  },
+
+  async removeMember(projectId, userId) {
+    const client = requireSupabase();
+    const { error } = await client
+      .from('project_members')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('user_id', userId);
+    if (error) fail('Could not remove that member', error);
+  },
+
+  // -- Activity -------------------------------------------------------------
+
+  async listActivity(projectId, limit) {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('project_activity')
+      .select('id, project_id, actor_id, action, detail, created_at, profiles (display_name)')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) fail('Could not load activity', error);
+    return (data as unknown as ActivityRow[]).map(rowToActivity);
+  },
+
+  async recordActivity(event) {
+    const client = requireSupabase();
+    const { error } = await client.from('project_activity').insert({
+      project_id: event.projectId,
+      actor_id: event.actorId,
+      action: event.action,
+      // The subject is already redacted and bounded by `lib/activity`.
+      detail: { subject: event.subject },
+    });
+    if (error) fail('Could not record activity', error);
+  },
+
+  // -- Workspaces -----------------------------------------------------------
+
+  async listWorkspaces() {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('workspaces')
+      .select('*')
+      .order('opened_at', { ascending: false });
+    if (error) fail('Could not load workspaces', error);
+    return (data as unknown as WorkspaceRow[]).map(rowToWorkspace);
+  },
+
+  async saveWorkspace(workspace) {
+    const client = requireSupabase();
+    const { error } = await client.from('workspaces').upsert({
+      id: workspace.id,
+      owner_id: workspace.ownerId,
+      name: workspace.name,
+      description: workspace.description,
+      project_ids: workspace.projectIds,
+      pinned: workspace.pinned,
+      opened_at: new Date(workspace.openedAt).toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    if (error) fail('Could not save the workspace', error);
+  },
+
+  async deleteWorkspace(id) {
+    const client = requireSupabase();
+    const { error } = await client.from('workspaces').delete().eq('id', id);
+    if (error) fail('Could not delete the workspace', error);
   },
 };

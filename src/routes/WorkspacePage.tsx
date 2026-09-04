@@ -5,6 +5,8 @@ import { ActivityBar } from '@/components/ide/ActivityBar';
 import { WorkspaceTopBar } from '@/components/ide/WorkspaceTopBar';
 import { FileExplorer } from '@/components/ide/FileExplorer';
 import { ProjectPanel } from '@/components/ide/ProjectPanel';
+import { ActivityPanel } from '@/components/ide/ActivityPanel';
+import { Onboarding } from '@/components/ide/Onboarding';
 import { SearchPanel } from '@/components/ide/SearchPanel';
 import { GitPanel } from '@/components/ide/GitPanel';
 import { PackagesPanel } from '@/components/ide/PackagesPanel';
@@ -24,7 +26,7 @@ import { Button } from '@/components/ui/Button';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useUIStore } from '@/stores/uiStore';
 import { useFileStore } from '@/stores/fileStore';
-import { useEditorStore } from '@/stores/editorStore';
+import { useEditorStore, splitTargetFor } from '@/stores/editorStore';
 import { useGitStore } from '@/stores/gitStore';
 import type { RemoteResult } from '@/stores/gitStore';
 import { usePreviewStore } from '@/stores/previewStore';
@@ -42,6 +44,8 @@ function SidePanel() {
   switch (panel) {
     case 'project':
       return <ProjectPanel />;
+    case 'activity':
+      return <ActivityPanel />;
     case 'search':
       return <SearchPanel />;
     case 'git':
@@ -163,7 +167,8 @@ export default function WorkspacePage() {
   } = useUIStore();
 
   const { open, close, loading, error, meta, files, flush, canWrite } = useFileStore();
-  const { activePath, openTab, closeTab, closeOthers, closeAll, tabs, cursor } = useEditorStore();
+  const { activePath, openTab, closeTab, closeOthers, closeAll, tabs, cursor, setSplit } =
+    useEditorStore();
   // Reactive slices so the palette re-derives when the repository changes.
   const gitInitialized = useGitStore((s) => s.repo.initialized);
   const gitBranches = useGitStore((s) => s.repo.branches);
@@ -264,6 +269,18 @@ export default function WorkspacePage() {
     }
   }, []);
 
+  /** Move focus one tab along, wrapping — the usual editor behaviour. */
+  const cycleTab = useCallback(
+    (delta: number) => {
+      const open = useEditorStore.getState().tabs;
+      if (open.length < 2) return;
+      const index = open.findIndex((tab) => tab.path === useEditorStore.getState().activePath);
+      const next = open[(index + delta + open.length) % open.length];
+      if (next) useEditorStore.getState().setActive(next.path);
+    },
+    [],
+  );
+
   const toggleTerminalPanel = useCallback(() => {
     const next = !useUIStore.getState().bottomOpen;
     if (next) setBottomTab('terminal');
@@ -361,6 +378,12 @@ export default function WorkspacePage() {
         group: 'View',
         label: 'Show project overview',
         run: () => setSidebarPanel('project'),
+      },
+      {
+        id: 'view.activity',
+        group: 'View',
+        label: 'Show activity and who is here',
+        run: () => setSidebarPanel('activity'),
       },
       {
         id: 'view.explorer',
@@ -570,15 +593,24 @@ export default function WorkspacePage() {
         closeTab: () => activePath && closeTab(activePath),
         run: () => void previewRun(),
         format: () => void formatDocument(),
+        nextTab: () => cycleTab(1),
+        previousTab: () => cycleTab(-1),
+        splitEditor: () => setSplit(splitTargetFor(tabs, activePath)),
+        sourceControl: () => setSidebarPanel('git'),
+        explorer: () => setSidebarPanel('explorer'),
+        assistant: () => setSidebarPanel('assistant'),
       }),
       [
         activePath,
         closeTab,
+        cycleTab,
         previewRun,
         save,
         setCommandPaletteOpen,
         setQuickOpenOpen,
         setSidebarPanel,
+        setSplit,
+        tabs,
         togglePreview,
         toggleSidebar,
         toggleTerminalPanel,
@@ -758,6 +790,7 @@ export default function WorkspacePage() {
 
       <StatusBar />
       {palette}
+      <Onboarding />
     </div>
   );
 }

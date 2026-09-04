@@ -43,6 +43,20 @@ const browser = await chromium.launch({
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
 
+/**
+ * Dismiss the first-run tour.
+ *
+ * A first-time user really does see it, so every suite that opens a project
+ * for the first time has to get past it the same way a person would.
+ */
+const skipOnboarding = async () => {
+  const skip = page.getByRole('button', { name: 'Skip', exact: true });
+  if (await skip.isVisible().catch(() => false)) {
+    await skip.click();
+    await page.waitForTimeout(400);
+  }
+};
+
 page.on('console', (msg) => {
   if (msg.type() === 'error') consoleErrors.push(msg.text());
 });
@@ -141,6 +155,8 @@ const commitAll = async (message) => {
   await page.waitForTimeout(2000);
 };
 
+
+
 try {
   await control('reset', {
     repos: [
@@ -178,6 +194,7 @@ try {
     await page.getByRole('button', { name: /^Import forge-tester\/demo$/ }).click();
     await page.waitForURL('**/project/**', { timeout: 60000 });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
   });
 
   await step('4. the imported project has the repository contents', async () => {
@@ -354,6 +371,7 @@ try {
   await step('18. the state survives a full reload', async () => {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
     await openSourceControl();
     const text = await page.locator('aside').first().innerText();
     if (!/forge-tester\/demo/.test(text)) throw new Error('the remote was lost on reload');
@@ -368,6 +386,7 @@ try {
     await page.getByRole('button', { name: /Create project/i }).click();
     await page.waitForURL('**/project/**', { timeout: 40000 });
     await page.locator('.monaco-editor').first().waitFor({ timeout: 60000 });
+    await skipOnboarding();
 
     await openSourceControl();
     await page.getByRole('button', { name: /Initialize repository/i }).click();

@@ -72,11 +72,25 @@ function scheduleSave() {
   }, Math.max(200, autoSaveDelay));
 }
 
-/** Deriving the role locally mirrors what RLS enforces server side. */
-function roleFor(project: Project): MemberRole {
+/**
+ * The caller's role on a project.
+ *
+ * Owning it settles the question without a lookup; otherwise the membership
+ * record decides, and a project with no record for this user is read-only.
+ * This mirrors what row level security enforces server side — it renders the
+ * right affordances, it is not the boundary.
+ */
+async function resolveRole(project: Project): Promise<MemberRole> {
   const user = useAuthStore.getState().user;
-  if (user && project.ownerId === user.id) return 'owner';
-  return 'viewer';
+  if (!user) return 'viewer';
+  if (project.ownerId === user.id) return 'owner';
+  try {
+    return (await repository().roleFor(project.id, user.id)) ?? 'viewer';
+  } catch {
+    // A membership lookup that fails must not hand out more access than the
+    // caller has: fall back to the least privileged role.
+    return 'viewer';
+  }
 }
 
 export const useFileStore = create<FileState>()((set, get) => ({
@@ -99,12 +113,13 @@ export const useFileStore = create<FileState>()((set, get) => ({
       const project = await repository().getProject(id);
       if (!project) throw new Error('This project does not exist, or you do not have access to it.');
       const { files, dirs, ...meta } = project;
+      const role = await resolveRole(project);
       set({
         projectId: id,
         meta,
         files,
         dirs,
-        role: roleFor(project),
+        role,
         loading: false,
         dirty: new Set(),
         lastSavedAt: project.updatedAt,

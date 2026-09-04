@@ -9,7 +9,7 @@
  * that `push` reached a server.
  */
 
-import { mergeThreeWay } from '@/lib/diff';
+import { diffStat, mergeThreeWay } from '@/lib/diff';
 
 export interface Commit {
   id: string;
@@ -472,6 +472,64 @@ export function merge(
 export function headContent(repo: Repo, path: string): string {
   const hash = headTree(repo)[path];
   return hash ? (repo.blobs[hash] ?? '') : '';
+}
+
+/** Content of a path in a given commit, or '' when it was not in that tree. */
+export function commitContent(repo: Repo, commit: Commit | null, path: string): string {
+  const hash = commit?.tree[path];
+  return hash ? (repo.blobs[hash] ?? '') : '';
+}
+
+export interface CommitDetail {
+  commit: Commit;
+  /** The first parent, or null for a root commit. */
+  parent: Commit | null;
+  changes: FileChange[];
+  additions: number;
+  deletions: number;
+}
+
+/**
+ * What one commit actually changed, against its first parent.
+ *
+ * Comparing blob hashes rather than content is what makes this cheap: a tree
+ * with a thousand unchanged files does no string work at all. Only the paths
+ * that really differ are diffed for line counts.
+ *
+ * A merge commit is described against its first parent, the same convention
+ * `git show` uses — the second parent's changes belong to the branch it came
+ * from, not to this commit.
+ */
+export function commitDetail(repo: Repo, commitId: string): CommitDetail | null {
+  const commit = repo.commits[commitId];
+  if (!commit) return null;
+  const parent = commit.parents[0] ? (repo.commits[commit.parents[0]] ?? null) : null;
+  const before = parent?.tree ?? {};
+  const after = commit.tree;
+
+  const changes: FileChange[] = [];
+  for (const path of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const from = before[path];
+    const to = after[path];
+    if (from === to) continue;
+    if (from === undefined) changes.push({ path, status: 'added' });
+    else if (to === undefined) changes.push({ path, status: 'deleted' });
+    else changes.push({ path, status: 'modified' });
+  }
+  changes.sort((a, b) => a.path.localeCompare(b.path));
+
+  let additions = 0;
+  let deletions = 0;
+  for (const change of changes) {
+    const stat = diffStat(
+      change.status === 'added' ? '' : (repo.blobs[before[change.path]] ?? ''),
+      change.status === 'deleted' ? '' : (repo.blobs[after[change.path]] ?? ''),
+    );
+    additions += stat.additions;
+    deletions += stat.deletions;
+  }
+
+  return { commit, parent, changes, additions, deletions };
 }
 
 export function indexContent(repo: Repo, path: string): string {

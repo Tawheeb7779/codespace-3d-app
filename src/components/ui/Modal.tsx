@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cx } from '@/lib/utils';
@@ -38,6 +38,15 @@ export function Modal({
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreTo = useRef<HTMLElement | null>(null);
+  /**
+   * A generated id, not one derived from the title.
+   *
+   * `aria-labelledby` is a space-separated *list* of ids, so a title like
+   * "New workspace" produced `New workspace-heading` — two ids, neither of
+   * which exists — and the dialog reached a screen reader with no name at all.
+   */
+  const headingId = useId();
+  const descriptionId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -91,7 +100,8 @@ export function Modal({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={`${title}-heading`}
+        aria-labelledby={headingId}
+        aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         className={cx(
           'relative z-10 mt-[8vh] w-full animate-scale-in rounded-lg border border-line',
@@ -101,10 +111,14 @@ export function Modal({
       >
         <header className="flex items-start gap-3 border-b border-line px-4 py-3">
           <div className="min-w-0 flex-1">
-            <h2 id={`${title}-heading`} className="truncate text-md font-semibold text-ink">
+            <h2 id={headingId} className="truncate text-md font-semibold text-ink">
               {title}
             </h2>
-            {description && <p className="mt-0.5 text-sm text-ink-muted">{description}</p>}
+            {description && (
+              <p id={descriptionId} className="mt-0.5 text-sm text-ink-muted">
+                {description}
+              </p>
+            )}
           </div>
           {dismissible && (
             <IconButton label="Close dialog" icon={<X className="h-4 w-4" />} onClick={onClose} />

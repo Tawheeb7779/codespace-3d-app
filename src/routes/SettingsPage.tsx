@@ -334,6 +334,16 @@ export default function SettingsPage() {
                 checked={editor.autoSave}
                 onChange={(value) => setEditor({ autoSave: value })}
               />
+              <Button
+                size="sm"
+                disabled={!workspace.onboarded}
+                onClick={() => {
+                  setWorkspace({ onboarded: false });
+                  toast.success('Orientation reset', 'It opens again next time you open a project.');
+                }}
+              >
+                Show the welcome tour again
+              </Button>
             </Group>
           )}
 

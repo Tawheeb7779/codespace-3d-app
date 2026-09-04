@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 
 export type SidebarPanel =
   | 'project'
+  | 'activity'
   | 'explorer'
   | 'search'
   | 'git'

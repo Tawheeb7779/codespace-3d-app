@@ -5,8 +5,18 @@ import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input, Select, Switch } from '@/components/ui/Field';
-import { useAiStore } from '@/stores/aiStore';
+import { currentContextSections, useAiStore } from '@/stores/aiStore';
 import { useFileStore } from '@/stores/fileStore';
+import { useEditorStore } from '@/stores/editorStore';
+import { useGitStore } from '@/stores/gitStore';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { WORKFLOWS, type WorkflowScope } from '@/lib/ai/workflows';
+import {
+  CONTEXT_DESCRIPTIONS,
+  CONTEXT_LABELS,
+  contextSize,
+  type ContextSource,
+} from '@/lib/ai/contextControl';
 import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
 import { readApiKey, type ProviderErrorKind, type ProviderKind } from '@/lib/ai/provider';
 import type { AgentActivity } from '@/lib/ai/agent';
@@ -144,6 +154,84 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
+/**
+ * Named tasks, and what each turn will send.
+ *
+ * A workflow that cannot run says why instead of failing after the fact, and
+ * the context row shows the real size of what leaves the browser — the same
+ * sections the request is built from, not an estimate of them.
+ */
+function WorkflowBar({ disabled }: { disabled: boolean }) {
+  const runWorkflow = useAiStore((s) => s.runWorkflow);
+  const context = useAiStore((s) => s.context);
+  const setContextSource = useAiStore((s) => s.setContextSource);
+  const selection = useAiStore((s) => s.selection);
+  const activePath = useEditorStore((s) => s.activePath);
+  const problems = useEditorStore((s) => s.problems);
+  const clean = useGitStore((s) => s.status.clean);
+
+  const scope: WorkflowScope = {
+    path: activePath,
+    selection,
+    hasDiagnostics: problems.length > 0,
+    hasChanges: !clean,
+  };
+  const sections = currentContextSections();
+  const size = contextSize(sections);
+
+  return (
+    <div className="border-b border-line">
+      <div className="flex flex-wrap gap-1 px-2.5 py-2">
+        {WORKFLOWS.map((workflow) => {
+          const blocked = workflow.unavailable(scope);
+          return (
+            <Tooltip key={workflow.id} content={blocked ?? workflow.description}>
+              <button
+                type="button"
+                disabled={disabled || Boolean(blocked)}
+                onClick={() => void runWorkflow(workflow.id)}
+                className={cx(
+                  'rounded border border-line px-1.5 py-0.5 text-sm transition-colors',
+                  'text-ink-muted hover:border-accent hover:text-ink',
+                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line',
+                )}
+              >
+                {workflow.label}
+              </button>
+            </Tooltip>
+          );
+        })}
+      </div>
+
+      <details className="px-2.5 pb-2">
+        <summary className="cursor-pointer text-sm text-ink-faint">
+          Context · {sections.length} source{sections.length === 1 ? '' : 's'} ·{' '}
+          {size > 1000 ? `${Math.round(size / 100) / 10}k` : size} chars
+        </summary>
+        <p className="mt-1 text-sm text-ink-faint">
+          Protected files are never sent, whatever is selected here.
+        </p>
+        <div className="mt-1.5 space-y-1">
+          {(Object.keys(CONTEXT_LABELS) as ContextSource[]).map((source) => (
+            <label key={source} className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={context[source]}
+                onChange={(event) => setContextSource(source, event.target.checked)}
+                className="mt-0.5 h-3 w-3 shrink-0 accent-[var(--accent)]"
+              />
+              <span className="min-w-0">
+                <span className="text-ink">{CONTEXT_LABELS[source]}</span>
+                <span className="block text-ink-faint">{CONTEXT_DESCRIPTIONS[source]}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export function AssistantPanel() {
   const {
     messages,
@@ -233,6 +321,8 @@ export function AssistantPanel() {
           />
         </div>
       )}
+
+      {connected && <WorkflowBar disabled={running} />}
 
       <AgentTaskBar />
 

@@ -42,8 +42,10 @@ export interface AgentSettings {
 export interface WorkspaceSettings {
   /** Reopen the files that were open when you last left a project. */
   restoreSession: boolean;
-  /** Reopen the last project from the dashboard. */
+  /** Ask before deleting a file from the explorer. */
   confirmOnDelete: boolean;
+  /** Whether the first-run orientation has been dismissed. */
+  onboarded: boolean;
 }
 
 export interface AppearanceSettings {
@@ -95,6 +97,12 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { id: 'closeTab', label: 'Close editor tab', keys: 'mod+w' },
   { id: 'run', label: 'Run project', keys: 'mod+enter' },
   { id: 'format', label: 'Format document', keys: 'mod+shift+i' },
+  { id: 'nextTab', label: 'Next editor tab', keys: 'mod+alt+arrowright' },
+  { id: 'previousTab', label: 'Previous editor tab', keys: 'mod+alt+arrowleft' },
+  { id: 'splitEditor', label: 'Split editor', keys: 'mod+backslash' },
+  { id: 'sourceControl', label: 'Show source control', keys: 'mod+shift+g' },
+  { id: 'explorer', label: 'Show explorer', keys: 'mod+shift+e' },
+  { id: 'assistant', label: 'Show the assistant', keys: 'mod+shift+a' },
 ];
 
 interface SettingsState {
@@ -164,6 +172,7 @@ const DEFAULT_AGENT: AgentSettings = {
 const DEFAULT_WORKSPACE: WorkspaceSettings = {
   restoreSession: true,
   confirmOnDelete: true,
+  onboarded: false,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -205,7 +214,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'forge.settings',
-      version: 1,
+      version: 2,
       // Merge stored settings over defaults so a new setting added in a release
       // does not come back undefined for existing users.
       merge: (persisted, current) => {
