@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { execute, type ShellLine, type ShellSession } from '@/lib/shell';
 import { createShellHost } from '@/lib/shellHost';
 import { uid } from '@/lib/utils';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 export interface TerminalSession extends ShellSession {
   id: string;
@@ -31,7 +32,19 @@ const BANNER: ShellLine[] = [
   { kind: 'info', text: 'Type "help" for the full list. Unlisted commands are not simulated.' },
 ];
 
-const MAX_LINES = 3000;
+/** Hard ceiling, whatever the setting says: scrollback lives in memory. */
+const MAX_LINES_CEILING = 20_000;
+
+/** How much scrollback to keep, from settings, clamped to something sane. */
+function scrollbackLimit(): number {
+  const configured = useSettingsStore.getState().terminal.scrollback;
+  return Math.min(MAX_LINES_CEILING, Math.max(200, configured));
+}
+
+function trim(lines: ShellLine[]): ShellLine[] {
+  const limit = scrollbackLimit();
+  return lines.length > limit ? lines.slice(-limit) : lines;
+}
 
 function newSession(index: number): TerminalSession {
   return {
@@ -39,7 +52,7 @@ function newSession(index: number): TerminalSession {
     name: index === 0 ? 'forge' : `forge ${index + 1}`,
     cwd: '',
     history: [],
-    lines: [...BANNER],
+    lines: useSettingsStore.getState().terminal.showBanner ? [...BANNER] : [],
     busy: false,
     revision: 0,
   };
@@ -80,7 +93,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
         const next = [...session.lines, ...lines];
         return {
           ...session,
-          lines: next.length > MAX_LINES ? next.slice(-MAX_LINES) : next,
+          lines: trim(next),
           revision: session.revision + 1,
         };
       }),
@@ -135,7 +148,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
           ...s,
           cwd: working.cwd,
           busy: false,
-          lines: lines.length > MAX_LINES ? lines.slice(-MAX_LINES) : lines,
+          lines: trim(lines),
           revision: s.revision + 1,
         };
       }),

@@ -32,6 +32,8 @@ export interface AgentTurn {
   onToolStart?: (tool: string, input: Record<string, unknown>) => void;
   /** The plan the agent stated before acting, when it produced one. */
   onPlan?: (plan: string[]) => void;
+  /** Ask the agent to verify edits with a real build. Defaults to on. */
+  verifyAfterEdits?: boolean;
 }
 
 export const MAX_STEPS = 12;
@@ -62,7 +64,7 @@ export function extractPlan(text: string): string[] {
   return steps.slice(0, 12);
 }
 
-const SYSTEM_PROMPT = `You are the coding assistant inside Forge IDE, working on the user's project.
+const BASE_RULES = `You are the coding assistant inside Forge IDE, working on the user's project.
 
 Rules:
 - Inspect before you change. Read the files you intend to touch.
@@ -71,11 +73,26 @@ Rules:
 - Keep answers short. Point at file paths and line numbers instead of pasting large blocks.
 - If a request needs a capability you do not have, say so plainly.
 - For anything beyond a one-line change, state a short numbered plan first, then carry it out.
+- There is no Node process here, so npm test, tsc and npm run <script> do not exist. run_build and
+  get_diagnostics are the real checks available. Never claim to have run anything else.`;
+
+const VERIFY_RULES = `
 - Verify your work: after editing code, call run_build (a real compile) or get_diagnostics, and
   read the result. Only say a change works once a check has actually passed.
-- There is no Node process here, so npm test, tsc and npm run <script> do not exist. run_build and
-  get_diagnostics are the real checks available. Never claim to have run anything else.
 - If a check fails twice and you still cannot fix it, stop and explain what is wrong.`;
+
+/**
+ * Verification is on by default and can be turned off in settings, for a
+ * project where a build is slow or meaningless. Turning it off relaxes what
+ * the agent is asked to run — never what it is allowed to claim.
+ */
+const NO_VERIFY_RULES = `
+- Automatic verification is turned off for this project, so do not run a build unless the user
+  asks. Say what you changed; do not claim it builds or passes when you have not checked.`;
+
+export function systemPrompt(verifyAfterEdits = true): string {
+  return BASE_RULES + (verifyAfterEdits ? VERIFY_RULES : NO_VERIFY_RULES);
+}
 
 function describe(tool: string, input: Record<string, unknown>): string {
   const path = typeof input.path === 'string' ? input.path : '';
@@ -128,7 +145,14 @@ export async function runAgent(
 
   while (steps < MAX_STEPS) {
     steps += 1;
-    const response = await complete(config, apiKey, SYSTEM_PROMPT, messages, tools, signal);
+    const response = await complete(
+      config,
+      apiKey,
+      systemPrompt(turn.verifyAfterEdits ?? true),
+      messages,
+      tools,
+      signal,
+    );
 
     if (response.text) {
       finalText = response.text;

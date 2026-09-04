@@ -132,6 +132,9 @@ export const useFileStore = create<FileState>()((set, get) => ({
   writeFile(path, content) {
     get().assertWritable();
     const safe = normalizePath(path);
+    // Creation and rename both refuse a protected path; a plain write must too,
+    // or a project-wide replace becomes a way to author into `.env` or `.git`.
+    if (isSensitivePath(safe)) throw new VfsError(`"${safe}" is a protected path.`);
     set((state) => ({
       files: { ...state.files, [safe]: content },
       dirty: new Set(state.dirty).add(safe),

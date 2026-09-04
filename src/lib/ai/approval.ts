@@ -60,6 +60,11 @@ export interface ClassifyInput {
   changedSoFar: number;
   /** The agent's stated reason, passed through to the user. */
   reason?: string;
+  /**
+   * Files changed in one task before the agent checks in, or `null` to skip
+   * that check-in entirely. Destructive and external calls always ask.
+   */
+  wideChangeThreshold?: number | null;
 }
 
 /**
@@ -116,9 +121,12 @@ export function classify(call: ClassifyInput): { decision: ApprovalDecision; req
   }
 
   // A long unattended run of edits gets one check-in, not one per file.
+  const wideAt =
+    call.wideChangeThreshold === undefined ? WIDE_CHANGE_THRESHOLD : call.wideChangeThreshold;
   if (
+    wideAt !== null &&
     (call.tool === 'write_file' || call.tool === 'edit_file') &&
-    call.changedSoFar >= WIDE_CHANGE_THRESHOLD
+    call.changedSoFar >= wideAt
   ) {
     return {
       decision: 'ask',

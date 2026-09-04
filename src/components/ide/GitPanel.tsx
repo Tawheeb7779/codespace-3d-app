@@ -8,6 +8,7 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { PanelHeader, EmptyState, Badge } from '@/components/ui/Primitives';
 import { IconButton } from '@/components/ui/IconButton';
@@ -19,6 +20,7 @@ import { DiffViewer } from '@/components/ide/DiffViewer';
 import { RemoteBar } from '@/components/github/RemoteBar';
 import { useGitStore } from '@/stores/gitStore';
 import { useFileStore } from '@/stores/fileStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { toast } from '@/stores/toastStore';
 import * as vcs from '@/lib/vcs';
 import type { FileChange } from '@/lib/vcs';
@@ -108,6 +110,7 @@ export function GitPanel() {
     discard,
     commit,
     createBranch,
+    deleteBranch,
     checkout,
     merge,
     select,
@@ -117,6 +120,7 @@ export function GitPanel() {
   const remoteBusy = useGitStore((s) => s.remoteBusy);
   const files = useFileStore((s) => s.files);
   const canWrite = useFileStore((s) => s.canWrite());
+  const stageAllOnCommit = useSettingsStore((s) => s.git.stageAllOnCommit);
 
   const [message, setMessage] = useState('');
   const [branchOpen, setBranchOpen] = useState(false);
@@ -124,6 +128,7 @@ export function GitPanel() {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeFrom, setMergeFrom] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirmDeleteBranch, setConfirmDeleteBranch] = useState<string | null>(null);
   const [tab, setTab] = useState<'changes' | 'history'>('changes');
 
   useEffect(() => {
@@ -164,6 +169,10 @@ export function GitPanel() {
     );
   }
 
+  // With stage-on-commit on, any change is committable; otherwise the index
+  // has to hold something.
+  const readyToCommit = stageAllOnCommit ? !status.clean : status.staged.length > 0;
+
   const selectedBefore = selectedPath ? vcs.headContent(repo, selectedPath) : '';
   const selectedAfter = selectedPath ? (files[selectedPath] ?? '') : '';
 
@@ -184,6 +193,12 @@ export function GitPanel() {
               icon={<GitMerge className="h-3.5 w-3.5" />}
               disabled={!canWrite || Object.keys(repo.branches).length < 2}
               onClick={() => setMergeOpen(true)}
+            />
+            <IconButton
+              label={`Delete the ${repo.head} branch`}
+              icon={<Trash2 className="h-3.5 w-3.5" />}
+              disabled={!canWrite || Object.keys(repo.branches).length < 2}
+              onClick={() => setConfirmDeleteBranch(repo.head)}
             />
             <IconButton
               label="Refresh status"
@@ -259,10 +274,11 @@ export function GitPanel() {
                 variant="primary"
                 className="flex-1"
                 loading={busy}
-                disabled={!canWrite || !message.trim() || !status.staged.length}
+                disabled={!canWrite || !message.trim() || !readyToCommit}
                 leading={<Check className="h-3.5 w-3.5" />}
                 onClick={() =>
                   void guard('Commit failed', async () => {
+                    if (stageAllOnCommit && !status.staged.length) await stage();
                     const created = await commit(message);
                     setMessage('');
                     toast.success('Committed', `${created.id.slice(0, 7)} ${created.message}`);
@@ -285,11 +301,10 @@ export function GitPanel() {
                   size="sm"
                   className="flex-1"
                   loading={remoteBusy === 'push'}
-                  disabled={
-                    !canWrite || !message.trim() || !status.staged.length || remoteBusy !== null
-                  }
+                  disabled={!canWrite || !message.trim() || !readyToCommit || remoteBusy !== null}
                   onClick={() =>
                     void guard('Commit and push failed', async () => {
+                      if (stageAllOnCommit && !status.staged.length) await stage();
                       const result = await commitAndPush(message);
                       if (result.ok) {
                         setMessage('');
@@ -308,7 +323,11 @@ export function GitPanel() {
               )}
             </div>
             {!status.staged.length && !status.clean && (
-              <p className="mt-1.5 text-sm text-ink-faint">Stage a file to enable committing.</p>
+              <p className="mt-1.5 text-sm text-ink-faint">
+                {stageAllOnCommit
+                  ? 'Committing will stage every change first.'
+                  : 'Stage a file to enable committing.'}
+              </p>
             )}
           </div>
 
@@ -497,6 +516,41 @@ export function GitPanel() {
         <p className="mt-2 text-sm text-ink-faint">
           Files that both branches changed are merged line by line. Overlapping edits are written
           with conflict markers for you to resolve.
+        </p>
+      </Modal>
+
+      <Modal
+        open={Boolean(confirmDeleteBranch)}
+        onClose={() => setConfirmDeleteBranch(null)}
+        title="Delete branch"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setConfirmDeleteBranch(null)}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                const name = confirmDeleteBranch;
+                setConfirmDeleteBranch(null);
+                if (!name) return;
+                void guard('Could not delete branch', async () => {
+                  // Move off the branch first: deleting the checked-out branch
+                  // would leave HEAD pointing at nothing.
+                  const other = Object.keys(repo.branches).find((branch) => branch !== name);
+                  if (name === repo.head && other) await checkout(other);
+                  await deleteBranch(name);
+                  toast.success('Branch deleted', name);
+                });
+              }}
+            >
+              Delete branch
+            </Button>
+          </>
+        }
+      >
+        <p className="text-base text-ink">
+          Delete <span className="font-mono">{confirmDeleteBranch}</span>? Commits only reachable
+          from it will no longer appear in history.
         </p>
       </Modal>
     </div>

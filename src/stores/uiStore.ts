@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type SidebarPanel = 'explorer' | 'search' | 'git' | 'packages' | 'assistant' | 'members';
+export type SidebarPanel =
+  | 'project'
+  | 'explorer'
+  | 'search'
+  | 'git'
+  | 'packages'
+  | 'assistant'
+  | 'members';
 export type BottomTab = 'terminal' | 'problems' | 'output' | 'ports';
 export type MobilePane = 'files' | 'editor' | 'preview' | 'terminal' | 'assistant';
 
@@ -16,6 +23,14 @@ interface UIState {
   bottomTab: BottomTab;
   commandPaletteOpen: boolean;
   quickOpenOpen: boolean;
+  /**
+   * A request from elsewhere — the command palette, a shortcut — for the panel
+   * that owns the feature to start it. The owning panel clears the flag once
+   * it has acted, so the logic stays in one place instead of being duplicated
+   * into every caller.
+   */
+  pendingCreate: 'file' | 'folder' | null;
+  searchWantsReplace: boolean;
   mobilePane: MobilePane;
   mobileDrawerOpen: boolean;
 
@@ -27,6 +42,10 @@ interface UIState {
   toggleBottom: (open?: boolean) => void;
   setBottomHeight: (height: number) => void;
   setBottomTab: (tab: BottomTab) => void;
+  requestCreate: (kind: 'file' | 'folder') => void;
+  consumeCreate: () => void;
+  requestReplace: () => void;
+  consumeReplace: () => void;
   setCommandPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
   setMobilePane: (pane: MobilePane) => void;
@@ -53,6 +72,8 @@ export const useUIStore = create<UIState>()(
       ...DEFAULTS,
       commandPaletteOpen: false,
       quickOpenOpen: false,
+      pendingCreate: null,
+      searchWantsReplace: false,
       mobilePane: 'editor',
       mobileDrawerOpen: false,
 
@@ -69,6 +90,11 @@ export const useUIStore = create<UIState>()(
       toggleBottom: (open) => set((state) => ({ bottomOpen: open ?? !state.bottomOpen })),
       setBottomHeight: (height) => set({ bottomHeight: clamp(height, 120, 640) }),
       setBottomTab: (tab) => set({ bottomTab: tab, bottomOpen: true }),
+      requestCreate: (kind) => set({ sidebarPanel: 'explorer', sidebarOpen: true, pendingCreate: kind }),
+      consumeCreate: () => set({ pendingCreate: null }),
+      requestReplace: () =>
+        set({ sidebarPanel: 'search', sidebarOpen: true, searchWantsReplace: true }),
+      consumeReplace: () => set({ searchWantsReplace: false }),
       setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open, quickOpenOpen: false }),
       setQuickOpenOpen: (open) => set({ quickOpenOpen: open, commandPaletteOpen: false }),
       setMobilePane: (pane) => set({ mobilePane: pane, mobileDrawerOpen: false }),

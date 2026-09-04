@@ -1,10 +1,11 @@
-import { Bot, Files, GitBranch, Package, Search, Users } from 'lucide-react';
+import { Bot, Files, GitBranch, LayoutList, Package, Search, Users } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useUIStore, type SidebarPanel } from '@/stores/uiStore';
 import { useGitStore } from '@/stores/gitStore';
 import { cx } from '@/lib/utils';
 
 const PANELS: Array<{ id: SidebarPanel; label: string; icon: typeof Files }> = [
+  { id: 'project', label: 'Project', icon: LayoutList },
   { id: 'explorer', label: 'Explorer', icon: Files },
   { id: 'search', label: 'Search', icon: Search },
   { id: 'git', label: 'Source control', icon: GitBranch },

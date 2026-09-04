@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { useUIStore } from '@/stores/uiStore';
 import { toast } from '@/stores/toastStore';
 import {
   DEFAULT_SEARCH_OPTIONS,
@@ -15,21 +16,27 @@ import {
 } from '@/lib/search';
 import type { SearchMatch } from '@/types';
 import { cx, debounce, errorMessage } from '@/lib/utils';
-import { basename, dirname } from '@/lib/vfs';
+import { basename, dirname, readableFiles } from '@/lib/vfs';
 
 /**
  * Project-wide search. The scan runs in a worker so a large project cannot
  * block typing; results stream back grouped by file.
  */
 export function SearchPanel() {
-  const files = useFileStore((s) => s.files);
+  const allFiles = useFileStore((s) => s.files);
   const canWrite = useFileStore((s) => s.canWrite());
   const writeFile = useFileStore((s) => s.writeFile);
   const reveal = useEditorStore((s) => s.revealLocation);
 
+  // Protected paths never reach the worker, so neither a result list nor a
+  // replace can reach into them.
+  const files = useMemo(() => readableFiles(allFiles), [allFiles]);
+
   const [options, setOptions] = useState<SearchOptions>(DEFAULT_SEARCH_OPTIONS);
   const [replacement, setReplacement] = useState('');
   const [showReplace, setShowReplace] = useState(false);
+  const wantsReplace = useUIStore((s) => s.searchWantsReplace);
+  const consumeReplace = useUIStore((s) => s.consumeReplace);
   const [outcome, setOutcome] = useState<SearchOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -93,6 +100,29 @@ export function SearchPanel() {
     return [...map.entries()];
   }, [outcome]);
 
+  /**
+   * Arrow keys move through results without leaving the search box, so a scan
+   * of many hits never needs the mouse. The flat list mirrors render order.
+   */
+  const ordered = useMemo(() => grouped.flatMap(([, matches]) => matches), [grouped]);
+  const [cursor, setCursor] = useState(0);
+  useEffect(() => setCursor(0), [outcome]);
+
+  const go = (delta: number) => {
+    if (!ordered.length) return;
+    const next = (cursor + delta + ordered.length) % ordered.length;
+    setCursor(next);
+    const match = ordered[next];
+    reveal(match.path, match.line, match.column);
+  };
+
+  // "Replace in files" from the palette opens the replace row here.
+  useEffect(() => {
+    if (!wantsReplace) return;
+    consumeReplace();
+    setShowReplace(true);
+  }, [wantsReplace, consumeReplace]);
+
   const applyReplaceAll = () => {
     try {
       const result = replaceAll(files, options, replacement);
@@ -124,6 +154,18 @@ export function SearchPanel() {
             aria-label="Search across files"
             value={options.query}
             onChange={(event) => setOptions((c) => ({ ...c, query: event.target.value }))}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                go(1);
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                go(-1);
+              } else if (event.key === 'Enter' && ordered.length) {
+                event.preventDefault();
+                go(event.shiftKey ? -1 : 1);
+              }
+            }}
             placeholder="Search"
             className="h-7 w-full rounded border border-line bg-surface-sunken pl-2 pr-20 text-base text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
           />
@@ -217,7 +259,11 @@ export function SearchPanel() {
               {grouped.length} file{grouped.length === 1 ? '' : 's'}
               {outcome?.truncated && ' (truncated)'}
             </p>
-            {grouped.map(([path, matches]) => (
+            {grouped.map(([path, matches], group) => {
+              const offset = grouped
+                .slice(0, group)
+                .reduce((total, [, entries]) => total + entries.length, 0);
+              return (
               <section key={path}>
                 <div className="sticky top-0 flex items-center gap-1.5 bg-surface px-2.5 py-1 text-sm">
                   <FileIcon path={path} />
@@ -229,10 +275,17 @@ export function SearchPanel() {
                   <button
                     key={`${match.line}-${match.column}-${index}`}
                     type="button"
-                    onClick={() => reveal(match.path, match.line, match.column)}
+                    aria-current={offset + index === cursor}
+                    onClick={() => {
+                      setCursor(offset + index);
+                      reveal(match.path, match.line, match.column);
+                    }}
                     className={cx(
                       'block w-full truncate px-2.5 py-0.5 pl-7 text-left font-mono text-sm',
-                      'text-ink-muted transition-colors hover:bg-surface-raised hover:text-ink',
+                      'transition-colors hover:bg-surface-raised hover:text-ink',
+                      offset + index === cursor
+                        ? 'bg-accent-soft text-ink'
+                        : 'text-ink-muted',
                     )}
                   >
                     <span className="mr-2 text-ink-faint">{match.line}</span>
@@ -244,7 +297,8 @@ export function SearchPanel() {
                   </button>
                 ))}
               </section>
-            ))}
+              );
+            })}
           </>
         )}
       </div>

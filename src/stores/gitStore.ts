@@ -4,6 +4,7 @@ import type { Commit, Repo, RepoStatus } from '@/lib/vcs';
 import { repositoryFor } from '@/lib/repo';
 import { useAuthStore } from '@/stores/authStore';
 import { useFileStore } from '@/stores/fileStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { errorMessage } from '@/lib/utils';
 import type { ShellLine } from '@/lib/shell';
 import { githubClient } from '@/lib/github/gateway';
@@ -210,7 +211,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
   },
 
   async init() {
-    const repo = vcs.initRepo();
+    const repo = vcs.initRepo(useSettingsStore.getState().git.defaultBranch);
     set({ repo, status: vcs.status(repo, useFileStore.getState().files), history: [] });
     await persist(repo);
   },

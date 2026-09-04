@@ -103,7 +103,7 @@ function createInstance(sessionId: string, options: { fontSize: number; fontFami
   host.style.width = '100%';
 
   const term = new Terminal({
-    fontSize: Math.max(11, options.fontSize - 1),
+    fontSize: Math.max(9, options.fontSize),
     fontFamily: options.fontFamily,
     cursorBlink: true,
     convertEol: true,
@@ -214,7 +214,7 @@ useTerminalStore.subscribe((state) => {
 
 export function TerminalView({ sessionId }: { sessionId: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const fontSize = useSettingsStore((s) => s.editor.fontSize);
+  const fontSize = useSettingsStore((s) => s.terminal.fontSize);
   const fontFamily = useSettingsStore((s) => s.editor.fontFamily);
   const theme = useMonacoTheme();
 
@@ -269,7 +269,7 @@ export function TerminalView({ sessionId }: { sessionId: string }) {
     const instance = instances.get(sessionId);
     if (!instance) return;
     instance.term.options.theme = theme === 'forge-light' ? COLORS.light : COLORS.dark;
-    instance.term.options.fontSize = Math.max(11, fontSize - 1);
+    instance.term.options.fontSize = Math.max(9, fontSize);
     instance.term.options.fontFamily = fontFamily;
     safeFit(instance);
   }, [sessionId, theme, fontSize, fontFamily]);

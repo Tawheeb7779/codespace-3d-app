@@ -222,6 +222,21 @@ export function isSensitivePath(path: string): boolean {
   return BLOCKED_PATTERNS.some((re) => re.test(path));
 }
 
+/**
+ * The subset of a working tree that may be read in bulk.
+ *
+ * Anything that refuses to open a protected path one file at a time has to
+ * refuse it in bulk too: a project-wide search or replace would otherwise
+ * print — or rewrite — exactly the files the policy exists to protect.
+ */
+export function readableFiles(files: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    if (!isSensitivePath(path)) out[path] = content;
+  }
+  return out;
+}
+
 const TEXT_EXTENSIONS = new Set([
   'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'jsonc', 'html', 'htm', 'css', 'scss', 'sass',
   'less', 'md', 'mdx', 'txt', 'yml', 'yaml', 'xml', 'svg', 'toml', 'ini', 'cfg', 'conf', 'env',

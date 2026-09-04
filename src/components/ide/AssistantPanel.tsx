@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Bot, Plug, Send, Square, Trash2, User } from 'lucide-react';
+import { AlertCircle, Bot, Plug, RotateCcw, Send, Square, Trash2, User } from 'lucide-react';
 import { PanelHeader, EmptyState, Badge } from '@/components/ui/Primitives';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
@@ -8,9 +8,32 @@ import { Input, Select, Switch } from '@/components/ui/Field';
 import { useAiStore } from '@/stores/aiStore';
 import { useFileStore } from '@/stores/fileStore';
 import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
-import { readApiKey, type ProviderKind } from '@/lib/ai/provider';
+import { readApiKey, type ProviderErrorKind, type ProviderKind } from '@/lib/ai/provider';
 import type { AgentActivity } from '@/lib/ai/agent';
 import { cx } from '@/lib/utils';
+
+/**
+ * What to do about each kind of provider failure.
+ *
+ * A bad key, a rate limit and an outage all read as "it did not work" without
+ * this; only one of them is worth pressing retry on straight away.
+ */
+const ERROR_ADVICE: Record<ProviderErrorKind, string> = {
+  'not-configured': 'Connect a provider to start.',
+  unauthorized: 'The provider rejected the key. Check it in provider settings.',
+  'rate-limited': 'The provider is rate limiting this key.',
+  server: 'The provider is having trouble. Retrying usually works.',
+  timeout: 'The provider did not answer in time. Try again.',
+  network: 'Could not reach the provider. Check the base URL and your network.',
+  malformed: 'The provider sent a response Forge could not read.',
+  request: 'The provider refused the request.',
+};
+
+function retryHint(retryAt: number | null): string {
+  if (!retryAt) return '';
+  const seconds = retryAt - Math.floor(Date.now() / 1000);
+  return seconds > 0 ? ` Wait about ${seconds}s before retrying.` : '';
+}
 
 const STATE_MARK: Record<AgentActivity['state'], { glyph: string; tone: string }> = {
   pending: { glyph: '○', tone: 'text-ink-faint' },
@@ -122,8 +145,22 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
 }
 
 export function AssistantPanel() {
-  const { messages, running, provider, apiKeyPresent, allowDestructive, setAllowDestructive, send, cancel, reset } =
-    useAiStore();
+  const {
+    messages,
+    running,
+    provider,
+    apiKeyPresent,
+    allowDestructive,
+    setAllowDestructive,
+    send,
+    cancel,
+    reset,
+  } = useAiStore();
+  const error = useAiStore((s) => s.error);
+  const errorKind = useAiStore((s) => s.errorKind);
+  const retryAt = useAiStore((s) => s.retryAt);
+  const retry = useAiStore((s) => s.retry);
+  const canRetry = useAiStore((s) => Boolean(s.lastPrompt) && !s.running);
   const canWrite = useFileStore((s) => s.canWrite());
   const [prompt, setPrompt] = useState('');
   const [connectOpen, setConnectOpen] = useState(false);
@@ -239,6 +276,23 @@ export function AssistantPanel() {
           </div>
         )}
       </div>
+
+      {error && errorKind && !running && (
+        <div role="alert" className="border-t border-danger/40 bg-danger/5 p-2.5">
+          <p className="flex items-start gap-1.5 text-base text-ink">
+            <AlertCircle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
+            <span>
+              {ERROR_ADVICE[errorKind]}
+              {errorKind === 'rate-limited' && retryHint(retryAt)}
+            </span>
+          </p>
+          {canRetry && errorKind !== 'not-configured' && errorKind !== 'unauthorized' && (
+            <Button size="xs" className="mt-2" leading={<RotateCcw className="h-3 w-3" />} onClick={() => void retry()}>
+              Retry
+            </Button>
+          )}
+        </div>
+      )}
 
       <div className="border-t border-line p-2.5">
         <div className="flex items-end gap-1.5">

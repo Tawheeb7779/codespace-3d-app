@@ -70,8 +70,10 @@ export function emptyRepo(): Repo {
   return { blobs: {}, commits: {}, branches: {}, head: 'main', index: {}, initialized: false };
 }
 
-export function initRepo(): Repo {
-  return { ...emptyRepo(), branches: { main: '' }, initialized: true };
+/** A fresh repository on `branch`, mirroring `git init -b <branch>`. */
+export function initRepo(branch = 'main'): Repo {
+  const head = branch.trim() || 'main';
+  return { ...emptyRepo(), head, branches: { [head]: '' }, initialized: true };
 }
 
 export function headCommit(repo: Repo): Commit | null {

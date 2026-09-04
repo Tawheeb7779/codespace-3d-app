@@ -12,6 +12,7 @@ import {
   type EsmCdn,
 } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
+import { WIDE_CHANGE_THRESHOLD } from '@/lib/ai/approval';
 import { GithubConnection } from '@/components/github/GithubConnection';
 import { useAuthStore } from '@/stores/authStore';
 import { toast } from '@/stores/toastStore';
@@ -20,13 +21,28 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 import { persistenceStatus } from '@/lib/idb';
 import { cx, errorMessage } from '@/lib/utils';
 
-const SECTIONS = ['editor', 'appearance', 'runtime', 'integrations', 'keyboard', 'account'] as const;
+const SECTIONS = [
+  'editor',
+  'appearance',
+  'terminal',
+  'runtime',
+  'sourceControl',
+  'assistant',
+  'workspace',
+  'integrations',
+  'keyboard',
+  'account',
+] as const;
 type Section = (typeof SECTIONS)[number];
 
 const LABELS: Record<Section, string> = {
   editor: 'Editor',
   appearance: 'Appearance',
+  terminal: 'Terminal',
   runtime: 'Runtime',
+  sourceControl: 'Source control',
+  assistant: 'Assistant',
+  workspace: 'Workspace',
   integrations: 'Integrations',
   keyboard: 'Keyboard',
   account: 'Account',
@@ -48,10 +64,18 @@ export default function SettingsPage() {
     editor,
     appearance,
     runtime,
+    terminal,
+    git,
+    agent,
+    workspace,
     keybindings,
     setEditor,
     setAppearance,
     setRuntime,
+    setTerminal,
+    setGit,
+    setAgent,
+    setWorkspace,
     setKeybinding,
     resetKeybindings,
     resetAll,
@@ -214,6 +238,103 @@ export default function SettingsPage() {
                 </Button>
               </Group>
             </>
+          )}
+
+          {section === 'terminal' && (
+            <Group
+              title="Terminal"
+              description="The shell runs against this project's virtual file system. It never reaches the host machine."
+            >
+              <Input
+                label="Font size"
+                type="number"
+                min={9}
+                max={24}
+                value={terminal.fontSize}
+                onChange={(event) =>
+                  setTerminal({ fontSize: Number(event.target.value) || 12 })
+                }
+              />
+              <Input
+                label="Scrollback lines"
+                type="number"
+                min={200}
+                max={20000}
+                step={100}
+                value={terminal.scrollback}
+                onChange={(event) =>
+                  setTerminal({ scrollback: Number(event.target.value) || 3000 })
+                }
+                hint="Kept in memory per session. Older lines are dropped once the limit is reached."
+              />
+              <Switch
+                label="Show the startup banner"
+                description="Explains that commands operate on the virtual project, not your machine."
+                checked={terminal.showBanner}
+                onChange={(value) => setTerminal({ showBanner: value })}
+              />
+            </Group>
+          )}
+
+          {section === 'sourceControl' && (
+            <Group title="Source control" description="Defaults for Forge VCS and pushes to GitHub.">
+              <Input
+                label="Default branch for new repositories"
+                value={git.defaultBranch}
+                onChange={(event) => setGit({ defaultBranch: event.target.value })}
+                placeholder="main"
+                hint="Used when you initialize a repository. Existing repositories keep their branch."
+              />
+              <Switch
+                label="Stage everything when committing"
+                description="Off means only files you have staged are committed, as git does by default."
+                checked={git.stageAllOnCommit}
+                onChange={(value) => setGit({ stageAllOnCommit: value })}
+              />
+            </Group>
+          )}
+
+          {section === 'assistant' && (
+            <Group
+              title="Assistant"
+              description="How the coding agent behaves. Provider and API key are set in the assistant panel, and the key is never written to disk."
+            >
+              <Switch
+                label="Check in on large changes"
+                description={`Pause for approval once one task has changed ${WIDE_CHANGE_THRESHOLD} files. Deleting a file and running commands always ask, whatever this is set to.`}
+                checked={agent.confirmWideChanges}
+                onChange={(value) => setAgent({ confirmWideChanges: value })}
+              />
+              <Switch
+                label="Verify edits with a real build"
+                description="Ask the agent to compile the project after editing and report the result. Turning this off never lets it claim a build it did not run."
+                checked={agent.verifyAfterEdits}
+                onChange={(value) => setAgent({ verifyAfterEdits: value })}
+              />
+            </Group>
+          )}
+
+          {section === 'workspace' && (
+            <Group title="Workspace" description="What happens when you open and leave a project.">
+              <Switch
+                label="Restore the last session"
+                description="Reopen the files that were open, at the line you left them."
+                checked={workspace.restoreSession}
+                onChange={(value) => setWorkspace({ restoreSession: value })}
+              />
+              <Switch
+                label="Confirm before deleting files"
+                description="Off deletes immediately from the explorer. Committing first is how you get anything back."
+                checked={workspace.confirmOnDelete}
+                onChange={(value) => setWorkspace({ confirmOnDelete: value })}
+              />
+              <Switch
+                label="Auto save"
+                description="Write edits to storage shortly after you stop typing."
+                checked={editor.autoSave}
+                onChange={(value) => setEditor({ autoSave: value })}
+              />
+            </Group>
           )}
 
           {section === 'runtime' && (

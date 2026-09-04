@@ -4,6 +4,7 @@ import { Bot, Files, FolderOpen, Monitor, SquareTerminal } from 'lucide-react';
 import { ActivityBar } from '@/components/ide/ActivityBar';
 import { WorkspaceTopBar } from '@/components/ide/WorkspaceTopBar';
 import { FileExplorer } from '@/components/ide/FileExplorer';
+import { ProjectPanel } from '@/components/ide/ProjectPanel';
 import { SearchPanel } from '@/components/ide/SearchPanel';
 import { GitPanel } from '@/components/ide/GitPanel';
 import { PackagesPanel } from '@/components/ide/PackagesPanel';
@@ -25,6 +26,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useGitStore } from '@/stores/gitStore';
+import type { RemoteResult } from '@/stores/gitStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useTerminalStore } from '@/stores/terminalStore';
@@ -38,6 +40,8 @@ import { cx, errorMessage } from '@/lib/utils';
 function SidePanel() {
   const panel = useUIStore((s) => s.sidebarPanel);
   switch (panel) {
+    case 'project':
+      return <ProjectPanel />;
     case 'search':
       return <SearchPanel />;
     case 'git':
@@ -159,7 +163,14 @@ export default function WorkspacePage() {
   } = useUIStore();
 
   const { open, close, loading, error, meta, files, flush, canWrite } = useFileStore();
-  const { activePath, openTab, closeTab, tabs } = useEditorStore();
+  const { activePath, openTab, closeTab, closeOthers, closeAll, tabs, cursor } = useEditorStore();
+  // Reactive slices so the palette re-derives when the repository changes.
+  const gitInitialized = useGitStore((s) => s.repo.initialized);
+  const gitBranches = useGitStore((s) => s.repo.branches);
+  const gitHead = useGitStore((s) => s.repo.head);
+  const hasRemote = useGitStore((s) => Boolean(s.remote));
+  const requestCreate = useUIStore((s) => s.requestCreate);
+  const requestReplace = useUIStore((s) => s.requestReplace);
   const loadGit = useGitStore((s) => s.load);
   const gitInit = useGitStore((s) => s.init);
   const previewRun = usePreviewStore((s) => s.run);
@@ -188,7 +199,7 @@ export default function WorkspacePage() {
   }, [projectId, open, loadGit]);
 
   /**
-   * Open a sensible first file once, when a project is opened.
+   * Put back the last session, or open a sensible first file.
    *
    * Keyed on the project so "Close all" (or closing the last tab) actually
    * leaves an empty editor instead of being undone on the next render.
@@ -198,6 +209,14 @@ export default function WorkspacePage() {
     if (!ready || !projectId || greeted.current === projectId) return;
     if (activePath || !Object.keys(files).length) return;
     greeted.current = projectId;
+
+    if (
+      useSettingsStore.getState().workspace.restoreSession &&
+      useEditorStore.getState().restoreSession(projectId, (path) => path in files)
+    ) {
+      return;
+    }
+
     const preferred =
       ['src/App.tsx', 'src/App.jsx', 'src/main.tsx', 'src/main.ts', 'index.html', 'README.md'].find(
         (candidate) => candidate in files,
@@ -214,6 +233,17 @@ export default function WorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
+  /**
+   * Keep the stored session current.
+   *
+   * Written on change rather than only on unmount, because a tab that is
+   * closed by a crash or a hard reload never gets an unmount.
+   */
+  useEffect(() => {
+    if (!ready || !projectId) return;
+    useEditorStore.getState().rememberSession(projectId);
+  }, [ready, projectId, tabs, activePath, cursor]);
+
   useEffect(() => () => void close(), [close]);
 
   /**
@@ -223,6 +253,17 @@ export default function WorkspacePage() {
    * unconditional `toggleBottom()` always landed on closed — the shortcut and
    * the command could hide the panel but never bring it back.
    */
+  /** Run a remote operation and report exactly what GitHub answered. */
+  const runRemote = useCallback(async (action: () => Promise<RemoteResult>) => {
+    try {
+      const result = await action();
+      if (result.ok) toast.success(result.message, result.detail);
+      else toast.error(result.message, result.detail);
+    } catch (caught) {
+      toast.error('GitHub request failed', errorMessage(caught));
+    }
+  }, []);
+
   const toggleTerminalPanel = useCallback(() => {
     const next = !useUIStore.getState().bottomOpen;
     if (next) setBottomTab('terminal');
@@ -240,15 +281,41 @@ export default function WorkspacePage() {
     }
   }, [flush, activePath]);
 
-  const commands: Command[] = useMemo(
-    () => [
+  /** Run a git action, reporting the real outcome rather than assuming one. */
+  const gitAction = useCallback(
+    (label: string, action: () => Promise<unknown>, done?: (result: unknown) => void) => () => {
+      void action()
+        .then((result) => (done ? done(result) : toast.success(label)))
+        .catch((caught) => toast.error(`${label} failed`, errorMessage(caught)));
+    },
+    [],
+  );
+
+  const commands: Command[] = useMemo(() => {
+
+    const base: Command[] = [
       {
         id: 'file.new',
         group: 'File',
         label: 'New file',
-        run: () => setSidebarPanel('explorer'),
+        disabled: !canWrite(),
+        run: () => requestCreate('file'),
       },
-      { id: 'file.save', group: 'File', label: 'Save all', keys: 'mod+s', run: () => void save() },
+      {
+        id: 'file.newFolder',
+        group: 'File',
+        label: 'New folder',
+        disabled: !canWrite(),
+        run: () => requestCreate('folder'),
+      },
+      {
+        id: 'file.quickOpen',
+        group: 'File',
+        label: 'Quick open file',
+        keys: 'mod+p',
+        run: () => setQuickOpenOpen(true),
+      },
+      { id: 'file.save', group: 'File', label: 'Save all files', keys: 'mod+s', run: () => void save() },
       {
         id: 'file.close',
         group: 'File',
@@ -256,6 +323,20 @@ export default function WorkspacePage() {
         keys: 'mod+w',
         disabled: !activePath,
         run: () => activePath && closeTab(activePath),
+      },
+      {
+        id: 'file.closeOthers',
+        group: 'File',
+        label: 'Close other editor tabs',
+        disabled: tabs.length < 2 || !activePath,
+        run: () => activePath && closeOthers(activePath),
+      },
+      {
+        id: 'file.closeAll',
+        group: 'File',
+        label: 'Close all editor tabs',
+        disabled: !tabs.length,
+        run: closeAll,
       },
       {
         id: 'edit.format',
@@ -268,6 +349,18 @@ export default function WorkspacePage() {
             if (!done) toast.info('No formatter for this language');
           });
         },
+      },
+      {
+        id: 'edit.replace',
+        group: 'Edit',
+        label: 'Replace in files',
+        run: requestReplace,
+      },
+      {
+        id: 'view.project',
+        group: 'View',
+        label: 'Show project overview',
+        run: () => setSidebarPanel('project'),
       },
       {
         id: 'view.explorer',
@@ -330,7 +423,7 @@ export default function WorkspacePage() {
       {
         id: 'run.start',
         group: 'Run',
-        label: 'Run project',
+        label: 'Build and run the project',
         keys: 'mod+enter',
         run: () => void previewRun(),
       },
@@ -345,12 +438,48 @@ export default function WorkspacePage() {
         id: 'git.init',
         group: 'Source control',
         label: 'Initialize repository',
-        disabled: !canWrite(),
+        disabled: !canWrite() || gitInitialized,
         run: () => {
           void gitInit()
             .then(() => toast.success('Repository initialized'))
             .catch((caught) => toast.error('Could not initialize', errorMessage(caught)));
         },
+      },
+      {
+        id: 'git.stage',
+        group: 'Source control',
+        label: 'Stage all changes',
+        disabled: !canWrite() || !gitInitialized,
+        run: gitAction('Staged all changes', () => useGitStore.getState().stage()),
+      },
+      {
+        id: 'git.commit',
+        group: 'Source control',
+        label: 'Commit staged changes…',
+        disabled: !canWrite() || !gitInitialized,
+        // Committing needs a message, which lives in the source control panel.
+        run: () => setSidebarPanel('git'),
+      },
+      {
+        id: 'git.fetch',
+        group: 'Source control',
+        label: 'Fetch from GitHub',
+        disabled: !hasRemote,
+        run: () => void runRemote(() => useGitStore.getState().fetchRemote()),
+      },
+      {
+        id: 'git.pull',
+        group: 'Source control',
+        label: 'Pull from GitHub',
+        disabled: !hasRemote || !canWrite(),
+        run: () => void runRemote(() => useGitStore.getState().pullRemote()),
+      },
+      {
+        id: 'git.push',
+        group: 'Source control',
+        label: 'Push to GitHub',
+        disabled: !hasRemote || !canWrite(),
+        run: () => void runRemote(() => useGitStore.getState().pushRemote()),
       },
       {
         id: 'theme.toggle',
@@ -382,25 +511,51 @@ export default function WorkspacePage() {
         label: 'Back to dashboard',
         run: () => navigate('/dashboard'),
       },
-    ],
-    [
-      activePath,
-      appearance.theme,
-      canWrite,
-      closeTab,
-      gitInit,
-      navigate,
-      previewRun,
-      previewStop,
-      save,
-      setAppearance,
-      setBottomTab,
-      setSidebarPanel,
-      togglePreview,
-      toggleSidebar,
-      toggleTerminalPanel,
-    ],
-  );
+    ];
+
+    // One entry per branch beats a picker nobody can find: switching is a
+    // real checkout through the same store the panel uses.
+    const branchCommands: Command[] = Object.keys(gitBranches)
+      .filter((branch) => branch !== gitHead)
+      .sort()
+      .map((branch) => ({
+        id: `git.checkout.${branch}`,
+        group: 'Source control',
+        label: `Switch to branch ${branch}`,
+        disabled: !canWrite(),
+        run: gitAction(`Switched to ${branch}`, () => useGitStore.getState().checkout(branch)),
+      }));
+
+    return [...base, ...branchCommands];
+  }, [
+    activePath,
+    appearance.theme,
+    canWrite,
+    closeAll,
+    closeOthers,
+    closeTab,
+    gitAction,
+    gitBranches,
+    gitHead,
+    gitInit,
+    gitInitialized,
+    hasRemote,
+    navigate,
+    previewRun,
+    previewStop,
+    requestCreate,
+    requestReplace,
+    runRemote,
+    save,
+    setAppearance,
+    setBottomTab,
+    setQuickOpenOpen,
+    setSidebarPanel,
+    tabs.length,
+    togglePreview,
+    toggleSidebar,
+    toggleTerminalPanel,
+  ]);
 
   useKeyboardShortcuts(
     useMemo(

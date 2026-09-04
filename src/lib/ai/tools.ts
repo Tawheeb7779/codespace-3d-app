@@ -1,4 +1,5 @@
-import { isSensitivePath, normalizePath } from '@/lib/vfs';
+import { isSensitivePath, normalizePath, readableFiles } from '@/lib/vfs';
+import { classify } from '@/lib/ai/approval';
 import { searchContents, DEFAULT_SEARCH_OPTIONS } from '@/lib/search';
 import { buildTree, type TreeNode } from '@/lib/vfs';
 
@@ -52,6 +53,15 @@ export interface ToolContext {
    * never allowed to cost correctness.
    */
   onRead?(path: string, content: string): { text: string; cached: boolean };
+  /**
+   * How many files this task has already changed, and where the check-in sits.
+   *
+   * A single edit is routine; a long unattended run rewriting much of the
+   * project is not. Absent, edits never pause — which is what a
+   * non-interactive caller gets.
+   */
+  changedSoFar?(): number;
+  wideChangeThreshold?: number | null;
 }
 
 /** Matches the per-file limit the database enforces on project_files.content. */
@@ -116,21 +126,6 @@ function requirePath(input: Record<string, unknown>, key = 'path'): string {
   return path;
 }
 
-/**
- * The files an agent tool may look inside.
- *
- * `read_file` refuses a protected path, but a content search would happily
- * print the same lines — an indirect read of exactly the files the policy
- * exists to protect. Both paths filter through here.
- */
-function readableFiles(files: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [path, content] of Object.entries(files)) {
-    if (!isSensitivePath(path)) out[path] = content;
-  }
-  return out;
-}
-
 function requireString(input: Record<string, unknown>, key: string): string {
   const raw = input[key];
   if (typeof raw !== 'string') throw new ToolError(`"${key}" must be a string`);
@@ -172,6 +167,25 @@ async function requireApproval(
     `${action} is blocked: destructive actions are off for this session. ` +
       'Turn on "Allow destructive actions" in the assistant panel to permit it.',
   );
+}
+
+/**
+ * One check-in partway through a long run of edits.
+ *
+ * Editing a file is recoverable, so each one runs unattended; what needs a
+ * human is the pattern — twenty files into a task nobody watched. The
+ * threshold, and whether to check in at all, comes from settings.
+ */
+async function checkWideChange(path: string, tool: string, ctx: ToolContext): Promise<void> {
+  if (!ctx.changedSoFar) return;
+  const { decision, request } = classify({
+    tool,
+    input: { path },
+    changedSoFar: ctx.changedSoFar(),
+    wideChangeThreshold: ctx.wideChangeThreshold,
+  });
+  if (decision === 'auto' || !request) return;
+  await requireApproval(request.what, request.affects, ctx);
 }
 
 function renderTree(nodes: TreeNode[], depth = 0, out: string[] = []): string[] {
@@ -259,9 +273,10 @@ export const TOOLS: ToolDefinition[] = [
       required: ['path', 'content'],
     },
     mutates: true,
-    run: (input, ctx) => {
+    run: async (input, ctx) => {
       const path = requirePath(input);
       const content = requireContent(input, 'content');
+      await checkWideChange(path, 'write_file', ctx);
       const before = ctx.files[path];
       ctx.writeFile(path, content);
       ctx.onChange?.(path, before === undefined ? 'created' : 'modified', before ?? '', content);
@@ -282,10 +297,11 @@ export const TOOLS: ToolDefinition[] = [
       required: ['path', 'old_string', 'new_string'],
     },
     mutates: true,
-    run: (input, ctx) => {
+    run: async (input, ctx) => {
       const path = requirePath(input);
       const oldString = requireString(input, 'old_string');
       const newString = requireString(input, 'new_string');
+      await checkWideChange(path, 'edit_file', ctx);
       const content = ctx.files[path];
       if (content === undefined) throw new ToolError(`No such file: ${path}`);
       const occurrences = content.split(oldString).length - 1;

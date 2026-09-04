@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronRight,
+  ChevronsDownUp,
   Copy,
   Download,
   FilePlus2,
   FolderPlus,
   Pencil,
-  RefreshCw,
   Trash2,
 } from 'lucide-react';
 import { PanelHeader, EmptyState } from '@/components/ui/Primitives';
@@ -19,8 +19,10 @@ import { Input } from '@/components/ui/Field';
 import { FileIcon, DirIcon } from '@/components/ide/FileIcon';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { useUIStore } from '@/stores/uiStore';
 import { toast } from '@/stores/toastStore';
-import { buildTree, flattenTree, basename, dirname, joinPath } from '@/lib/vfs';
+import { buildTree, flattenTree, basename, dirname, isDescendant, joinPath } from '@/lib/vfs';
 import { downloadText } from '@/lib/archive';
 import { cx, errorMessage } from '@/lib/utils';
 
@@ -40,6 +42,8 @@ const VIRTUALIZE_AFTER = 400;
 export function FileExplorer() {
   const files = useFileStore((s) => s.files);
   const dirs = useFileStore((s) => s.dirs);
+  const dirty = useFileStore((s) => s.dirty);
+  const confirmOnDelete = useSettingsStore((s) => s.workspace.confirmOnDelete);
   const canWrite = useFileStore((s) => s.canWrite());
   const createFile = useFileStore((s) => s.createFile);
   const createDir = useFileStore((s) => s.createDir);
@@ -63,8 +67,12 @@ export function FileExplorer() {
   const [viewportHeight, setViewportHeight] = useState(600);
   const listRef = useRef<HTMLDivElement>(null);
   const menu = useContextMenu();
+  const pendingCreate = useUIStore((s) => s.pendingCreate);
+  const consumeCreate = useUIStore((s) => s.consumeCreate);
 
   const tree = useMemo(() => buildTree(files, dirs), [files, dirs]);
+  // Only paths that still exist: `dirty` also records deletions.
+  const dirtyPaths = useMemo(() => [...dirty].filter((path) => path in files), [dirty, files]);
   const rows = useMemo(() => flattenTree(tree, expanded), [tree, expanded]);
 
   useEffect(() => {
@@ -94,6 +102,21 @@ export function FileExplorer() {
     });
   }, [activePath]);
 
+  // A "New file" from the command palette lands here, in the one place that
+  // knows how creation works.
+  useEffect(() => {
+    if (!pendingCreate) return;
+    consumeCreate();
+    if (!canWrite) {
+      toast.error('Read-only project', 'You do not have permission to add files here.');
+      return;
+    }
+    const base = activePath ? dirname(activePath) : '';
+    if (base) setExpanded((current) => new Set(current).add(base));
+    setPending({ kind: pendingCreate, base, initial: '' });
+    setPendingValue('');
+  }, [pendingCreate, consumeCreate, canWrite, activePath]);
+
   const toggle = useCallback((path: string) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -102,6 +125,27 @@ export function FileExplorer() {
       return next;
     });
   }, []);
+
+  const deletePath = useCallback(
+    (path: string) => {
+      try {
+        removePath(path);
+        editorRemove(path);
+      } catch (error) {
+        toast.error('Could not delete', errorMessage(error));
+      }
+    },
+    [removePath, editorRemove],
+  );
+
+  /** Ask first unless the user has turned the confirmation off in settings. */
+  const requestDelete = useCallback(
+    (path: string) => {
+      if (confirmOnDelete) setConfirmDelete(path);
+      else deletePath(path);
+    },
+    [confirmOnDelete, deletePath],
+  );
 
   const startCreate = (kind: 'file' | 'folder', base: string) => {
     if (base) setExpanded((current) => new Set(current).add(base));
@@ -207,7 +251,7 @@ export function FileExplorer() {
           icon: <Trash2 className="h-3.5 w-3.5" />,
           danger: true,
           disabled: !canWrite,
-          onSelect: () => setConfirmDelete(target.path),
+          onSelect: () => requestDelete(target.path),
         },
       ]
     : [];
@@ -240,7 +284,7 @@ export function FileExplorer() {
             />
             <IconButton
               label="Collapse all folders"
-              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              icon={<ChevronsDownUp className="h-3.5 w-3.5" />}
               onClick={() => setExpanded(new Set())}
             />
           </>
@@ -283,6 +327,12 @@ export function FileExplorer() {
               {slice.map((node) => {
                 const isActive = node.type === 'file' && node.path === activePath;
                 const isOpen = expanded.has(node.path);
+                // A collapsed folder still says that something inside it is
+                // unsaved, so nothing is hidden by being folded away.
+                const isDirty =
+                  node.type === 'file'
+                    ? dirty.has(node.path)
+                    : !isOpen && dirtyPaths.some((path) => isDescendant(path, node.path));
                 return (
                   <div
                     key={node.path}
@@ -323,7 +373,17 @@ export function FileExplorer() {
                         setPending({ kind: 'rename', base: node.path, initial: basename(node.path) });
                         setPendingValue(basename(node.path));
                       } else if (event.key === 'Delete' && canWrite) {
-                        setConfirmDelete(node.path);
+                        requestDelete(node.path);
+                      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        // Move focus between rows, so the tree is navigable
+                        // without reaching for the mouse.
+                        event.preventDefault();
+                        const row = event.currentTarget;
+                        const sibling =
+                          event.key === 'ArrowDown'
+                            ? row.nextElementSibling
+                            : row.previousElementSibling;
+                        (sibling as HTMLElement | null)?.focus();
                       }
                     }}
                     onContextMenu={(event) => {
@@ -357,7 +417,14 @@ export function FileExplorer() {
                         <FileIcon path={node.path} />
                       </>
                     )}
-                    <span className="truncate">{node.name}</span>
+                    <span className={cx('truncate', isDirty && 'text-ink')}>{node.name}</span>
+                    {isDirty && (
+                      <span
+                        aria-label="Unsaved changes"
+                        title="Unsaved changes"
+                        className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -424,13 +491,7 @@ export function FileExplorer() {
             <Button
               variant="danger"
               onClick={() => {
-                if (!confirmDelete) return;
-                try {
-                  removePath(confirmDelete);
-                  editorRemove(confirmDelete);
-                } catch (error) {
-                  toast.error('Could not delete', errorMessage(error));
-                }
+                if (confirmDelete) deletePath(confirmDelete);
                 setConfirmDelete(null);
               }}
             >

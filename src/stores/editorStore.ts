@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { EditorTab, Problem } from '@/types';
 
 export interface PendingReveal {
@@ -7,6 +8,17 @@ export interface PendingReveal {
   column: number;
   token: number;
 }
+
+/** What a reload should be able to put back for one project. */
+export interface EditorSession {
+  tabs: EditorTab[];
+  activePath: string | null;
+  /** Last known caret position per file, so a reopened file lands where you left it. */
+  cursors: Record<string, { line: number; column: number }>;
+}
+
+/** Sessions older than this are dropped rather than kept forever. */
+export const MAX_REMEMBERED_PROJECTS = 12;
 
 interface EditorState {
   tabs: EditorTab[];
@@ -32,6 +44,12 @@ interface EditorState {
   revealLocation: (path: string, line: number, column?: number) => void;
   consumeReveal: () => void;
   setSplit: (path: string | null) => void;
+
+  /** Persisted per project; only these survive a reload. */
+  sessions: Record<string, EditorSession>;
+  rememberSession: (projectId: string) => void;
+  restoreSession: (projectId: string, exists: (path: string) => boolean) => boolean;
+  forgetSession: (projectId: string) => void;
 }
 
 /**
@@ -47,7 +65,9 @@ export function splitTargetFor(tabs: EditorTab[], activePath: string | null): st
   return (tabs[index + 1] ?? tabs[index - 1])?.path ?? activePath;
 }
 
-export const useEditorStore = create<EditorState>()((set, get) => ({
+export const useEditorStore = create<EditorState>()(
+  persist(
+    (set, get) => ({
   tabs: [],
   activePath: null,
   cursor: { line: 1, column: 1 },
@@ -140,4 +160,69 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   consumeReveal: () => set({ reveal: null }),
   setSplit: (path) => set({ splitPath: path }),
-}));
+
+  sessions: {},
+
+  rememberSession: (projectId) =>
+    set((state) => {
+      const previous = state.sessions[projectId];
+      const cursors = { ...previous?.cursors };
+      if (state.activePath) cursors[state.activePath] = state.cursor;
+      // Keep only cursors for files still open, so the record cannot grow
+      // without bound as files come and go.
+      const open = new Set(state.tabs.map((tab) => tab.path));
+      for (const path of Object.keys(cursors)) {
+        if (!open.has(path)) delete cursors[path];
+      }
+
+      const sessions = { ...state.sessions, [projectId]: { tabs: state.tabs, activePath: state.activePath, cursors } };
+      const ids = Object.keys(sessions);
+      if (ids.length > MAX_REMEMBERED_PROJECTS) {
+        for (const id of ids.slice(0, ids.length - MAX_REMEMBERED_PROJECTS)) {
+          if (id !== projectId) delete sessions[id];
+        }
+      }
+      return { sessions };
+    }),
+
+  /**
+   * Put back what was open, dropping anything the project no longer has.
+   *
+   * Returns whether anything was restored, so the caller can fall back to
+   * opening a sensible first file instead.
+   */
+  restoreSession: (projectId, exists) => {
+    const saved = get().sessions[projectId];
+    if (!saved) return false;
+    const tabs = saved.tabs.filter((tab) => exists(tab.path));
+    if (!tabs.length) return false;
+    const activePath =
+      saved.activePath && tabs.some((tab) => tab.path === saved.activePath)
+        ? saved.activePath
+        : tabs[0].path;
+    const caret = saved.cursors[activePath];
+    set({
+      tabs,
+      activePath,
+      splitPath: null,
+      cursor: caret ?? { line: 1, column: 1 },
+      reveal: caret ? { path: activePath, line: caret.line, column: caret.column, token: Date.now() } : null,
+    });
+    return true;
+  },
+
+  forgetSession: (projectId) =>
+    set((state) => {
+      const sessions = { ...state.sessions };
+      delete sessions[projectId];
+      return { sessions };
+    }),
+}),
+    {
+      name: 'forge.editor',
+      // Only the session map persists: live tabs, problems and reveals belong
+      // to the open project and are rebuilt from it.
+      partialize: (state) => ({ sessions: state.sessions }),
+    },
+  ),
+);

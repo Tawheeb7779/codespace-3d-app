@@ -115,6 +115,24 @@ describe('file operations', () => {
     expect(() => useFileStore.getState().createFile('.env', 'SECRET=1')).toThrow(/protected path/);
   });
 
+  /**
+   * Creating and renaming both refuse a protected path. A plain write has to
+   * as well, or a project-wide replace becomes a way to author into `.env`.
+   */
+  it('refuses to write a protected path, not just to create one', async () => {
+    await freshProject();
+    for (const path of ['.env', '.git/config', '.npmrc', 'node_modules/x/index.js']) {
+      expect(() => useFileStore.getState().writeFile(path, 'SECRET=1'), path).toThrow(
+        /protected path/,
+      );
+      expect(useFileStore.getState().files, path).not.toHaveProperty(path);
+    }
+    // An ordinary file is unaffected.
+    useFileStore.getState().createFile('src/ok.ts', 'a');
+    useFileStore.getState().writeFile('src/ok.ts', 'b');
+    expect(useFileStore.getState().files['src/ok.ts']).toBe('b');
+  });
+
   it('renames a folder and every descendant', async () => {
     await freshProject();
     const store = useFileStore.getState();

@@ -2,10 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   DEFAULT_PROVIDER,
+  ProviderError,
   readApiKey,
   writeApiKey,
   type ChatMessage,
   type ProviderConfig,
+  type ProviderErrorKind,
 } from '@/lib/ai/provider';
 import { runAgent, type AgentActivity } from '@/lib/ai/agent';
 import type { ToolContext } from '@/lib/ai/tools';
@@ -19,6 +21,8 @@ import { useProjectStore } from '@/stores/projectStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { buildPreview } from '@/lib/preview';
 import { useAgentStore, projectContextHeader, readCache } from '@/stores/agentStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { WIDE_CHANGE_THRESHOLD } from '@/lib/ai/approval';
 import { errorMessage, uid } from '@/lib/utils';
 
 export interface AssistantMessage {
@@ -42,11 +46,22 @@ interface AiState {
   transcript: ChatMessage[];
   running: boolean;
   error: string | null;
+  /**
+   * What kind of failure the last error was, when the provider said.
+   *
+   * A rate limit is not a bad key and neither is an outage; the panel can only
+   * tell the user what to do next if it knows which one happened.
+   */
+  errorKind: ProviderErrorKind | null;
+  retryAt: number | null;
+  /** The prompt of the last turn, so a failed task can be retried as sent. */
+  lastPrompt: string | null;
 
   setProvider: (patch: Partial<ProviderConfig>) => void;
   setApiKey: (key: string) => void;
   setAllowDestructive: (allowed: boolean) => void;
   send: (prompt: string) => Promise<void>;
+  retry: () => Promise<void>;
   cancel: () => void;
   reset: () => void;
 }
@@ -136,6 +151,11 @@ function toolContext(): ToolContext {
 
     onChange: (path, kind, before, after) => agent.noteChange(path, kind, before, after),
     onRead: (path, content) => readCache.record(path, content),
+
+    changedSoFar: () => useAgentStore.getState().task?.changes.length ?? 0,
+    wideChangeThreshold: useSettingsStore.getState().agent.confirmWideChanges
+      ? WIDE_CHANGE_THRESHOLD
+      : null,
   };
 }
 
@@ -168,6 +188,9 @@ export const useAiStore = create<AiState>()(
       transcript: [],
       running: false,
       error: null,
+      errorKind: null,
+      retryAt: null,
+      lastPrompt: null,
 
       setProvider: (patch) => set((state) => ({ provider: { ...state.provider, ...patch } })),
 
@@ -213,6 +236,9 @@ export const useAiStore = create<AiState>()(
           ],
           running: true,
           error: null,
+          errorKind: null,
+          retryAt: null,
+          lastPrompt: text,
         }));
 
         const patch = (updater: (message: AssistantMessage) => AssistantMessage) =>
@@ -247,6 +273,7 @@ export const useAiStore = create<AiState>()(
               onText: (chunk) => patch((message) => ({ ...message, text: chunk })),
               onToolStart: (tool) => useAgentStore.getState().noteActivityPhase(tool),
               onPlan: (plan) => useAgentStore.getState().setPlan(plan),
+              verifyAfterEdits: useSettingsStore.getState().agent.verifyAfterEdits,
             },
             controller.signal,
           );
@@ -261,7 +288,12 @@ export const useAiStore = create<AiState>()(
             role: existing.text ? existing.role : 'error',
             text: existing.text || message,
           }));
-          set({ running: false, error: message });
+          set({
+            running: false,
+            error: message,
+            errorKind: error instanceof ProviderError ? error.kind : null,
+            retryAt: error instanceof ProviderError ? error.retryAt : null,
+          });
           // Whatever the agent had already written is real and stays on disk;
           // the task record says what got done before it stopped.
           await useFileStore.getState().flush().catch(() => undefined);
@@ -269,6 +301,26 @@ export const useAiStore = create<AiState>()(
         } finally {
           controller = null;
         }
+      },
+
+      /**
+       * Send the last prompt again.
+       *
+       * The transcript is left as it was: a retry after a rate limit or a
+       * dropped connection should reach the model with the same history, not a
+       * conversation that now contains a failure the model has to reason about.
+       */
+      async retry() {
+        const prompt = get().lastPrompt;
+        if (!prompt || get().running) return;
+        set((state) => ({
+          // Drop the failed exchange so the retry is not read as a second ask.
+          messages: state.messages.slice(0, -2),
+          error: null,
+          errorKind: null,
+          retryAt: null,
+        }));
+        await get().send(prompt);
       },
 
       cancel() {
@@ -281,7 +333,14 @@ export const useAiStore = create<AiState>()(
 
       reset: () => {
         readCache.clear();
-        set({ messages: [], transcript: [], error: null });
+        set({
+          messages: [],
+          transcript: [],
+          error: null,
+          errorKind: null,
+          retryAt: null,
+          lastPrompt: null,
+        });
       },
     }),
     {

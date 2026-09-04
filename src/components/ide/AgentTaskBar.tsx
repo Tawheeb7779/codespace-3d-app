@@ -13,10 +13,11 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Primitives';
 import { Modal } from '@/components/ui/Modal';
 import { DiffViewer } from '@/components/ide/DiffViewer';
+import { diffStat } from '@/lib/diff';
 import { SEVERITY_LABELS, useAgentStore } from '@/stores/agentStore';
-import { PHASE_LABELS, isActive, isTerminal } from '@/lib/ai/task';
+import { PHASE_LABELS, isActive, isTerminal, type AgentTask } from '@/lib/ai/task';
 import { useEditorStore } from '@/stores/editorStore';
-import { cx } from '@/lib/utils';
+import { cx, formatTimeAgo } from '@/lib/utils';
 
 /**
  * What the agent is doing, what it wants permission for, and what it changed.
@@ -27,17 +28,77 @@ import { cx } from '@/lib/utils';
  * optimistically — and the change list opens the project's existing diff
  * viewer rather than a second, worse one.
  */
+/**
+ * What earlier tasks in this session actually did.
+ *
+ * Built from each task's change ledger and verification records — the same
+ * evidence the live panel shows — so history can never claim more than
+ * happened.
+ */
+function TaskHistory({ history, onClear }: { history: AgentTask[]; onClear: () => void }) {
+  return (
+    <details className="border-b border-line">
+      <summary className="cursor-pointer px-2.5 py-1.5 text-sm text-ink-muted">
+        Earlier tasks · {history.length}
+      </summary>
+      <ul className="pb-1">
+        {history.map((entry) => {
+          const changed = entry.changes.length;
+          const checks = entry.verifications.length;
+          return (
+            <li key={entry.id} className="px-2.5 py-1">
+              <p className="flex items-center gap-1.5 text-sm">
+                {entry.phase === 'completed' ? (
+                  <CheckCircle2 aria-hidden className="h-3 w-3 shrink-0 text-positive" />
+                ) : entry.phase === 'cancelled' ? (
+                  <CircleSlash aria-hidden className="h-3 w-3 shrink-0 text-ink-faint" />
+                ) : (
+                  <XCircle aria-hidden className="h-3 w-3 shrink-0 text-danger" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-ink">{entry.request}</span>
+              </p>
+              <p className="pl-5 text-sm text-ink-faint">
+                {changed} file{changed === 1 ? '' : 's'} · {checks} check{checks === 1 ? '' : 's'} ·{' '}
+                {formatTimeAgo(entry.endedAt ?? entry.startedAt)}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="px-2.5 pb-2">
+        <Button size="xs" onClick={onClear}>
+          Clear history
+        </Button>
+      </div>
+    </details>
+  );
+}
+
 export function AgentTaskBar() {
   const task = useAgentStore((s) => s.task);
+  const history = useAgentStore((s) => s.history);
+  const clearHistory = useAgentStore((s) => s.clearHistory);
   const pending = useAgentStore((s) => s.pending);
   const resolveApproval = useAgentStore((s) => s.resolveApproval);
   const revealLocation = useEditorStore((s) => s.revealLocation);
   const [diffPath, setDiffPath] = useState<string | null>(null);
 
-  if (!task) return null;
+  if (!task) {
+    return history.length ? <TaskHistory history={history} onClear={clearHistory} /> : null;
+  }
 
   const active = isActive(task.phase);
   const change = task.changes.find((entry) => entry.path === diffPath) ?? null;
+  const total = task.changes.reduce(
+    (sum, entry) => {
+      const stat = diffStat(entry.before, entry.after);
+      return {
+        added: sum.added + stat.additions,
+        removed: sum.removed + stat.deletions,
+      };
+    },
+    { added: 0, removed: 0 },
+  );
 
   return (
     <>
@@ -133,10 +194,16 @@ export function AgentTaskBar() {
         {/* Changed files */}
         {task.changes.length > 0 && (
           <div className="border-t border-line py-1">
-            <p className="panel-label px-2.5 py-0.5">
-              {task.changes.length} file{task.changes.length === 1 ? '' : 's'} changed
+            <p className="panel-label flex items-center gap-2 px-2.5 py-0.5">
+              <span>
+                {task.changes.length} file{task.changes.length === 1 ? '' : 's'} changed
+              </span>
+              <span className="font-mono normal-case text-positive">+{total.added}</span>
+              <span className="font-mono normal-case text-danger">−{total.removed}</span>
             </p>
-            {task.changes.map((entry) => (
+            {task.changes.map((entry) => {
+              const stat = diffStat(entry.before, entry.after);
+              return (
               <button
                 key={entry.path}
                 type="button"
@@ -150,6 +217,8 @@ export function AgentTaskBar() {
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-ink">
                   {entry.path}
                 </span>
+                <span className="shrink-0 font-mono text-xs text-positive">+{stat.additions}</span>
+                <span className="shrink-0 font-mono text-xs text-danger">−{stat.deletions}</span>
                 <span
                   className={cx(
                     'shrink-0 text-xs',
@@ -164,7 +233,8 @@ export function AgentTaskBar() {
                 </span>
                 <ChevronRight aria-hidden className="h-3 w-3 shrink-0 text-ink-faint" />
               </button>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -175,6 +245,10 @@ export function AgentTaskBar() {
           </p>
         )}
       </div>
+
+      {isTerminal(task.phase) && history.length > 0 && (
+        <TaskHistory history={history} onClear={clearHistory} />
+      )}
 
       <Modal
         open={Boolean(change)}
