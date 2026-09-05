@@ -1,3 +1,4 @@
+import type { PendingInvitation } from '@/lib/invitations';
 import type {
   ActivityEvent,
   MemberRole,
@@ -46,6 +47,24 @@ export interface ProjectRepository {
   /** The caller's role on a project, or null when they are not a member. */
   roleFor(projectId: string, userId: string): Promise<MemberRole | null>;
   addMember(member: ProjectMember): Promise<ProjectMember>;
+
+  // -- Invitations ----------------------------------------------------------
+  //
+  // Inviting somebody who has no account yet cannot be a membership row, so it
+  // is a pending record they redeem after signing in. Only the token's hash
+  // ever reaches storage.
+
+  listInvitations(projectId: string): Promise<PendingInvitation[]>;
+  createInvitation(input: {
+    projectId: string;
+    tokenHash: string;
+    email: string;
+    role: MemberRole;
+    invitedBy: string;
+  }): Promise<PendingInvitation>;
+  revokeInvitation(id: string): Promise<void>;
+  /** Redeem a token. Resolves to the project joined. */
+  acceptInvitation(rawToken: string): Promise<string>;
   setMemberRole(projectId: string, userId: string, role: MemberRole): Promise<void>;
   removeMember(projectId: string, userId: string): Promise<void>;
 

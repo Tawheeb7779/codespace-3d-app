@@ -1,4 +1,5 @@
 import { requireSupabase } from '@/lib/supabase';
+import type { PendingInvitation } from '@/lib/invitations';
 import type {
   ActivityAction,
   ActivityEvent,
@@ -85,6 +86,30 @@ const rowToMember = (row: MemberRow): ProjectMember => {
     addedAt: new Date(row.created_at).getTime(),
   };
 };
+
+interface InvitationRow {
+  id: string;
+  project_id: string;
+  email: string;
+  role: string;
+  invited_by: string;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+}
+
+const rowToInvitation = (row: InvitationRow): PendingInvitation => ({
+  id: row.id,
+  projectId: row.project_id,
+  email: row.email,
+  role: row.role as MemberRole,
+  invitedBy: row.invited_by,
+  createdAt: new Date(row.created_at).getTime(),
+  expiresAt: new Date(row.expires_at).getTime(),
+  acceptedAt: row.accepted_at ? new Date(row.accepted_at).getTime() : null,
+  revokedAt: row.revoked_at ? new Date(row.revoked_at).getTime() : null,
+});
 
 interface ActivityRow {
   id: string;
@@ -404,6 +429,60 @@ export const supabaseRepository: ProjectRepository = {
       .eq('project_id', projectId)
       .eq('user_id', userId);
     if (error) fail('Could not remove that member', error);
+  },
+
+  // -- Invitations ----------------------------------------------------------
+
+  async listInvitations(projectId) {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('project_invitations')
+      .select('id, project_id, email, role, invited_by, created_at, expires_at, accepted_at, revoked_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    if (error) fail('Could not load invitations', error);
+    return (data as InvitationRow[]).map(rowToInvitation);
+  },
+
+  async createInvitation({ projectId, tokenHash, email, role, invitedBy }) {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('project_invitations')
+      .insert({
+        project_id: projectId,
+        // Only the hash. The raw token never leaves the browser.
+        token_hash: tokenHash,
+        email,
+        role,
+        invited_by: invitedBy,
+      })
+      .select('id, project_id, email, role, invited_by, created_at, expires_at, accepted_at, revoked_at')
+      .single();
+    if (error) fail('Could not create the invitation', error);
+    return rowToInvitation(data as InvitationRow);
+  },
+
+  async revokeInvitation(id) {
+    const client = requireSupabase();
+    const { error } = await client
+      .from('project_invitations')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) fail('Could not revoke the invitation', error);
+  },
+
+  async acceptInvitation(rawToken) {
+    const client = requireSupabase();
+    // A SECURITY DEFINER function: the caller is not a member yet, so no
+    // policy could let them read the invitation or create their membership.
+    const { data, error } = await client.rpc('accept_project_invitation', {
+      raw_token: rawToken,
+    });
+    if (error) fail('Could not accept the invitation', error);
+    if (typeof data !== 'string') {
+      throw new Error('That invitation is not valid, has expired, or has already been used.');
+    }
+    return data;
   },
 
   // -- Activity -------------------------------------------------------------

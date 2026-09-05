@@ -112,6 +112,30 @@ export const localRepository: ProjectRepository = {
     await idbDelete('members', `${projectId}:${userId}`);
   },
 
+  // -- Invitations ----------------------------------------------------------
+  //
+  // Local Development Mode has exactly one account, so there is nobody to
+  // invite and no second session that could redeem a token. These refuse
+  // rather than storing a record that could never be acted on.
+
+  async listInvitations() {
+    return [];
+  },
+
+  async createInvitation() {
+    throw new Error(
+      'Inviting people needs a Supabase project. Local Development Mode has a single account.',
+    );
+  },
+
+  async revokeInvitation() {
+    throw new Error('There are no invitations in Local Development Mode.');
+  },
+
+  async acceptInvitation() {
+    throw new Error('Invitations can only be accepted when signed in to a Supabase project.');
+  },
+
   // -- Activity -------------------------------------------------------------
 
   async listActivity(projectId, limit) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LogOut, UserPlus, X } from 'lucide-react';
+import { Copy, LogOut, Mail, UserPlus, X } from 'lucide-react';
 import { PanelHeader, Badge, Spinner, ErrorState } from '@/components/ui/Primitives';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -12,7 +12,8 @@ import { useProjectStore } from '@/stores/projectStore';
 import { toast } from '@/stores/toastStore';
 import { ROLE_DESCRIPTIONS, ROLE_LABELS, capabilitiesFor } from '@/lib/permissions';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { errorMessage } from '@/lib/utils';
+import { invitationState } from '@/lib/invitations';
+import { errorMessage, formatTimeAgo } from '@/lib/utils';
 import type { MemberRole, ProjectVisibility } from '@/types';
 
 /**
@@ -49,6 +50,8 @@ export function MembersPanel() {
   const error = useMemberStore((s) => s.error);
   const load = useMemberStore((s) => s.load);
   const invite = useMemberStore((s) => s.invite);
+  const invitations = useMemberStore((s) => s.invitations);
+  const revokeInvitation = useMemberStore((s) => s.revokeInvitation);
   const setRole = useMemberStore((s) => s.setRole);
   const removeMember = useMemberStore((s) => s.remove);
   const leave = useMemberStore((s) => s.leave);
@@ -60,6 +63,8 @@ export function MembersPanel() {
   const [email, setEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<MemberRole>('editor');
   const [busy, setBusy] = useState(false);
+  /** Shown once, then gone: only the hash is stored, so it cannot be re-shown. */
+  const [issuedLink, setIssuedLink] = useState<string | null>(null);
 
   useEffect(() => {
     if (projectId) void load(projectId);
@@ -201,6 +206,41 @@ export function MembersPanel() {
           )}
         </section>
 
+        {/* Pending invitations */}
+        {capabilities.manageMembers && invitations.length > 0 && (
+          <section className="border-b border-line">
+            <p className="panel-label px-2.5 py-1.5">Invitations</p>
+            {invitations.map((invitation) => {
+              const state = invitationState(invitation);
+              return (
+                <div key={invitation.id} className="flex items-center gap-2 px-2.5 py-1.5">
+                  <Mail aria-hidden className="h-3.5 w-3.5 shrink-0 text-ink-faint" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-base text-ink">{invitation.email}</span>
+                    <span className="block truncate text-sm text-ink-faint">
+                      {ROLE_LABELS[invitation.role]} ·{' '}
+                      {state === 'pending'
+                        ? `expires ${formatTimeAgo(invitation.expiresAt)}`
+                        : state}
+                    </span>
+                  </span>
+                  <Badge tone={state === 'pending' ? 'accent' : 'neutral'}>{state}</Badge>
+                  {state === 'pending' && (
+                    <IconButton
+                      label={`Revoke the invitation for ${invitation.email}`}
+                      icon={<X className="h-3.5 w-3.5" />}
+                      disabled={busy}
+                      onClick={() =>
+                        void guard('Could not revoke', () => revokeInvitation(invitation.id))
+                      }
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+
         {/* Capabilities */}
         <section className="border-b border-line p-2.5">
           <p className="panel-label mb-2">Your capabilities here</p>
@@ -252,7 +292,7 @@ export function MembersPanel() {
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         title="Invite to this project"
-        description="They receive the role you choose. Roles are enforced by the database."
+        description="Creates a one-time link for that address. They accept it after signing in; the role is enforced by the database."
         size="sm"
         footer={
           <>
@@ -262,14 +302,14 @@ export function MembersPanel() {
               loading={busy}
               onClick={() =>
                 void guard('Could not invite', async () => {
-                  await invite(email, inviteRole);
-                  toast.success('Invited', email);
+                  const link = await invite(email, inviteRole);
+                  setIssuedLink(link);
                   setEmail('');
                   setInviteOpen(false);
                 })
               }
             >
-              Send invite
+              Create invitation
             </Button>
           </>
         }
@@ -290,6 +330,35 @@ export function MembersPanel() {
             options={ASSIGNABLE.map((value) => ({ value, label: ROLE_LABELS[value] }))}
             hint={ROLE_DESCRIPTIONS[inviteRole]}
           />
+        </div>
+      </Modal>
+      <Modal
+        open={Boolean(issuedLink)}
+        onClose={() => setIssuedLink(null)}
+        title="Invitation link"
+        description="Send this to them yourself. It is shown once — only a hash is stored, so it cannot be shown again."
+        size="md"
+        footer={<Button onClick={() => setIssuedLink(null)}>Done</Button>}
+      >
+        <div className="space-y-3">
+          <p className="break-all rounded border border-line bg-surface-sunken p-2 font-mono text-sm text-ink">
+            {issuedLink}
+          </p>
+          <Button
+            size="sm"
+            leading={<Copy className="h-3.5 w-3.5" />}
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(issuedLink ?? '')
+                .then(() => toast.success('Copied'))
+                .catch(() => toast.error('Could not copy', 'Select the link and copy it manually.'));
+            }}
+          >
+            Copy link
+          </Button>
+          <p className="text-sm text-ink-faint">
+            The link works once, expires in seven days, and only for the address you entered.
+          </p>
         </div>
       </Modal>
     </div>

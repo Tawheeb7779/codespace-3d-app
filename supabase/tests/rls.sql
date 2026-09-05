@@ -870,6 +870,218 @@ begin
   end;
 end $$;
 
+-- --------------------------------------------------------------------------
+-- Invitations
+--
+-- The properties that matter: only the hash is stored, only an administrator
+-- can create one, only the addressed account can redeem it, and it works
+-- exactly once. Each is asserted against the real function rather than by
+-- reading the policy.
+-- --------------------------------------------------------------------------
+
+-- A token the test knows, so it can redeem it the way a link would.
+create or replace function pg_temp.token_hash(raw text)
+returns text language sql immutable as $$
+  select encode(digest(raw, 'sha256'), 'hex');
+$$;
+
+select pg_temp.act_as_admin();
+insert into public.projects (id, owner_id, name, visibility)
+values ('prj_invite', '11111111-1111-1111-1111-111111111111', 'Invite fixture', 'private')
+on conflict (id) do nothing;
+insert into public.project_members (project_id, user_id, role)
+values ('prj_invite', '11111111-1111-1111-1111-111111111111', 'owner')
+on conflict (project_id, user_id) do nothing;
+
+-- An editor may not invite anyone.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+do $$
+begin
+  begin
+    insert into public.project_invitations (project_id, token_hash, email, role, invited_by)
+    values ('prj_invite', pg_temp.token_hash('editor-attempt'), 'outsider@test.dev', 'editor',
+            '22222222-2222-2222-2222-222222222222');
+    raise exception 'FAIL  an editor could create an invitation';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    an editor cannot create an invitation';
+  end;
+end $$;
+
+-- The owner can, and cannot forge the inviter.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+insert into public.project_invitations (project_id, token_hash, email, role, invited_by)
+values ('prj_invite', pg_temp.token_hash(repeat('a', 64)), 'outsider@test.dev', 'editor',
+        '11111111-1111-1111-1111-111111111111');
+select pg_temp.assert(true, 'an owner can create an invitation');
+
+do $$
+begin
+  begin
+    insert into public.project_invitations (project_id, token_hash, email, role, invited_by)
+    values ('prj_invite', pg_temp.token_hash('forged'), 'x@test.dev', 'editor',
+            '22222222-2222-2222-2222-222222222222');
+    raise exception 'FAIL  an invitation could be attributed to someone else';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    an invitation cannot be attributed to another inviter';
+  end;
+end $$;
+
+-- Owner is not an invitable role.
+do $$
+begin
+  begin
+    insert into public.project_invitations (project_id, token_hash, email, role, invited_by)
+    values ('prj_invite', pg_temp.token_hash('owner-escalation'), 'x@test.dev', 'owner',
+            '11111111-1111-1111-1111-111111111111');
+    raise exception 'FAIL  an invitation could grant ownership';
+  exception
+    when check_violation then raise notice 'ok    an invitation cannot grant ownership';
+  end;
+end $$;
+
+-- The raw token is never stored.
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select count(*) from public.project_invitations
+    where token_hash = repeat('a', 64)) = 0,
+  'the raw token is never stored, only its hash');
+
+-- An outsider cannot even see that an invitation exists.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.project_invitations) = 0,
+  'an outsider cannot read invitations');
+
+-- Redeeming with the wrong account fails, even holding a valid token.
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+do $$
+begin
+  begin
+    perform public.accept_project_invitation(repeat('a', 64));
+    raise exception 'FAIL  an invitation was redeemed by the wrong account';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    an invitation cannot be redeemed by another account';
+  end;
+end $$;
+
+-- A malformed token is refused without touching anything.
+do $$
+begin
+  begin
+    perform public.accept_project_invitation('not-a-token');
+    raise exception 'FAIL  a malformed token was accepted';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    a malformed invitation token is refused';
+  end;
+end $$;
+
+-- The addressed account redeems it, and becomes a member with the stated role.
+select pg_temp.act_as_admin();
+update public.profiles set email = 'outsider@test.dev'
+ where id = '44444444-4444-4444-4444-444444444444';
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  public.accept_project_invitation(repeat('a', 64)) = 'prj_invite',
+  'the addressed account can redeem its invitation');
+
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select role::text from public.project_members
+    where project_id = 'prj_invite'
+      and user_id = '44444444-4444-4444-4444-444444444444') = 'editor',
+  'redeeming creates membership with the invited role');
+
+-- And exactly once.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+do $$
+begin
+  begin
+    perform public.accept_project_invitation(repeat('a', 64));
+    raise exception 'FAIL  an invitation was redeemed twice';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    an invitation cannot be redeemed twice';
+  end;
+end $$;
+
+-- An expired invitation is refused.
+select pg_temp.act_as_admin();
+insert into public.project_invitations
+  (project_id, token_hash, email, role, invited_by, expires_at)
+values ('prj_invite', pg_temp.token_hash(repeat('b', 64)), 'outsider@test.dev', 'viewer',
+        '11111111-1111-1111-1111-111111111111', now() - interval '1 day');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+do $$
+begin
+  begin
+    perform public.accept_project_invitation(repeat('b', 64));
+    raise exception 'FAIL  an expired invitation was accepted';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    an expired invitation is refused';
+  end;
+end $$;
+
+-- A revoked invitation is refused.
+select pg_temp.act_as_admin();
+insert into public.project_invitations (project_id, token_hash, email, role, invited_by, revoked_at)
+values ('prj_invite', pg_temp.token_hash(repeat('c', 64)), 'outsider@test.dev', 'viewer',
+        '11111111-1111-1111-1111-111111111111', now());
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+do $$
+begin
+  begin
+    perform public.accept_project_invitation(repeat('c', 64));
+    raise exception 'FAIL  a revoked invitation was accepted';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    a revoked invitation is refused';
+  end;
+end $$;
+
+-- An outstanding invitation cannot be edited into something else.
+select pg_temp.act_as_admin();
+insert into public.project_invitations (project_id, token_hash, email, role, invited_by)
+values ('prj_invite', pg_temp.token_hash(repeat('d', 64)), 'outsider@test.dev', 'viewer',
+        '11111111-1111-1111-1111-111111111111');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+do $$
+begin
+  begin
+    update public.project_invitations set role = 'admin'
+     where token_hash = pg_temp.token_hash(repeat('d', 64));
+    raise exception 'FAIL  an outstanding invitation could be escalated';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    an outstanding invitation cannot be escalated';
+  end;
+end $$;
+
+-- Revoking it is still allowed.
+update public.project_invitations set revoked_at = now()
+ where token_hash = pg_temp.token_hash(repeat('d', 64));
+select pg_temp.assert(true, 'an administrator can revoke an invitation');
+
 select pg_temp.act_as_admin();
 select pg_temp.assert(true, 'all authorization assertions passed');
 

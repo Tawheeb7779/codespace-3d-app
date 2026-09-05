@@ -14,6 +14,7 @@ const DashboardPage = lazy(() => import('@/routes/DashboardPage'));
 const WorkspacePage = lazy(() => import('@/routes/WorkspacePage'));
 const SettingsPage = lazy(() => import('@/routes/SettingsPage'));
 const GithubCallbackPage = lazy(() => import('@/routes/GithubCallbackPage'));
+const InvitePage = lazy(() => import('@/routes/InvitePage'));
 
 function FullPageSpinner({ label }: { label: string }) {
   return (
@@ -83,6 +84,10 @@ export default function App() {
               </RequireAuth>
             }
           />
+          {/* Not behind RequireAuth: the page has to explain that signing in
+              is the next step, rather than bouncing an invitee to a login form
+              that loses the token in the fragment. */}
+          <Route path="/invite" element={<InvitePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
