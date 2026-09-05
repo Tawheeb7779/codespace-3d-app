@@ -1,4 +1,10 @@
-import { requireSupabase } from '@/lib/supabase';
+import { requireSupabase, supabaseHost } from '@/lib/supabase';
+import {
+  classifyDatabaseError,
+  describeDatabaseError,
+  describeRowPolicyRefusal,
+  type DatabaseError,
+} from '@/lib/repo/errors';
 import type { PendingInvitation } from '@/lib/invitations';
 import type {
   ActivityAction,
@@ -155,40 +161,16 @@ const rowToWorkspace = (row: WorkspaceRow): Workspace => ({
   openedAt: new Date(row.opened_at).getTime(),
 });
 
-function fail(context: string, error: { message: string; code?: string } | null): never {
-  throw new Error(`${context}: ${error?.message ?? 'unknown error'}${error?.code ? ` (${error.code})` : ''}`);
-}
-
-/** Postgres reports every row-policy refusal with this one code. */
-const INSUFFICIENT_PRIVILEGE = '42501';
-
 /**
- * Say which of the two things went wrong when the row policy refuses a project.
+ * Raise a failure the user can act on, keeping the database's own words.
  *
- * `new row violates row-level security policy for table "projects"` is the
- * same sentence whether the caller asked to create a row for somebody else or
- * the deployment is simply missing the policy that permits the ordinary case.
- * Those need opposite responses — sign in again versus apply the migrations —
- * and the client already knows enough to tell them apart: it compares the
- * session it just read against the owner the caller had in mind.
+ * The classification goes first because that is the part anyone can use; the
+ * raw sentence and SQLSTATE stay on the end for whoever is reading logs.
  */
-export function createProjectContext(
-  error: { code?: string } | null,
-  sessionUserId: string,
-  requestedOwnerId: string,
-): string {
-  if (error?.code !== INSUFFICIENT_PRIVILEGE) return 'Could not create project';
-  if (requestedOwnerId && requestedOwnerId !== sessionUserId) {
-    return (
-      'Could not create project: it was about to be filed under a different account ' +
-      'than the one signed in. Sign out and back in, then try again'
-    );
-  }
-  return (
-    'Could not create project: the database refused the row even though it belongs ' +
-    'to the signed-in account. The projects table is missing its insert policy — ' +
-    'apply the migrations in supabase/migrations to this project'
-  );
+function fail(context: string, error: DatabaseError | null): never {
+  const explanation = describeDatabaseError(error);
+  const detail = `${error?.message ?? 'unknown error'}${error?.code ? ` (${error.code})` : ''}`;
+  throw new Error(explanation ? `${context}: ${explanation} — ${detail}` : `${context}: ${detail}`);
 }
 
 /**
@@ -269,7 +251,18 @@ export const supabaseRepository: ProjectRepository = {
       })
       .select()
       .single();
-    if (error) fail(createProjectContext(error, ownerId, project.ownerId), error);
+    if (error) {
+      if (classifyDatabaseError(error) === 'not-authorized') {
+        throw new Error(
+          `Could not create project. ${describeRowPolicyRefusal({
+            sessionUserId: ownerId,
+            rowOwnerId: ownerId,
+            host: supabaseHost(),
+          })} — ${error.message} (${error.code})`,
+        );
+      }
+      fail('Could not create project', error);
+    }
 
     const rows = Object.entries(project.files).map(([path, content]) => ({
       project_id: project.id,

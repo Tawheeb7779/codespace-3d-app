@@ -124,6 +124,19 @@ if (!config.ok && config.reason === 'service-role-key') {
   console.error(`[forge] ${config.detail} Falling back to Local Development Mode.`);
 }
 
+/**
+ * The host this deployment talks to. Host only, never the URL: a full URL can
+ * carry a key in a query string, and the host is already in every request the
+ * browser makes. Used to tell an operator which project refused something.
+ */
+export function supabaseHost(): string {
+  try {
+    return new URL(config.url).host;
+  } catch {
+    return 'the configured Supabase project';
+  }
+}
+
 export const isSupabaseConfigured = config.ok;
 /** Why Supabase is unavailable, for the UI to explain the mode accurately. */
 export const supabaseConfigReason = config.reason;
