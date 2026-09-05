@@ -1,4 +1,4 @@
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { Children, forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import { cx } from '@/lib/utils';
 
@@ -31,6 +31,29 @@ const SIZES: Record<Size, string> = {
   lg: 'h-10 px-4 text-md gap-2 rounded-lg',
 };
 
+/**
+ * Give every piece of label text an element of its own.
+ *
+ * The spinner is rendered into the slot immediately before the label, so React
+ * commits it with `insertBefore(icon, label)`. When the label is a bare text
+ * node, anything that rewrites text in the page — Chrome's translate, a
+ * password manager, Grammarly, an accessibility overlay — replaces that node,
+ * and React's reference to it is stale by the time `loading` flips. The commit
+ * then throws "The node before which the new node is to be inserted is not a
+ * child of this node" and the whole tree falls to the error boundary.
+ *
+ * Wrapping the text in a span makes React's reference an element instead.
+ * Those layers rewrite the text *inside* an element rather than replacing the
+ * element, so the reference stays valid. A span is also exactly what an
+ * anonymous text run already was in this flex row, so nothing moves: element
+ * children are left untouched and keep being their own flex items.
+ */
+function withStableText(children: ReactNode): ReactNode {
+  return Children.map(children, (child) =>
+    typeof child === 'string' || typeof child === 'number' ? <span>{child}</span> : child,
+  );
+}
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { variant = 'secondary', size = 'md', loading, leading, trailing, block, className, children, disabled, ...rest },
   ref,
@@ -53,7 +76,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       {...rest}
     >
       {loading ? <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 animate-spin" /> : leading}
-      {children}
+      {withStableText(children)}
       {trailing}
     </button>
   );
