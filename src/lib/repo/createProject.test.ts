@@ -67,11 +67,16 @@ describe('a row-policy refusal', () => {
     expect(message).not.toMatch(/missing its insert policy|policy is missing|no insert policy/i);
   });
 
-  it('lists the causes that remain instead of choosing one', () => {
+  /**
+   * Naming what to check is the identity probe's job, because only the
+   * database can say whether the session was honoured. This message states
+   * what the client itself observed and stops there.
+   */
+  it('states the facts and leaves the verdict to the probe', () => {
     const message = describeRowPolicyRefusal({ sessionUserId: ME, rowOwnerId: ME, host: HOST });
-    expect(message).toMatch(/same project/i);
-    expect(message).toMatch(/TO authenticated/);
-    expect(message).toMatch(/BEFORE INSERT trigger/i);
+    expect(message).toMatch(/belonged to the signed-in account/i);
+    expect(message).toMatch(/still refused it/i);
+    expect(message).not.toMatch(/BEFORE INSERT trigger/i);
   });
 
   it('reports the identity it actually used, and the project', () => {

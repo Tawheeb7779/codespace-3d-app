@@ -65,7 +65,7 @@ export interface WriteIdentity {
 }
 
 /**
- * Explain a row-policy refusal without inventing a cause.
+ * State what the client knows about a row-policy refusal.
  *
  * Postgres names the policy in the message when a RESTRICTIVE one is the
  * blocker; an unnamed refusal means no permissive policy admitted the row.
@@ -73,17 +73,16 @@ export interface WriteIdentity {
  * policy in place, four different situations still produce that unnamed
  * sentence — the owner not matching the caller, no subject in the session, the
  * policy scoped to a role other than the caller's, and a BEFORE INSERT trigger
- * rewriting the owner. The client can settle the first two from what it holds;
- * the rest belong to the deployment, so they are listed, not guessed at.
+ * rewriting the owner.
+ *
+ * Only the first two are visible from here, so only those are named. Which of
+ * the rest applies is a question for the database, and `identityProbe` asks it.
  */
 export function describeRowPolicyRefusal(identity: WriteIdentity): string {
   const { sessionUserId, rowOwnerId, host } = identity;
 
   if (!sessionUserId) {
-    return (
-      'You are not signed in to the database, so it refused the row. ' +
-      'Sign in again and retry.'
-    );
+    return 'You are not signed in to the database, so it refused the row. Sign in again and retry.';
   }
   if (rowOwnerId && rowOwnerId !== sessionUserId) {
     return (
@@ -91,12 +90,10 @@ export function describeRowPolicyRefusal(identity: WriteIdentity): string {
       `(${rowOwnerId} rather than ${sessionUserId}). Sign out and back in, then retry.`
     );
   }
-  return (
-    `The database refused the row even though it belongs to the signed-in account (${sessionUserId}). ` +
-    `Check, on ${host}: that the browser is signed in to that same project; that ` +
-    "projects_insert_owner applies TO authenticated; and that no BEFORE INSERT trigger " +
-    'rewrites owner_id. See docs/rls-troubleshooting.sql for the query that reports all three.'
-  );
+  // The facts, and nothing more: what the row claimed and which project refused
+  // it. What to do about it comes from the identity probe, which asks the
+  // database directly rather than reasoning from here.
+  return `The row belonged to the signed-in account (${sessionUserId}) and ${host} still refused it.`;
 }
 
 /** A sentence for the failures that are not about authorization. */

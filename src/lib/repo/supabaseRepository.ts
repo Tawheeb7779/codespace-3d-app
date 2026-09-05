@@ -19,6 +19,7 @@ import type {
 } from '@/types';
 import type { Repo } from '@/lib/vcs';
 import type { ProjectRepository } from '@/lib/repo/types';
+import { probeIdentity } from '@/lib/repo/identityProbe';
 
 /**
  * Supabase-backed persistence.
@@ -253,12 +254,16 @@ export const supabaseRepository: ProjectRepository = {
       .single();
     if (error) {
       if (classifyDatabaseError(error) === 'not-authorized') {
+        // The row carried this session's own id, so ask the database who it
+        // thinks the caller is. That is the one question whose answer decides
+        // whether this is a session problem or a projects-table problem.
+        const finding = await probeIdentity(client, ownerId);
         throw new Error(
           `Could not create project. ${describeRowPolicyRefusal({
             sessionUserId: ownerId,
             rowOwnerId: ownerId,
             host: supabaseHost(),
-          })} — ${error.message} (${error.code})`,
+          })} ${finding.detail} — ${error.message} (${error.code})`,
         );
       }
       fail('Could not create project', error);
