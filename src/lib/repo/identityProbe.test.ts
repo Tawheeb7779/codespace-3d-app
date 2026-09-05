@@ -71,12 +71,22 @@ describe('the database is treating the caller as anonymous', () => {
 });
 
 describe('the session and the database disagree on who this is', () => {
-  it('names both possibilities without choosing', async () => {
+  /**
+   * Reproduced on a real PostgreSQL: an auth.uid() that reads only
+   * `request.jwt.claim.sub` — a setting current PostgREST no longer populates —
+   * returns NULL for every request. The insert then fails with exactly the
+   * reported sentence while the policy, role, grants and triggers all look
+   * correct, and SELECT quietly returns nothing instead of erroring. That is
+   * the shape this branch describes, so it is named first.
+   */
+  it('names the auth.uid() definition first, and the profile trigger second', async () => {
     const { client } = clientReturning({ data: null, error: null });
     const finding = await probeIdentity(client, ME);
 
     expect(finding.verdict).toBe('identity-mismatch');
-    expect(finding.detail).toMatch(/auth\.uid\(\) is not the id/i);
+    expect(finding.detail).toMatch(/auth\.uid\(\) is not this id/i);
+    expect(finding.detail).toMatch(/request\.jwt\.claim\.sub/);
+    expect(finding.detail).toMatch(/pg_get_functiondef/);
     expect(finding.detail).toMatch(/on_auth_user_created/);
   });
 });

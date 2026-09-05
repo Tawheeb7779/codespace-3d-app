@@ -20,6 +20,7 @@ import type {
 import type { Repo } from '@/lib/vcs';
 import type { ProjectRepository } from '@/lib/repo/types';
 import { probeIdentity } from '@/lib/repo/identityProbe';
+import { describeSession, summariseSession } from '@/lib/sessionDiagnostics';
 
 /**
  * Supabase-backed persistence.
@@ -258,12 +259,19 @@ export const supabaseRepository: ProjectRepository = {
         // thinks the caller is. That is the one question whose answer decides
         // whether this is a session problem or a projects-table problem.
         const finding = await probeIdentity(client, ownerId);
+        // The claims are the independent measurement. `owner_id` was taken from
+        // the session, so reporting it back as a match proves only that the
+        // client is self-consistent; PostgREST reads the role and subject from
+        // the token itself, and those are what the policy is evaluated against.
+        const claims = summariseSession(
+          describeSession(session.session, supabaseHost()),
+        );
         throw new Error(
           `Could not create project. ${describeRowPolicyRefusal({
             sessionUserId: ownerId,
             rowOwnerId: ownerId,
             host: supabaseHost(),
-          })} ${finding.detail} — ${error.message} (${error.code})`,
+          })} ${claims} ${finding.detail} — ${error.message} (${error.code})`,
         );
       }
       fail('Could not create project', error);

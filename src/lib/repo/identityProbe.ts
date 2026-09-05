@@ -85,9 +85,14 @@ export async function probeIdentity(
     return {
       verdict: 'identity-mismatch',
       detail:
-        'The database returned no profile for this account. Either auth.uid() is not the id this ' +
-        'browser holds, or the profile row was never created for it — check the ' +
-        'on_auth_user_created trigger on auth.users.',
+        'The database accepted the session as authenticated but returned no profile for this ' +
+        'account, which means auth.uid() is not this id. The usual cause is auth.uid() itself ' +
+        'returning null: on older projects it reads request.jwt.claim.sub, a setting current ' +
+        'PostgREST no longer populates, so every policy comparing against it fails while the ' +
+        'policy, role and grants all look correct. Run "select auth.uid()" as this session, and ' +
+        'compare pg_get_functiondef(\'auth.uid()\'::regprocedure) with the Supabase default — ' +
+        'section 5 of docs/rls-troubleshooting.sql. Failing that, the profile row was never ' +
+        'created: check the on_auth_user_created trigger on auth.users.',
     };
   } catch (caught) {
     return {

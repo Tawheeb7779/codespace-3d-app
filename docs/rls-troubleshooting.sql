@@ -130,7 +130,41 @@ exists (
 ) as auth_user_exists;
 
 -- ===========================================================================
--- 4. Which project this database is. The ref here must match the ref in the
+-- 5. auth.uid() itself.
+--
+-- This is the check that the policy view cannot show you, and it explains a
+-- refusal in which everything else passes: a correct policy, the authenticated
+-- role, correct grants, no BEFORE INSERT trigger, and owner_id equal to the
+-- session's user id.
+--
+-- PostgREST populates `request.jwt.claims` (the whole payload as JSON). Older
+-- projects carry an auth.uid() that reads only `request.jwt.claim.sub`, a
+-- setting current PostgREST no longer sets. Such a function returns NULL for
+-- every request, so `owner_id = auth.uid()` is never true and every insert is
+-- refused — while SELECT quietly returns nothing rather than erroring, which
+-- shows up as an empty dashboard.
+--
+-- Reproduced: with auth.uid() reading only the legacy setting, the insert fails
+-- with exactly "new row violates row-level security policy for table projects"
+-- and `select count(*) from profiles` returns 0.
+--
+-- The definition below must reference `request.jwt.claims`. If it names only
+-- `request.jwt.claim.sub`, that is the fault.
+-- ===========================================================================
+select pg_get_functiondef('auth.uid()'::regprocedure) as auth_uid_definition;
+
+-- Run this one from the BROWSER session, not the SQL editor: the editor
+-- connects as the table owner and auth.uid() is NULL there even when healthy.
+-- In the browser console of a signed-in Forge tab:
+--
+--   const { data, error } = await window.supabase.rpc('whoami');
+--
+-- If no such function exists, the equivalent evidence is whether a signed-in
+-- user can read their own profile row — which is what Forge's own error
+-- message now reports automatically.
+
+-- ===========================================================================
+-- 6. Which project this database is. The ref here must match the ref in the
 --    browser's Supabase URL; if it does not, the browser is talking to a
 --    different database than the one these results describe.
 -- ===========================================================================
