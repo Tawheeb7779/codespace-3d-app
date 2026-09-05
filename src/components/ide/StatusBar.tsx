@@ -9,19 +9,38 @@ import { useAuthStore } from '@/stores/authStore';
 import { getLanguage } from '@/lib/languages';
 import { cx, formatTimeAgo } from '@/lib/utils';
 
+/**
+ * One reading in the status bar.
+ *
+ * `whitespace-nowrap` and `shrink-0` are the load-bearing classes. Without
+ * them a narrow viewport shrinks each item below its text width, the text
+ * wraps to a second line, and — because the bar is a fixed 24px — that line
+ * paints outside it, over the bottom navigation.
+ *
+ * `minor` items are the ones a phone-width bar can do without: they are laid
+ * out normally from `sm` up and simply absent below it, which keeps the
+ * remaining readings on one line rather than squeezing all of them.
+ */
 function Item({
   children,
   onClick,
   label,
   tone,
+  minor,
+  shrinkable,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   label?: string;
   tone?: 'danger' | 'caution' | 'accent';
+  minor?: boolean;
+  /** Give way first when the bar runs out of room. Only the branch name does. */
+  shrinkable?: boolean;
 }) {
   const className = cx(
-    'flex h-full items-center gap-1 px-2 text-sm transition-colors',
+    'h-full items-center gap-1 whitespace-nowrap px-2 text-sm transition-colors',
+    shrinkable ? 'min-w-0 shrink' : 'shrink-0',
+    minor ? 'hidden sm:flex' : 'flex',
     tone === 'danger' && 'text-danger',
     tone === 'caution' && 'text-caution',
     tone === 'accent' && 'text-accent',
@@ -55,14 +74,18 @@ export function StatusBar() {
   const warnings = problems.filter((p) => p.severity === 'warning').length;
 
   return (
-    <footer className="flex h-6 shrink-0 items-stretch justify-between border-t border-line bg-surface text-sm">
-      <div className="flex items-stretch">
+    // `overflow-hidden` is the backstop: whatever the readings add up to, the
+    // bar is one 24px line and nothing escapes it onto the row below.
+    <footer className="flex h-6 shrink-0 items-stretch justify-between overflow-hidden border-t border-line bg-surface text-sm">
+      {/* The left group is the one allowed to give way — a long branch name
+          ellipsises rather than pushing the right-hand readings off screen. */}
+      <div className="flex min-w-0 items-stretch">
         {repo.initialized && (
-          <Item onClick={() => setSidebarPanel('git')} label="Open source control">
-            <GitBranch className="h-3 w-3" />
-            {repo.head}
+          <Item onClick={() => setSidebarPanel('git')} label="Open source control" shrinkable>
+            <GitBranch className="h-3 w-3 shrink-0" />
+            <span className="truncate">{repo.head}</span>
             {!status.clean && (
-              <span className="text-caution">
+              <span className="shrink-0 text-caution">
                 {status.staged.length + status.unstaged.length}
               </span>
             )}
@@ -93,7 +116,7 @@ export function StatusBar() {
         )}
       </div>
 
-      <div className="flex items-stretch">
+      <div className="flex shrink-0 items-stretch">
         {localMode && (
           <Item label="Local development mode">
             <CloudOff className="h-3 w-3" /> Local
@@ -109,7 +132,11 @@ export function StatusBar() {
             `${dirty.size} unsaved`
           ) : lastSavedAt ? (
             <>
-              <Check className="h-3 w-3 text-positive" /> saved {formatTimeAgo(lastSavedAt)}
+              <Check className="h-3 w-3 text-positive" />
+              <span>saved</span>
+              {/* The relative time is what pushed this reading past the width
+                  a phone can give it. */}
+              <span className="hidden sm:inline">{formatTimeAgo(lastSavedAt)}</span>
             </>
           ) : (
             'no changes'
@@ -117,7 +144,7 @@ export function StatusBar() {
         </Item>
         {activePath && (
           <>
-            <Item>
+            <Item minor>
               Ln {cursor.line}, Col {cursor.column}
             </Item>
             <Item
@@ -125,10 +152,11 @@ export function StatusBar() {
                 setEditor({ tabSize: editorSettings.tabSize === 2 ? 4 : 2 })
               }
               label="Toggle indent size"
+              minor
             >
               Spaces: {editorSettings.tabSize}
             </Item>
-            <Item>{getLanguage(activePath).label}</Item>
+            <Item minor>{getLanguage(activePath).label}</Item>
           </>
         )}
       </div>
