@@ -264,6 +264,92 @@ update public.projects set owner_id = '11111111-1111-1111-1111-111111111111'
  where id = 'prj_test_alpha';
 
 -- --------------------------------------------------------------------------
+-- Creating a project: the insert policy, from all three sides
+-- --------------------------------------------------------------------------
+--
+-- Cloud project creation failed in the browser with 42501, "new row violates
+-- row-level security policy for table projects". Three different situations
+-- produce that one sentence — an owner_id that is not the caller, no JWT at
+-- all, and a deployment whose insert policy is simply missing — so all three
+-- are pinned here, including the ordinary case that must keep working.
+
+-- An authenticated user creates a project they own. This is the case the
+-- browser exercises, and the one that was failing.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+insert into public.projects (id, owner_id, name, description, template, language,
+                             visibility, status, starred, dirs)
+values ('prj_rls_own_create', '44444444-4444-4444-4444-444444444444', 'Mine', '',
+        'react-ts', 'TypeScript', 'private', 'active', false, '{}');
+select pg_temp.assert(
+  (select owner_id from public.projects where id = 'prj_rls_own_create')
+    = '44444444-4444-4444-4444-444444444444',
+  'an authenticated user can create their own project');
+
+-- The row is readable straight back, which is what .select().single() needs.
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_rls_own_create') = 1,
+  'the creator can read the project back immediately');
+
+-- Nobody may file a project under another account.
+do $$
+begin
+  begin
+    insert into public.projects (id, owner_id, name, description, template, language,
+                                 visibility, status, starred, dirs)
+    values ('prj_rls_other_owner', '11111111-1111-1111-1111-111111111111', 'Theirs', '',
+            'react-ts', 'TypeScript', 'private', 'active', false, '{}');
+    raise exception 'FAIL  a user created a project owned by someone else';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot create a project owned by someone else';
+  end;
+end $$;
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_rls_other_owner') = 0,
+  'the rejected project was never written');
+
+-- With no session there is no insert at all: anon holds no privilege on the
+-- table, so it is refused before any policy is consulted.
+do $$
+begin
+  begin
+    perform set_config('role', 'anon', true);
+    perform set_config('request.jwt.claims', '', true);
+    insert into public.projects (id, owner_id, name, description, template, language,
+                                 visibility, status, starred, dirs)
+    values ('prj_rls_anon_create', '44444444-4444-4444-4444-444444444444', 'Anon', '',
+            'react-ts', 'TypeScript', 'private', 'active', false, '{}');
+    raise exception 'FAIL  an anonymous visitor created a project';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    an anonymous visitor cannot create a project';
+  end;
+end $$;
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_rls_anon_create') = 0,
+  'the anonymous project was never written');
+
+-- An authenticated role carrying no subject claim is not a user either.
+do $$
+begin
+  begin
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claims', '', true);
+    insert into public.projects (id, owner_id, name, description, template, language,
+                                 visibility, status, starred, dirs)
+    values ('prj_rls_nosub_create', '44444444-4444-4444-4444-444444444444', 'NoSub', '',
+            'react-ts', 'TypeScript', 'private', 'active', false, '{}');
+    raise exception 'FAIL  a session with no subject created a project';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a session with no subject cannot create a project';
+  end;
+end $$;
+select pg_temp.act_as_admin();
+
+-- --------------------------------------------------------------------------
 -- Saving the working tree: an editor writes the tree, not the settings
 -- --------------------------------------------------------------------------
 --

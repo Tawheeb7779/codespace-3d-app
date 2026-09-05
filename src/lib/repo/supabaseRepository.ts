@@ -159,6 +159,38 @@ function fail(context: string, error: { message: string; code?: string } | null)
   throw new Error(`${context}: ${error?.message ?? 'unknown error'}${error?.code ? ` (${error.code})` : ''}`);
 }
 
+/** Postgres reports every row-policy refusal with this one code. */
+const INSUFFICIENT_PRIVILEGE = '42501';
+
+/**
+ * Say which of the two things went wrong when the row policy refuses a project.
+ *
+ * `new row violates row-level security policy for table "projects"` is the
+ * same sentence whether the caller asked to create a row for somebody else or
+ * the deployment is simply missing the policy that permits the ordinary case.
+ * Those need opposite responses — sign in again versus apply the migrations —
+ * and the client already knows enough to tell them apart: it compares the
+ * session it just read against the owner the caller had in mind.
+ */
+export function createProjectContext(
+  error: { code?: string } | null,
+  sessionUserId: string,
+  requestedOwnerId: string,
+): string {
+  if (error?.code !== INSUFFICIENT_PRIVILEGE) return 'Could not create project';
+  if (requestedOwnerId && requestedOwnerId !== sessionUserId) {
+    return (
+      'Could not create project: it was about to be filed under a different account ' +
+      'than the one signed in. Sign out and back in, then try again'
+    );
+  }
+  return (
+    'Could not create project: the database refused the row even though it belongs ' +
+    'to the signed-in account. The projects table is missing its insert policy — ' +
+    'apply the migrations in supabase/migrations to this project'
+  );
+}
+
 /**
  * Assert that a write actually changed something.
  *
@@ -204,13 +236,28 @@ export const supabaseRepository: ProjectRepository = {
     return { ...rowToMeta(row), files, dirs: row.dirs ?? [] };
   },
 
+  /**
+   * Create a project owned by whoever is signed in.
+   *
+   * `owner_id` comes from the live session rather than from application state,
+   * because the row policy compares it against `auth.uid()` — the session *is*
+   * the authority on what will pass. Reading it from a store that a stale sign
+   * in, a restored tab or a second account could have left behind is how a
+   * client ends up asking the database to create a row for somebody else.
+   */
   async createProject(project) {
     const client = requireSupabase();
+    const { data: session } = await client.auth.getSession();
+    const ownerId = session.session?.user?.id;
+    if (!ownerId) {
+      throw new Error('Your session has expired. Sign in again to create a project.');
+    }
+
     const { data, error } = await client
       .from('projects')
       .insert({
         id: project.id,
-        owner_id: project.ownerId,
+        owner_id: ownerId,
         name: project.name,
         description: project.description,
         template: project.template,
@@ -222,7 +269,7 @@ export const supabaseRepository: ProjectRepository = {
       })
       .select()
       .single();
-    if (error) fail('Could not create project', error);
+    if (error) fail(createProjectContext(error, ownerId, project.ownerId), error);
 
     const rows = Object.entries(project.files).map(([path, content]) => ({
       project_id: project.id,
