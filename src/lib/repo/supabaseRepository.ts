@@ -159,6 +159,20 @@ function fail(context: string, error: { message: string; code?: string } | null)
   throw new Error(`${context}: ${error?.message ?? 'unknown error'}${error?.code ? ` (${error.code})` : ''}`);
 }
 
+/**
+ * Assert that a write actually changed something.
+ *
+ * PostgREST reports no error when row level security simply makes the target
+ * row invisible: the statement matches nothing and returns 200. Without this,
+ * every authorization denial reached the UI as a success — the rename appeared
+ * to work, the member appeared to be removed, and nothing had happened. Writes
+ * that legitimately may match nothing do not call this.
+ */
+function assertChanged(rows: unknown[] | null, context: string): void {
+  if (rows && rows.length) return;
+  throw new Error(`${context}. It may have been deleted, or you may not have permission.`);
+}
+
 export const supabaseRepository: ProjectRepository = {
   kind: 'supabase',
 
@@ -231,11 +245,21 @@ export const supabaseRepository: ProjectRepository = {
     if (patch.status !== undefined) row.status = patch.status;
     if (patch.visibility !== undefined) row.visibility = patch.visibility;
     if (patch.language !== undefined) row.language = patch.language;
-    const { error } = await client.from('projects').update(row).eq('id', id);
+    const { data, error } = await client.from('projects').update(row).eq('id', id).select('id');
     if (error) fail('Could not update project', error);
+    assertChanged(data, 'That project was not updated');
   },
 
-  async saveFiles(id, files, dirs) {
+  /**
+   * One row per file, so a save writes only what changed.
+   *
+   * Upserting the whole tree on every autosave was the original shape, and on
+   * a real project it meant hundreds of row writes per typing pause — cost and
+   * write amplification for no gain. Deletions are still reconciled against
+   * what the server actually holds rather than against the editor's belief,
+   * which keeps a failed earlier save from stranding a row forever.
+   */
+  async saveFiles(id, files, dirs, changed) {
     const client = requireSupabase();
     const { data: existing, error: readError } = await client
       .from('project_files')
@@ -256,7 +280,13 @@ export const supabaseRepository: ProjectRepository = {
       if (error) fail('Could not delete removed files', error);
     }
 
-    const rows = Object.entries(files).map(([path, content]) => ({
+    const write = Object.entries(files).filter(
+      // A path the editor never touched but the server has never seen has to be
+      // written too, or a file created while an earlier save was in flight
+      // would be dropped.
+      ([path]) => !changed || changed.has(path) || !known.has(path),
+    );
+    const rows = write.map(([path, content]) => ({
       project_id: id,
       path,
       content,
@@ -269,18 +299,21 @@ export const supabaseRepository: ProjectRepository = {
       if (error) fail('Could not save files', error);
     }
 
-    const { error: metaError } = await client
+    const { data: metaRows, error: metaError } = await client
       .from('projects')
       .update({ dirs, updated_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .select('id');
     if (metaError) fail('Could not update project metadata', metaError);
+    assertChanged(metaRows, 'The folder list was not saved');
   },
 
   async deleteProject(id) {
     const client = requireSupabase();
     // project_files and project_vcs cascade from the projects row.
-    const { error } = await client.from('projects').delete().eq('id', id);
+    const { data, error } = await client.from('projects').delete().eq('id', id).select('id');
     if (error) fail('Could not delete project', error);
+    assertChanged(data, 'That project was not deleted');
   },
 
   async loadVcs(id) {
@@ -413,22 +446,26 @@ export const supabaseRepository: ProjectRepository = {
 
   async setMemberRole(projectId, userId, role) {
     const client = requireSupabase();
-    const { error } = await client
+    const { data, error } = await client
       .from('project_members')
       .update({ role })
       .eq('project_id', projectId)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .select('id');
     if (error) fail('Could not change that role', error);
+    assertChanged(data, 'That role was not changed');
   },
 
   async removeMember(projectId, userId) {
     const client = requireSupabase();
-    const { error } = await client
+    const { data, error } = await client
       .from('project_members')
       .delete()
       .eq('project_id', projectId)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .select('id');
     if (error) fail('Could not remove that member', error);
+    assertChanged(data, 'That person was not removed');
   },
 
   // -- Invitations ----------------------------------------------------------
@@ -464,11 +501,13 @@ export const supabaseRepository: ProjectRepository = {
 
   async revokeInvitation(id) {
     const client = requireSupabase();
-    const { error } = await client
+    const { data, error } = await client
       .from('project_invitations')
       .update({ revoked_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .select('id');
     if (error) fail('Could not revoke the invitation', error);
+    assertChanged(data, 'That invitation was not revoked');
   },
 
   async acceptInvitation(rawToken) {

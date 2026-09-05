@@ -264,6 +264,62 @@ update public.projects set owner_id = '11111111-1111-1111-1111-111111111111'
  where id = 'prj_test_alpha';
 
 -- --------------------------------------------------------------------------
+-- Saving the working tree: an editor writes the tree, not the settings
+-- --------------------------------------------------------------------------
+--
+-- Saving files also writes `projects.dirs` and `projects.updated_at`. When the
+-- only update policy required the admin role, an editor's save matched no row,
+-- PostgREST reported success for an update that changed nothing, and new
+-- folders silently failed to persist.
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+update public.projects
+   set dirs = array['src', 'src/components'], language = 'TypeScript',
+       updated_at = now()
+ where id = 'prj_test_alpha';
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select dirs from public.projects where id = 'prj_test_alpha')
+    = array['src', 'src/components'],
+  'an editor can save the folder list');
+select pg_temp.assert(
+  (select language from public.projects where id = 'prj_test_alpha') = 'TypeScript',
+  'an editor can save the detected language');
+
+-- The same policy must not hand the editor the settings that sit beside it.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+do $$
+begin
+  begin
+    update public.projects set name = 'renamed by editor' where id = 'prj_test_alpha';
+    raise exception 'FAIL  an editor renamed the project';
+  exception
+    when insufficient_privilege then raise notice 'ok    an editor cannot rename the project';
+  end;
+  begin
+    update public.projects set visibility = 'public' where id = 'prj_test_alpha';
+    raise exception 'FAIL  an editor published the project';
+  exception
+    when insufficient_privilege then raise notice 'ok    an editor cannot change visibility';
+  end;
+  begin
+    update public.projects set status = 'archived' where id = 'prj_test_alpha';
+    raise exception 'FAIL  an editor archived the project';
+  exception
+    when insufficient_privilege then raise notice 'ok    an editor cannot archive the project';
+  end;
+end $$;
+
+-- A viewer gets neither.
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+update public.projects set dirs = array['sneaky'] where id = 'prj_test_alpha';
+select pg_temp.act_as_admin();
+select pg_temp.assert(
+  (select dirs from public.projects where id = 'prj_test_alpha')
+    = array['src', 'src/components'],
+  'a viewer cannot save the folder list');
+
+-- --------------------------------------------------------------------------
 -- Project settings: readable by members, writable by admins only
 -- --------------------------------------------------------------------------
 

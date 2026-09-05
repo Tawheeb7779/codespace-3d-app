@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowLeft, Keyboard, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input, Select, Switch } from '@/components/ui/Field';
@@ -14,7 +14,7 @@ import {
 import { useUIStore } from '@/stores/uiStore';
 import { WIDE_CHANGE_THRESHOLD } from '@/lib/ai/approval';
 import { GithubConnection } from '@/components/github/GithubConnection';
-import { useAuthStore } from '@/stores/authStore';
+import { reloadInto, useAuthStore } from '@/stores/authStore';
 import { toast } from '@/stores/toastStore';
 import { chordFromEvent, formatChord } from '@/hooks/useKeyboardShortcuts';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -59,7 +59,6 @@ function Group({ title, description, children }: { title: string; description?: 
 }
 
 export default function SettingsPage() {
-  const navigate = useNavigate();
   const {
     editor,
     appearance,
@@ -480,8 +479,10 @@ export default function SettingsPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => {
+                    // A full load, not a client-side navigation: see the
+                    // dashboard's sign-out for why.
                     void signOut()
-                      .then(() => navigate('/'))
+                      .then(() => reloadInto('/'))
                       .catch((error) => toast.error('Sign out failed', errorMessage(error)));
                   }}
                 >

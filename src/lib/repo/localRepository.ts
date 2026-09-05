@@ -10,6 +10,14 @@ import type { Repo } from '@/lib/vcs';
 import type { ProjectRepository } from '@/lib/repo/types';
 import type { RemoteRef } from '@/lib/github/remote';
 
+/**
+ * Timeline rows kept per project in the browser store.
+ *
+ * Well above what the panel shows, so history stays useful, and finite so the
+ * store cannot grow without limit.
+ */
+export const MAX_LOCAL_ACTIVITY = 500;
+
 const toMeta = (project: Project): ProjectMeta => {
   const { files: _files, dirs: _dirs, ...meta } = project;
   return meta;
@@ -138,12 +146,25 @@ export const localRepository: ProjectRepository = {
 
   // -- Activity -------------------------------------------------------------
 
+  /**
+   * Read a project's timeline, and take the chance to bound it.
+   *
+   * There is no server here to expire rows, and the browser store is scanned
+   * in full on every read. Left alone it grows for the life of the browser
+   * profile and every panel open gets slower. Pruning during the read that
+   * already paid for the scan keeps the cost where it was.
+   */
   async listActivity(projectId, limit) {
     const all = await idbAll<ActivityEvent>('activity');
-    return all
+    const mine = all
       .filter((event) => event.projectId === projectId)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, limit);
+      .sort((a, b) => b.createdAt - a.createdAt);
+    if (mine.length > MAX_LOCAL_ACTIVITY) {
+      await Promise.all(
+        mine.slice(MAX_LOCAL_ACTIVITY).map((event) => idbDelete('activity', event.id)),
+      );
+    }
+    return mine.slice(0, limit);
   },
 
   async recordActivity(event) {

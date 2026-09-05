@@ -52,7 +52,6 @@ Deno.serve(async (request) => {
       action?: string;
       code?: string;
       state?: string;
-      redirect?: string;
     };
     const client = serviceClient();
 
@@ -62,6 +61,14 @@ Deno.serve(async (request) => {
         const appOrigin = requireEnv('FORGE_APP_ORIGIN');
         const redirect = `${appOrigin.replace(/\/+$/, '')}/settings/github/callback`;
         const state = randomState();
+        // Abandoned sign-ins leave a row behind. Sweeping the expired ones on
+        // the way past keeps the table from growing for the life of the
+        // project without needing a scheduled job.
+        await client
+          .schema('private')
+          .from('github_oauth_states')
+          .delete()
+          .lt('expires_at', new Date().toISOString());
         await client.schema('private').from('github_oauth_states').insert({
           state,
           user_id: user.id,

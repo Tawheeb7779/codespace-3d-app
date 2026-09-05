@@ -56,6 +56,8 @@ interface FileState {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+/** Tail of the serialised save queue. Never rejects; see `flush`. */
+let saveChain: Promise<void> = Promise.resolve();
 
 function repository() {
   return repositoryFor(useAuthStore.getState().user?.provider);
@@ -68,7 +70,10 @@ function scheduleSave() {
   // a navigation away, or the tab being hidden.
   if (!autoSave) return;
   saveTimer = setTimeout(() => {
-    void useFileStore.getState().flush();
+    // Nobody is awaiting an auto-save, so its failure has to be absorbed here:
+    // the store already carries the message, and an unhandled rejection would
+    // otherwise be the only trace of it.
+    void useFileStore.getState().flush().catch(() => undefined);
   }, Math.max(200, autoSaveDelay));
 }
 
@@ -175,7 +180,13 @@ export const useFileStore = create<FileState>()((set, get) => ({
     get().assertWritable();
     const safe = normalizePath(path);
     if (get().dirs.includes(safe)) throw new VfsError(`${safe} already exists.`);
-    set((state) => ({ dirs: [...new Set([...state.dirs, safe, ...ancestors(safe)])] }));
+    // The new directory has to enter the dirty set even though it holds no
+    // file. `flush` returns early on an empty set, so without this an empty
+    // folder lived in memory and vanished on the next reload.
+    set((state) => ({
+      dirs: [...new Set([...state.dirs, safe, ...ancestors(safe)])],
+      dirty: new Set(state.dirty).add(safe),
+    }));
     scheduleSave();
     return safe;
   },
@@ -208,7 +219,10 @@ export const useFileStore = create<FileState>()((set, get) => ({
     set((state) => ({
       files: nextFiles,
       dirs: [...new Set([...nextDirs, ...ancestors(target)])],
-      dirty: new Set([...state.dirty, ...dirtyPaths]),
+      // `from` and `target` join the set unconditionally: renaming a directory
+      // that happens to be empty moves no file, and an empty dirty set is a
+      // flush that never runs.
+      dirty: new Set([...state.dirty, ...dirtyPaths, from, target]),
     }));
     scheduleSave();
     return target;
@@ -255,38 +269,64 @@ export const useFileStore = create<FileState>()((set, get) => ({
   markAllClean: () => set({ dirty: new Set() }),
 
   async flush() {
-    const { projectId, files, dirs, dirty, meta } = get();
-    if (!projectId || !dirty.size) return;
-    if (!get().canWrite()) {
-      set({ dirty: new Set() });
-      return;
-    }
-    if (saveTimer) clearTimeout(saveTimer);
-    set({ saving: true, error: null });
-    try {
-      await repository().saveFiles(projectId, files, dirs);
-      const language = detectProjectLanguage(Object.keys(files));
-      if (meta && meta.language !== language) {
-        await repository().updateProject(projectId, { language });
-        set({ meta: { ...meta, language } });
-      }
-      const updatedAt = Date.now();
-      set({ dirty: new Set(), saving: false, lastSavedAt: updatedAt });
-      useProjectStore.getState().upsertLocal({
-        ...(get().meta as ProjectMeta),
-        updatedAt,
-      });
-    } catch (error) {
-      // Keep the dirty set so the next flush retries the same work.
-      set({ saving: false, error: errorMessage(error) });
-      throw error;
-    }
+    // Saves are serialised. Two in flight at once could land out of order and
+    // leave the older tree as the stored one, and the second would clear the
+    // dirty set for work the first never wrote.
+    //
+    // `runSave` runs on both settle paths of the previous save: a save that
+    // failed must not block the retry queued behind it.
+    const run = saveChain.then(runSave, runSave);
+    // The chain itself never rejects, so one failure cannot poison every
+    // later flush. Callers still see the rejection through `run`.
+    saveChain = run.catch(() => undefined);
+    await run;
   },
 }));
+
+/** One save. Always called with the lock held by {@link FileState.flush}. */
+async function runSave(): Promise<void> {
+  const get = useFileStore.getState;
+  const set = useFileStore.setState;
+  const { projectId, files, dirs, dirty, meta } = get();
+  if (!projectId || !dirty.size) return;
+  if (!get().canWrite()) {
+    set({ dirty: new Set() });
+    return;
+  }
+  if (saveTimer) clearTimeout(saveTimer);
+  set({ saving: true, error: null });
+  try {
+    // The exact tree handed to the repository. Edits made while the write is in
+    // flight are compared against it below rather than being marked clean —
+    // clearing the whole set here silently dropped them.
+    const written = files;
+    const changed = new Set(dirty);
+    await repository().saveFiles(projectId, written, dirs, changed);
+    const language = detectProjectLanguage(Object.keys(written));
+    if (meta && meta.language !== language) {
+      await repository().updateProject(projectId, { language });
+      set({ meta: { ...meta, language } });
+    }
+    const updatedAt = Date.now();
+    set((state) => ({
+      dirty: new Set([...state.dirty].filter((path) => state.files[path] !== written[path])),
+      saving: false,
+      lastSavedAt: updatedAt,
+    }));
+    const current = get().meta;
+    if (current) useProjectStore.getState().upsertLocal({ ...current, updatedAt });
+  } catch (error) {
+    // Keep the dirty set so the next flush retries the same work.
+    set({ saving: false, error: errorMessage(error) });
+    throw error;
+  }
+}
 
 /** Persist pending edits when the tab goes away. */
 if (typeof window !== 'undefined') {
   window.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') void useFileStore.getState().flush();
+    if (document.visibilityState === 'hidden') {
+      void useFileStore.getState().flush().catch(() => undefined);
+    }
   });
 }

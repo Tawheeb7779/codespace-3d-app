@@ -58,6 +58,19 @@ function fromSupabaseUser(user: {
   };
 }
 
+/**
+ * Leave the single-page app and load `path` fresh.
+ *
+ * Used when the account changes. Every other store — projects, workspaces,
+ * editor tabs, version history, the GitHub connection — is scoped to whoever
+ * was signed in, and a client-side navigation keeps all of it in memory for
+ * the next person. A real load is the only way to be sure none of it survives.
+ */
+export function reloadInto(path: string): void {
+  if (typeof window === 'undefined') return;
+  window.location.assign(path);
+}
+
 function validate(email: string, password: string): string | null {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return 'Enter a valid email address.';
   if (password.length < 8) return 'Password must be at least 8 characters.';
@@ -94,7 +107,13 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       if (stillRestoring()) set({ user, status: user ? 'authenticated' : 'anonymous' });
       supabase.auth.onAuthStateChange((_event, session) => {
         const next = session?.user ? fromSupabaseUser(session.user) : null;
+        const previous = get().user;
         set({ user: next, status: next ? 'authenticated' : 'anonymous' });
+        // A different person now holds this tab. Projects, workspaces, open
+        // tabs, git state and the GitHub connection all belong to the account
+        // that left, so start the next one from a clean process rather than
+        // hoping every store remembered to clear itself.
+        if (next && previous && next.id !== previous.id) reloadInto('/dashboard');
       });
     } catch (error) {
       if (stillRestoring()) set({ status: 'anonymous', error: errorMessage(error) });

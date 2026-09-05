@@ -28,7 +28,21 @@ export interface ProjectRepository {
   createProject(project: Project): Promise<Project>;
   updateProject(id: string, patch: Partial<ProjectMeta>): Promise<void>;
   /** Replace the whole working tree for a project. */
-  saveFiles(id: string, files: Record<string, string>, dirs: string[]): Promise<void>;
+  /**
+   * Persist the working tree.
+   *
+   * `changed` is the set of paths the editor believes differ from what is
+   * stored. A backend that writes rows per file uses it to avoid rewriting an
+   * entire project on every keystroke; one that stores the tree as a single
+   * document ignores it. Omitting it means "assume everything changed", which
+   * is always correct and always slower.
+   */
+  saveFiles(
+    id: string,
+    files: Record<string, string>,
+    dirs: string[],
+    changed?: ReadonlySet<string>,
+  ): Promise<void>;
   deleteProject(id: string): Promise<void>;
   loadVcs(id: string): Promise<Repo | null>;
   saveVcs(id: string, repo: Repo): Promise<void>;

@@ -84,6 +84,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
     setLocalBusy(true);
     try {
       await signInLocally(displayName || 'Local Developer');
+    } catch {
+      // The store holds the message, and it is rendered below. Letting this
+      // reach an onClick handler would only produce an unhandled rejection.
     } finally {
       setLocalBusy(false);
     }

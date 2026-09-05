@@ -28,7 +28,7 @@ import { ImportDialog } from '@/components/dashboard/ImportDialog';
 import { useProjectStore } from '@/stores/projectStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { WorkspaceBar } from '@/components/dashboard/WorkspaceBar';
-import { useAuthStore } from '@/stores/authStore';
+import { reloadInto, useAuthStore } from '@/stores/authStore';
 import { toast } from '@/stores/toastStore';
 import type { ProjectMeta } from '@/types';
 import { cx, errorMessage, formatTimeAgo } from '@/lib/utils';
@@ -320,8 +320,10 @@ export default function DashboardPage() {
             label="Sign out"
             icon={<LogOut className="h-3.5 w-3.5" />}
             onClick={() => {
+              // A full load, not a client-side navigation: the stores below
+              // still hold this account's projects, workspaces and open tabs.
               void signOut()
-                .then(() => navigate('/'))
+                .then(() => reloadInto('/'))
                 .catch((caught) => toast.error('Sign out failed', errorMessage(caught)));
             }}
           />

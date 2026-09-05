@@ -18,6 +18,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { consoleLog } from '@/stores/consoleStore';
 import { toast } from '@/stores/toastStore';
 import { getTemplate } from '@/lib/templates';
+import { PREVIEW_SANDBOX, openPreviewWindow } from '@/lib/previewWindow';
 import type { ConsoleLevel, DevicepreSet } from '@/types';
 import { cx } from '@/lib/utils';
 
@@ -40,6 +41,7 @@ export function PreviewPanel() {
   const files = useFileStore((s) => s.files);
   const dirty = useFileStore((s) => s.dirty);
   const template = useFileStore((s) => s.meta?.template);
+  const name = useFileStore((s) => s.meta?.name);
   const setBottomTab = useUIStore((s) => s.setBottomTab);
   const runtime = useSettingsStore((s) => s.runtime);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -86,11 +88,12 @@ export function PreviewPanel() {
 
   const openInTab = () => {
     if (!doc) return;
-    const blob = new Blob([doc], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const opened = window.open(url, '_blank', 'noopener,noreferrer');
-    if (!opened) toast.warning('Popup blocked', 'Allow popups for this site to open the preview.');
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    const result = openPreviewWindow(doc, `${name ?? 'Preview'} — Forge preview`);
+    if (result === 'blocked') {
+      toast.warning('Popup blocked', 'Allow popups for this site to open the preview.');
+    } else if (result === 'unavailable') {
+      toast.error('Could not open the preview', 'This browser refused to open a new tab.');
+    }
   };
 
   return (
@@ -176,7 +179,7 @@ export function PreviewPanel() {
             title="Project preview"
             srcDoc={doc}
             // No allow-same-origin: the preview stays in an opaque origin.
-            sandbox="allow-scripts allow-forms allow-modals allow-popups"
+            sandbox={PREVIEW_SANDBOX}
             style={frameStyle}
             className={cx(
               'border-0 bg-white',
