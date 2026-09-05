@@ -15,6 +15,57 @@ import type { AuthUser } from '@/types';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
+/**
+ * The host Supabase Auth is configured to talk to.
+ *
+ * Host only, the same rule the model provider follows: a full URL can carry a
+ * key in a query string, and nothing here should ever put one in front of a
+ * user. The host itself is in every request the browser already makes.
+ */
+function authHost(): string {
+  try {
+    return new URL(String(import.meta.env.VITE_SUPABASE_URL)).host;
+  } catch {
+    return 'the configured Supabase project';
+  }
+}
+
+/**
+ * Did this fail before Supabase could answer at all?
+ *
+ * `fetch` rejects with a `TypeError` when the request never completes — DNS,
+ * TLS, a blocked network, a project that is paused or misaddressed. The wording
+ * differs per engine, and supabase-js additionally wraps some of them, so both
+ * shapes are recognised. A `TypeError` that is *not* one of these is a real
+ * programming fault and must keep its own message rather than being dressed up
+ * as a connectivity problem.
+ */
+function isUnreachable(error: unknown): boolean {
+  const shape = error as { name?: string; status?: number } | null;
+  if (shape?.name === 'AuthRetryableFetchError' || shape?.status === 0) return true;
+  return (
+    error instanceof TypeError &&
+    /failed to fetch|fetch failed|networkerror|load failed|network connection/i.test(error.message)
+  );
+}
+
+/**
+ * The message the user sees when authentication fails.
+ *
+ * Every other failure — a wrong password, an unconfirmed address, a rate limit
+ * — already arrives from Supabase in words a person can act on, and is passed
+ * through untouched. Only the unreachable case is rewritten, because the raw
+ * text for it is "Failed to fetch", which tells a customer nothing and reads
+ * like a rejected password.
+ */
+export function authErrorMessage(error: unknown): string {
+  if (!isUnreachable(error)) return errorMessage(error);
+  return (
+    `Could not reach the authentication service at ${authHost()}. ` +
+    'Check your network connection, and the Supabase URL this deployment points at.'
+  );
+}
+
 interface AuthState {
   status: AuthStatus;
   user: AuthUser | null;
@@ -116,7 +167,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         if (next && previous && next.id !== previous.id) reloadInto('/dashboard');
       });
     } catch (error) {
-      if (stillRestoring()) set({ status: 'anonymous', error: errorMessage(error) });
+      if (stillRestoring()) set({ status: 'anonymous', error: authErrorMessage(error) });
     }
   },
 
@@ -144,7 +195,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       }
       if (data.user) set({ user: fromSupabaseUser(data.user), status: 'authenticated' });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      set({ error: authErrorMessage(error) });
       throw error;
     } finally {
       set({ busy: false });
@@ -170,7 +221,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       if (error) throw error;
       set({ user: fromSupabaseUser(data.user), status: 'authenticated' });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      set({ error: authErrorMessage(error) });
       throw error;
     } finally {
       set({ busy: false });
@@ -193,7 +244,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       if (error) throw error;
       // The browser navigates away; state is restored by initialize() on return.
     } catch (error) {
-      set({ error: errorMessage(error), busy: false });
+      set({ error: authErrorMessage(error), busy: false });
       throw error;
     }
   },
@@ -214,7 +265,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await idbSet('kv', LOCAL_SESSION_KEY, true);
       set({ user, status: 'authenticated', localMode: true });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      set({ error: authErrorMessage(error) });
       throw error;
     } finally {
       set({ busy: false });
@@ -234,7 +285,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       }
       set({ user: null, status: 'anonymous', error: null });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      set({ error: authErrorMessage(error) });
       throw error;
     } finally {
       set({ busy: false });
