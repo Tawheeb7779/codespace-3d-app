@@ -350,6 +350,82 @@ end $$;
 select pg_temp.act_as_admin();
 
 -- --------------------------------------------------------------------------
+-- Creating a project the way the client actually creates one
+-- --------------------------------------------------------------------------
+--
+-- The client chains .select() onto the insert, so PostgREST sends
+-- `Prefer: return=representation` and the statement carries a RETURNING clause.
+-- PostgreSQL applies the SELECT policy as an extra WITH CHECK against rows a
+-- RETURNING clause produces, and projects_select_readable used to answer only
+-- through can_read_project(), which looks the project up in public.projects.
+-- That function is STABLE, so it reads the statement's snapshot, and the row
+-- being inserted is not in it: the lookup found nothing and the insert was
+-- refused with the same sentence a bad owner_id produces.
+--
+-- Every assertion above this one issues a bare INSERT, which passes, so the
+-- suite never exercised the shape the application sends. These do.
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+do $$
+declare
+  returned text;
+begin
+  insert into public.projects (id, owner_id, name, description, template, language,
+                               visibility, status, starred, dirs)
+  values ('prj_rls_returning1', '44444444-4444-4444-4444-444444444444', 'Mine', '',
+          'react-ts', 'TypeScript', 'private', 'active', false, '{}')
+  returning id into returned;
+
+  if returned is null then
+    raise exception 'FAIL  INSERT ... RETURNING produced no row';
+  end if;
+  raise notice 'ok    a creator can insert and read the row back in one statement';
+end $$;
+
+-- The whole row, as `.select()` asks for it.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+with created as (
+  insert into public.projects (id, owner_id, name, description, template, language,
+                               visibility, status, starred, dirs)
+  values ('prj_rls_returning2', '44444444-4444-4444-4444-444444444444', 'Mine2', '',
+          'react-ts', 'TypeScript', 'private', 'active', false, '{}')
+  returning id, owner_id, created_at
+)
+select pg_temp.assert(
+  (select count(*) from created) = 1,
+  'RETURNING gives back the full row, which is what .select() needs');
+
+-- Reading the row back must not have widened who can read it.
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_rls_returning1') = 0,
+  'a viewer of another project still cannot read this one');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select pg_temp.assert(
+  (select count(*) from public.projects where id = 'prj_rls_returning1') = 0,
+  'an unrelated owner still cannot read it');
+
+-- And the owner arm must not let anyone create a row for someone else, even
+-- with RETURNING attached.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+do $$
+begin
+  begin
+    insert into public.projects (id, owner_id, name, description, template, language,
+                                 visibility, status, starred, dirs)
+    values ('prj_rls_returning3', '11111111-1111-1111-1111-111111111111', 'Theirs', '',
+            'react-ts', 'TypeScript', 'private', 'active', false, '{}')
+    returning id;
+    raise exception 'FAIL  RETURNING let a user create a project for someone else';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    RETURNING does not let a user create a project for someone else';
+  end;
+end $$;
+select pg_temp.act_as_admin();
+
+-- --------------------------------------------------------------------------
 -- Saving the working tree: an editor writes the tree, not the settings
 -- --------------------------------------------------------------------------
 --
