@@ -116,6 +116,51 @@ export function diffStat(oldText: string, newText: string): DiffStat {
   return { additions, deletions };
 }
 
+/**
+ * A unified diff for one file, the shape every reviewer already reads.
+ *
+ * Context lines are limited so a large file with one changed line produces a
+ * small hunk rather than the whole file — which is what makes this safe to
+ * hand to a model, and readable when a person sees it.
+ */
+export function unifiedDiff(
+  path: string,
+  before: string,
+  after: string,
+  context = 3,
+): string {
+  if (before === after) return '';
+  const lines = diffLines(before, after);
+  const changed = lines
+    .map((line, index) => (line.op === 'equal' ? -1 : index))
+    .filter((index) => index >= 0);
+  if (!changed.length) return '';
+
+  // Keep every line within `context` of a change, and mark where runs break.
+  const keep = new Set<number>();
+  for (const index of changed) {
+    for (let i = Math.max(0, index - context); i <= Math.min(lines.length - 1, index + context); i++) {
+      keep.add(i);
+    }
+  }
+
+  const out: string[] = [`--- a/${path}`, `+++ b/${path}`];
+  let previous = -1;
+  for (let index = 0; index < lines.length; index++) {
+    if (!keep.has(index)) continue;
+    const line = lines[index];
+    if (previous !== -1 && index !== previous + 1) {
+      out.push(`@@ -${line.oldLine ?? 0} +${line.newLine ?? 0} @@`);
+    } else if (previous === -1) {
+      out.push(`@@ -${line.oldLine ?? 0} +${line.newLine ?? 0} @@`);
+    }
+    const marker = line.op === 'add' ? '+' : line.op === 'remove' ? '-' : ' ';
+    out.push(`${marker}${line.text}`);
+    previous = index;
+  }
+  return out.join('\n');
+}
+
 export interface MergeResult {
   text: string;
   conflicted: boolean;

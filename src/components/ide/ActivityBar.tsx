@@ -1,4 +1,14 @@
-import { Activity, Bot, Files, GitBranch, LayoutList, Package, Search, Users } from 'lucide-react';
+import {
+  Activity,
+  Bot,
+  Files,
+  GitBranch,
+  LayoutList,
+  ListChecks,
+  Package,
+  Search,
+  Users,
+} from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useUIStore, type SidebarPanel } from '@/stores/uiStore';
 import { useGitStore } from '@/stores/gitStore';
@@ -12,6 +22,7 @@ const PANELS: Array<{ id: SidebarPanel; label: string; icon: typeof Files }> = [
   { id: 'packages', label: 'Packages', icon: Package },
   { id: 'assistant', label: 'Assistant', icon: Bot },
   { id: 'members', label: 'Members', icon: Users },
+  { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'activity', label: 'Activity', icon: Activity },
 ];
 

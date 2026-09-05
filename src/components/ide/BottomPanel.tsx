@@ -1,9 +1,11 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
   ChevronDown,
+  ChevronUp,
   Info,
+  RefreshCw,
   Plus,
   Trash2,
   X,
@@ -18,7 +20,16 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useConsoleStore, ALL_LEVELS } from '@/stores/consoleStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-import type { Problem } from '@/types';
+import {
+  DEFAULT_PROBLEM_FILTER,
+  buildProblems,
+  countBySeverity,
+  filterProblems,
+  groupProblems,
+  mergeProblems,
+  nextProblem,
+  type ProblemFilter,
+} from '@/lib/problems';
 import { cx, formatClock } from '@/lib/utils';
 import { basename } from '@/lib/vfs';
 
@@ -37,60 +48,176 @@ const SEVERITY_TONE = {
 function ProblemsList() {
   const problems = useEditorStore((s) => s.problems);
   const reveal = useEditorStore((s) => s.revealLocation);
+  const cursor = useEditorStore((s) => s.cursor);
+  const activePath = useEditorStore((s) => s.activePath);
   const buildErrors = usePreviewStore((s) => s.errors);
+  const buildWarnings = usePreviewStore((s) => s.warnings);
+  const refresh = usePreviewStore((s) => s.refresh);
+  const [filter, setFilter] = useState<ProblemFilter>(DEFAULT_PROBLEM_FILTER);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
-  const combined: Problem[] = useMemo(
-    () => [
-      ...buildErrors
-        .filter((error) => error.path)
-        .map((error, index) => ({
-          id: `build-${index}`,
-          path: error.path,
-          line: error.line,
-          column: error.column,
-          endLine: error.line,
-          endColumn: error.column,
-          severity: 'error' as const,
-          message: error.message,
-          source: 'esbuild',
-        })),
-      ...problems,
-    ],
-    [problems, buildErrors],
+  // One ordered list, from both real sources: the language workers and the
+  // bundler. Everything below — counts, groups, navigation — reads this.
+  const all = useMemo(
+    () =>
+      mergeProblems([
+        buildProblems(buildErrors),
+        buildProblems(buildWarnings),
+        problems,
+      ]),
+    [problems, buildErrors, buildWarnings],
   );
+  const counts = useMemo(() => countBySeverity(all), [all]);
+  const visible = useMemo(() => filterProblems(all, filter), [all, filter]);
+  const groups = useMemo(() => groupProblems(visible), [visible]);
 
-  if (!combined.length) {
-    return <EmptyState title="No problems detected" description="Diagnostics appear here as you type and build." />;
-  }
+  const jump = (direction: 1 | -1) => {
+    const target = nextProblem(
+      visible,
+      activePath ? { path: activePath, line: cursor.line, column: cursor.column } : null,
+      direction,
+    );
+    if (target) reveal(target.path, target.line, target.column);
+  };
+
+  const toggleGroup = (path: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
 
   return (
-    <ul className="scrollbar-thin h-full overflow-y-auto py-1">
-      {combined.map((problem) => {
-        const Icon = SEVERITY_ICON[problem.severity];
-        return (
-          <li key={problem.id}>
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-1.5 border-b border-line px-2.5 py-1">
+        {(
+          [
+            ['errors', 'error', counts.error],
+            ['warnings', 'warning', counts.warning],
+            ['info', 'info', counts.info],
+          ] as const
+        ).map(([key, severity, count]) => {
+          const Icon = SEVERITY_ICON[severity];
+          return (
             <button
+              key={key}
               type="button"
-              onClick={() => reveal(problem.path, problem.line, problem.column)}
-              className="flex w-full items-start gap-2 px-3 py-1 text-left text-base transition-colors hover:bg-surface-raised"
+              aria-pressed={filter[key]}
+              onClick={() => setFilter((current) => ({ ...current, [key]: !current[key] }))}
+              className={cx(
+                'flex items-center gap-1 rounded border px-1.5 py-0.5 text-sm transition-colors',
+                filter[key]
+                  ? 'border-line-strong text-ink'
+                  : 'border-line text-ink-faint opacity-60',
+              )}
             >
-              <Icon className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', SEVERITY_TONE[problem.severity])} />
-              <span className="min-w-0 flex-1">
-                <span className="block break-words text-ink">{problem.message}</span>
-                <span className="mt-0.5 flex items-center gap-1.5 text-sm text-ink-faint">
-                  <FileIcon path={problem.path} />
-                  {basename(problem.path)}
-                  <span>
-                    [{problem.line}, {problem.column}]
-                  </span>
-                  <span className="rounded-sm border border-line px-1">{problem.source}</span>
-                </span>
-              </span>
+              <Icon className={cx('h-3 w-3', SEVERITY_TONE[severity])} />
+              {count}
             </button>
-          </li>
-        );
-      })}
-    </ul>
+          );
+        })}
+
+        <input
+          aria-label="Filter problems"
+          value={filter.query}
+          onChange={(event) => setFilter((current) => ({ ...current, query: event.target.value }))}
+          placeholder="Filter"
+          className="h-6 min-w-0 flex-1 rounded border border-line bg-surface-sunken px-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+        />
+
+        <IconButton
+          size="xs"
+          label="Previous problem"
+          icon={<ChevronUp className="h-3 w-3" />}
+          disabled={!visible.length}
+          onClick={() => jump(-1)}
+        />
+        <IconButton
+          size="xs"
+          label="Next problem"
+          icon={<ChevronDown className="h-3 w-3" />}
+          disabled={!visible.length}
+          onClick={() => jump(1)}
+        />
+        <IconButton
+          size="xs"
+          label="Rebuild to refresh problems"
+          icon={<RefreshCw className="h-3 w-3" />}
+          onClick={() => void refresh()}
+        />
+      </div>
+
+      {!visible.length ? (
+        <EmptyState
+          title={all.length ? 'No problems match this filter' : 'No problems detected'}
+          description={
+            all.length
+              ? `${all.length} problem${all.length === 1 ? '' : 's'} hidden by the current filter.`
+              : 'Diagnostics appear here as you type and build.'
+          }
+        />
+      ) : (
+        <div className="scrollbar-thin flex-1 overflow-y-auto py-1">
+          {groups.map((group) => {
+            const isCollapsed = collapsed.has(group.path);
+            return (
+              <section key={group.path}>
+                <button
+                  type="button"
+                  aria-expanded={!isCollapsed}
+                  onClick={() => toggleGroup(group.path)}
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-sm hover:bg-surface-raised"
+                >
+                  <ChevronDown
+                    aria-hidden
+                    className={cx(
+                      'h-3 w-3 shrink-0 text-ink-faint transition-transform',
+                      isCollapsed && '-rotate-90',
+                    )}
+                  />
+                  <FileIcon path={group.path} />
+                  <span className="truncate text-ink">{basename(group.path)}</span>
+                  <span className="truncate text-ink-faint">{group.path}</span>
+                  <span className="ml-auto shrink-0 text-ink-faint">{group.problems.length}</span>
+                </button>
+
+                {!isCollapsed &&
+                  group.problems.map((problem) => {
+                    const Icon = SEVERITY_ICON[problem.severity];
+                    return (
+                      <button
+                        key={problem.id}
+                        type="button"
+                        onClick={() => reveal(problem.path, problem.line, problem.column)}
+                        className="flex w-full items-start gap-2 py-1 pl-8 pr-3 text-left text-base transition-colors hover:bg-surface-raised"
+                      >
+                        <Icon
+                          className={cx(
+                            'mt-0.5 h-3.5 w-3.5 shrink-0',
+                            SEVERITY_TONE[problem.severity],
+                          )}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block break-words text-ink">{problem.message}</span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-sm text-ink-faint">
+                            <span>
+                              [{problem.line}, {problem.column}]
+                            </span>
+                            <span className="rounded-sm border border-line px-1">
+                              {problem.source}
+                            </span>
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

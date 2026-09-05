@@ -24,7 +24,8 @@
     "test:e2e:agent": "node e2e/agent.mjs",
     "agent:test-provider": "node e2e/agent-provider.mjs",
     "test:e2e:workspace": "node e2e/workspace.mjs",
-    "test:e2e:collab": "node e2e/collaboration.mjs"
+    "test:e2e:collab": "node e2e/collaboration.mjs",
+    "test:e2e:devexp": "node e2e/devexp.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

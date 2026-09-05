@@ -43,6 +43,13 @@ export interface ToolContext {
   runBuild?(): Promise<{ ok: boolean; report: string }>;
   /** Current editor diagnostics, newest analysis. */
   diagnostics?(): string;
+  /**
+   * The project's uncommitted changes as a unified diff.
+   *
+   * Absent when there is no repository. A review workflow that cannot read
+   * the diff has to say so rather than guessing from file contents.
+   */
+  gitDiff?(): string;
   /** Called after any tool changes a file, for the task's change ledger. */
   onChange?(path: string, kind: 'created' | 'modified' | 'deleted', before: string, after: string): void;
   /**
@@ -382,6 +389,18 @@ export const TOOLS: ToolDefinition[] = [
       if (!ctx.runBuild) return 'A build is not available in this context.';
       const result = await ctx.runBuild();
       return result.report;
+    },
+  },
+  {
+    name: 'get_diff',
+    description:
+      'Read the uncommitted changes in this project as a unified diff. Use this before reviewing ' +
+      'changes, so the review is about what actually changed rather than the whole file.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: (_input, ctx) => {
+      if (!ctx.gitDiff) return 'No repository is available in this context.';
+      return ctx.gitDiff() || 'The working tree is clean — there are no uncommitted changes.';
     },
   },
   {

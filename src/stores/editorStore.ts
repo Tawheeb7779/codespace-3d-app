@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { EditorTab, Problem } from '@/types';
+import { MAX_PATH_LENGTH, isSensitivePath, normalizePath } from '@/lib/vfs';
 
 export interface PendingReveal {
   path: string;
@@ -63,6 +64,56 @@ export function splitTargetFor(tabs: EditorTab[], activePath: string | null): st
   const index = tabs.findIndex((tab) => tab.path === activePath);
   if (index === -1) return tabs[0].path;
   return (tabs[index + 1] ?? tabs[index - 1])?.path ?? activePath;
+}
+
+/** A path is only restorable if it is one the file system would accept. */
+function usablePath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value.length > MAX_PATH_LENGTH) return false;
+  try {
+    // `normalizePath` throws on traversal and absolute paths; a stored path
+    // that does not survive it unchanged was not written by this app.
+    return normalizePath(value) === value && !isSensitivePath(value);
+  } catch {
+    return false;
+  }
+}
+
+function sanitiseSessions(value: unknown): Record<string, EditorSession> {
+  if (!value || typeof value !== 'object') return {};
+  const out: Record<string, EditorSession> = {};
+  for (const [projectId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof projectId !== 'string' || !raw || typeof raw !== 'object') continue;
+    const session = raw as Partial<EditorSession>;
+
+    const tabs = Array.isArray(session.tabs)
+      ? session.tabs
+          .filter((tab): tab is EditorTab => Boolean(tab) && usablePath((tab as EditorTab).path))
+          .map((tab) => ({ path: tab.path, pinned: tab.pinned === true }))
+          .slice(0, 60)
+      : [];
+    if (!tabs.length) continue;
+
+    const open = new Set(tabs.map((tab) => tab.path));
+    const cursors: EditorSession['cursors'] = {};
+    for (const [path, caret] of Object.entries(session.cursors ?? {})) {
+      if (!open.has(path) || !caret || typeof caret !== 'object') continue;
+      const line = Number((caret as { line?: unknown }).line);
+      const column = Number((caret as { column?: unknown }).column);
+      // A caret outside the document is not restored; the editor would clamp
+      // it anyway, and a stored NaN would reach `revealLine`.
+      if (!Number.isFinite(line) || !Number.isFinite(column) || line < 1 || column < 1) continue;
+      cursors[path] = { line: Math.floor(line), column: Math.floor(column) };
+    }
+
+    const activePath =
+      typeof session.activePath === 'string' && open.has(session.activePath)
+        ? session.activePath
+        : tabs[0].path;
+
+    out[projectId] = { tabs, activePath, cursors };
+  }
+  // Bound the map, in case storage grew beyond what the app would have written.
+  return Object.fromEntries(Object.entries(out).slice(-MAX_REMEMBERED_PROJECTS));
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -223,6 +274,20 @@ export const useEditorStore = create<EditorState>()(
       // Only the session map persists: live tabs, problems and reveals belong
       // to the open project and are rebuilt from it.
       partialize: (state) => ({ sessions: state.sessions }),
+      /**
+       * Treat stored sessions as untrusted input.
+       *
+       * This is the one slice restored from browser storage that decides which
+       * files the editor opens, so hand-edited or corrupted data must not be
+       * able to reopen an arbitrary path. Every entry is re-validated through
+       * the same path rules the file system uses, and anything that fails is
+       * dropped rather than repaired — a session is a convenience, and losing
+       * one is always better than honouring a bad one.
+       */
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as { sessions?: unknown };
+        return { ...current, sessions: sanitiseSessions(saved.sessions) };
+      },
     },
   ),
 );

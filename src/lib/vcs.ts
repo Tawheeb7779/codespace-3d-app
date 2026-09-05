@@ -532,6 +532,110 @@ export function commitDetail(repo: Repo, commitId: string): CommitDetail | null 
   return { commit, parent, changes, additions, deletions };
 }
 
+export interface FileHistoryEntry {
+  commit: Commit;
+  /** How the file changed in this commit, against its first parent. */
+  status: FileChangeStatus;
+}
+
+/**
+ * Every commit that changed one file.
+ *
+ * Compares blob hashes rather than content, so walking a long history costs
+ * one map lookup per commit. A commit that did not touch the file is skipped
+ * entirely rather than reported as an unchanged entry — a file history listing
+ * commits that left the file alone is just the branch log.
+ */
+export function fileHistory(repo: Repo, path: string, branch = repo.head): FileHistoryEntry[] {
+  const out: FileHistoryEntry[] = [];
+  for (const commit of log(repo, branch)) {
+    const parent = commit.parents[0] ? repo.commits[commit.parents[0]] : undefined;
+    const before = parent?.tree[path];
+    const after = commit.tree[path];
+    if (before === after) continue;
+    if (after === undefined) out.push({ commit, status: 'deleted' });
+    else if (before === undefined) out.push({ commit, status: 'added' });
+    else out.push({ commit, status: 'modified' });
+  }
+  return out;
+}
+
+export interface TreeComparison {
+  changes: FileChange[];
+  additions: number;
+  deletions: number;
+}
+
+/**
+ * What differs between two commits, in either direction.
+ *
+ * Used for comparing branches as well as commits: a branch is named by the
+ * commit at its tip, so both comparisons are the same operation.
+ */
+export function compareCommits(repo: Repo, fromId: string, toId: string): TreeComparison | null {
+  const from = repo.commits[fromId];
+  const to = repo.commits[toId];
+  if (!from || !to) return null;
+
+  const changes: FileChange[] = [];
+  for (const path of new Set([...Object.keys(from.tree), ...Object.keys(to.tree)])) {
+    const before = from.tree[path];
+    const after = to.tree[path];
+    if (before === after) continue;
+    if (before === undefined) changes.push({ path, status: 'added' });
+    else if (after === undefined) changes.push({ path, status: 'deleted' });
+    else changes.push({ path, status: 'modified' });
+  }
+  changes.sort((a, b) => a.path.localeCompare(b.path));
+
+  let additions = 0;
+  let deletions = 0;
+  for (const change of changes) {
+    const stat = diffStat(
+      repo.blobs[from.tree[change.path]] ?? '',
+      repo.blobs[to.tree[change.path]] ?? '',
+    );
+    additions += stat.additions;
+    deletions += stat.deletions;
+  }
+  return { changes, additions, deletions };
+}
+
+/** Compare two branches by their tips. Null when either has no commits yet. */
+export function compareBranches(repo: Repo, from: string, to: string): TreeComparison | null {
+  const fromId = repo.branches[from];
+  const toId = repo.branches[to];
+  if (!fromId || !toId) return null;
+  return compareCommits(repo, fromId, toId);
+}
+
+export interface CommitQuery {
+  /** Substring matched against the message. */
+  text: string;
+  /** Substring matched against the author name. */
+  author: string;
+  /** Inclusive epoch-millisecond bounds, when given. */
+  since: number | null;
+  until: number | null;
+}
+
+export const EMPTY_COMMIT_QUERY: CommitQuery = { text: '', author: '', since: null, until: null };
+
+/** Filter a commit list. Pure, so the panel and its tests share one rule. */
+export function searchCommits(commits: Commit[], query: CommitQuery): Commit[] {
+  const text = query.text.trim().toLowerCase();
+  const author = query.author.trim().toLowerCase();
+  return commits.filter((commit) => {
+    if (text && !commit.message.toLowerCase().includes(text) && !commit.id.startsWith(text)) {
+      return false;
+    }
+    if (author && !commit.author.toLowerCase().includes(author)) return false;
+    if (query.since !== null && commit.timestamp < query.since) return false;
+    if (query.until !== null && commit.timestamp > query.until) return false;
+    return true;
+  });
+}
+
 export function indexContent(repo: Repo, path: string): string {
   const hash = repo.index[path];
   return hash ? (repo.blobs[hash] ?? '') : '';

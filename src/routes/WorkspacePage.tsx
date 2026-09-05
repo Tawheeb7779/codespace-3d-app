@@ -6,6 +6,7 @@ import { WorkspaceTopBar } from '@/components/ide/WorkspaceTopBar';
 import { FileExplorer } from '@/components/ide/FileExplorer';
 import { ProjectPanel } from '@/components/ide/ProjectPanel';
 import { ActivityPanel } from '@/components/ide/ActivityPanel';
+import { TasksPanel } from '@/components/ide/TasksPanel';
 import { Onboarding } from '@/components/ide/Onboarding';
 import { SearchPanel } from '@/components/ide/SearchPanel';
 import { GitPanel } from '@/components/ide/GitPanel';
@@ -15,7 +16,7 @@ import { MembersPanel } from '@/components/ide/MembersPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
-import { formatDocument } from '@/lib/editorActions';
+import { EDITOR_COMMANDS, formatDocument, runEditorAction } from '@/lib/editorActions';
 import { PreviewPanel } from '@/components/ide/PreviewPanel';
 import { BottomPanel } from '@/components/ide/BottomPanel';
 import { StatusBar } from '@/components/ide/StatusBar';
@@ -32,11 +33,13 @@ import type { RemoteResult } from '@/stores/gitStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useTerminalStore } from '@/stores/terminalStore';
+import { useTaskStore } from '@/stores/taskStore';
 import { toast } from '@/stores/toastStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import { isTextFile } from '@/lib/vfs';
 import { canFormat } from '@/lib/languages';
+import { buildProblems, mergeProblems, nextProblem } from '@/lib/problems';
 import { cx, errorMessage } from '@/lib/utils';
 
 function SidePanel() {
@@ -46,6 +49,8 @@ function SidePanel() {
       return <ProjectPanel />;
     case 'activity':
       return <ActivityPanel />;
+    case 'tasks':
+      return <TasksPanel />;
     case 'search':
       return <SearchPanel />;
     case 'git':
@@ -175,6 +180,8 @@ export default function WorkspacePage() {
   const gitHead = useGitStore((s) => s.repo.head);
   const hasRemote = useGitStore((s) => Boolean(s.remote));
   const requestCreate = useUIStore((s) => s.requestCreate);
+  const taskConfigs = useTaskStore((s) => s.configs);
+  const taskBusy = useTaskStore((s) => s.activeRunId !== null);
   const requestReplace = useUIStore((s) => s.requestReplace);
   const loadGit = useGitStore((s) => s.load);
   const gitInit = useGitStore((s) => s.init);
@@ -258,6 +265,35 @@ export default function WorkspacePage() {
    * unconditional `toggleBottom()` always landed on closed — the shortcut and
    * the command could hide the panel but never bring it back.
    */
+  /**
+   * Move to the next or previous diagnostic.
+   *
+   * Reads the same merged list the Problems panel shows, so the keyboard and
+   * the panel can never disagree about what "next" means.
+   */
+  const goToProblem = useCallback((direction: 1 | -1) => {
+    const editor = useEditorStore.getState();
+    const preview = usePreviewStore.getState();
+    const all = mergeProblems([
+      buildProblems(preview.errors),
+      buildProblems(preview.warnings),
+      editor.problems,
+    ]);
+    const target = nextProblem(
+      all,
+      editor.activePath
+        ? {
+            path: editor.activePath,
+            line: editor.cursor.line,
+            column: editor.cursor.column,
+          }
+        : null,
+      direction,
+    );
+    if (target) editor.revealLocation(target.path, target.line, target.column);
+    else toast.info('No problems reported');
+  }, []);
+
   /** Run a remote operation and report exactly what GitHub answered. */
   const runRemote = useCallback(async (action: () => Promise<RemoteResult>) => {
     try {
@@ -384,6 +420,26 @@ export default function WorkspacePage() {
         group: 'View',
         label: 'Show activity and who is here',
         run: () => setSidebarPanel('activity'),
+      },
+      {
+        id: 'view.tasks',
+        group: 'View',
+        label: 'Show tasks and run configurations',
+        run: () => setSidebarPanel('tasks'),
+      },
+      {
+        id: 'problems.next',
+        group: 'Go',
+        label: 'Go to next problem',
+        keys: 'f8',
+        run: () => goToProblem(1),
+      },
+      {
+        id: 'problems.previous',
+        group: 'Go',
+        label: 'Go to previous problem',
+        keys: 'shift+f8',
+        run: () => goToProblem(-1),
       },
       {
         id: 'view.explorer',
@@ -536,6 +592,41 @@ export default function WorkspacePage() {
       },
     ];
 
+    // Monaco's own actions, surfaced by name. Each reports honestly when the
+    // language cannot support it rather than appearing to do nothing.
+    const editorCommands: Command[] = EDITOR_COMMANDS.map((entry) => ({
+      id: entry.id,
+      group: 'Code',
+      label: entry.label,
+      disabled: !activePath,
+      run: () => {
+        void runEditorAction(entry.action).then((ran) => {
+          if (ran) return;
+          toast.info(
+            `${entry.label} is not available here`,
+            entry.needsLanguageService
+              ? 'This needs a language service, which runs for JavaScript and TypeScript.'
+              : 'The editor did not accept that action for this file.',
+          );
+        });
+      },
+    }));
+
+    // Every saved run configuration is a command, so a task is reachable from
+    // the keyboard without opening its panel.
+    const taskCommands: Command[] = taskConfigs.map((config) => ({
+      id: `task.run.${config.id}`,
+      group: 'Tasks',
+      label: `Run task: ${config.name}`,
+      disabled: taskBusy,
+      run: () => {
+        void useTaskStore
+          .getState()
+          .start(config.id)
+          .catch((error) => toast.error('Could not start the task', errorMessage(error)));
+      },
+    }));
+
     // One entry per branch beats a picker nobody can find: switching is a
     // real checkout through the same store the panel uses.
     const branchCommands: Command[] = Object.keys(gitBranches)
@@ -549,7 +640,7 @@ export default function WorkspacePage() {
         run: gitAction(`Switched to ${branch}`, () => useGitStore.getState().checkout(branch)),
       }));
 
-    return [...base, ...branchCommands];
+    return [...base, ...editorCommands, ...taskCommands, ...branchCommands];
   }, [
     activePath,
     appearance.theme,
@@ -558,6 +649,7 @@ export default function WorkspacePage() {
     closeOthers,
     closeTab,
     gitAction,
+    goToProblem,
     gitBranches,
     gitHead,
     gitInit,
@@ -575,6 +667,8 @@ export default function WorkspacePage() {
     setQuickOpenOpen,
     setSidebarPanel,
     tabs.length,
+    taskBusy,
+    taskConfigs,
     togglePreview,
     toggleSidebar,
     toggleTerminalPanel,

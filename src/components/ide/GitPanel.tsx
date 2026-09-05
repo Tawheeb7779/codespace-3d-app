@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
   GitBranch,
@@ -130,6 +130,8 @@ export function GitPanel() {
   const [busy, setBusy] = useState(false);
   const [confirmDeleteBranch, setConfirmDeleteBranch] = useState<string | null>(null);
   const [inspecting, setInspecting] = useState<string | null>(null);
+  const [query, setQuery] = useState<vcs.CommitQuery>(vcs.EMPTY_COMMIT_QUERY);
+  const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [inspectPath, setInspectPath] = useState<string | null>(null);
   const [tab, setTab] = useState<'changes' | 'history'>('changes');
 
@@ -147,6 +149,14 @@ export function GitPanel() {
       setBusy(false);
     }
   };
+
+  const visibleHistory = useMemo(() => vcs.searchCommits(history, query), [history, query]);
+  // Real history for one file, from the stored trees — commits that left the
+  // file untouched are not listed.
+  const fileLog = useMemo(
+    () => (historyPath ? vcs.fileHistory(repo, historyPath) : []),
+    [repo, historyPath],
+  );
 
   if (!repo.initialized) {
     return (
@@ -390,8 +400,15 @@ export function GitPanel() {
                 <span className="truncate text-sm text-ink">{selectedPath}</span>
                 <button
                   type="button"
-                  onClick={() => select(null)}
+                  onClick={() => setHistoryPath(selectedPath)}
                   className="ml-auto text-sm text-ink-faint hover:text-ink"
+                >
+                  History
+                </button>
+                <button
+                  type="button"
+                  onClick={() => select(null)}
+                  className="text-sm text-ink-faint hover:text-ink"
                 >
                   Close
                 </button>
@@ -406,10 +423,63 @@ export function GitPanel() {
         </div>
       ) : (
         <div className="scrollbar-thin flex-1 overflow-y-auto">
+          <div className="space-y-1.5 border-b border-line p-2.5">
+            <input
+              aria-label="Search commits"
+              value={query.text}
+              onChange={(event) => setQuery((current) => ({ ...current, text: event.target.value }))}
+              placeholder="Search messages or a commit id"
+              className="h-7 w-full rounded border border-line bg-surface-sunken px-2 text-base text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+            />
+            <div className="grid grid-cols-3 gap-1.5">
+              <input
+                aria-label="Filter by author"
+                value={query.author}
+                onChange={(event) =>
+                  setQuery((current) => ({ ...current, author: event.target.value }))
+                }
+                placeholder="Author"
+                className="h-6 rounded border border-line bg-surface-sunken px-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+              />
+              <input
+                aria-label="Commits since"
+                type="date"
+                onChange={(event) =>
+                  setQuery((current) => ({
+                    ...current,
+                    since: event.target.value ? new Date(event.target.value).getTime() : null,
+                  }))
+                }
+                className="h-6 rounded border border-line bg-surface-sunken px-2 text-sm text-ink focus:border-accent focus:outline-none"
+              />
+              <input
+                aria-label="Commits until"
+                type="date"
+                onChange={(event) =>
+                  setQuery((current) => ({
+                    ...current,
+                    // Inclusive of the chosen day, not midnight at its start.
+                    until: event.target.value
+                      ? new Date(event.target.value).getTime() + 86_399_999
+                      : null,
+                  }))
+                }
+                className="h-6 rounded border border-line bg-surface-sunken px-2 text-sm text-ink focus:border-accent focus:outline-none"
+              />
+            </div>
+            {visibleHistory.length !== history.length && (
+              <p className="text-sm text-ink-faint">
+                {visibleHistory.length} of {history.length} commits
+              </p>
+            )}
+          </div>
+
           {!history.length ? (
             <EmptyState title="No commits yet" description="Stage some files and make your first commit." />
+          ) : !visibleHistory.length ? (
+            <EmptyState title="No commits match" description="Nothing matches this search." />
           ) : (
-            history.map((entry) => (
+            visibleHistory.map((entry) => (
               <button
                 key={entry.id}
                 type="button"
@@ -620,6 +690,49 @@ export function GitPanel() {
               </div>
             )}
           </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(historyPath)}
+        onClose={() => setHistoryPath(null)}
+        title={historyPath ? `History of ${basename(historyPath)}` : ''}
+        description={historyPath ?? ''}
+        size="lg"
+        footer={<Button onClick={() => setHistoryPath(null)}>Close</Button>}
+      >
+        {fileLog.length ? (
+          <ol className="overflow-hidden rounded border border-line">
+            {fileLog.map((entry) => (
+              <li
+                key={entry.commit.id}
+                className="flex items-center gap-2 border-b border-line px-2 py-1.5 last:border-0"
+              >
+                <GitCommitHorizontal aria-hidden className="h-3.5 w-3.5 shrink-0 text-accent" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-base text-ink">{entry.commit.message}</span>
+                  <span className="block truncate text-sm text-ink-faint">
+                    {entry.commit.author} · {formatTimeAgo(entry.commit.timestamp)} ·{' '}
+                    <span className="font-mono">{entry.commit.id.slice(0, 7)}</span>
+                  </span>
+                </span>
+                <span className="shrink-0 text-xs text-ink-faint">{entry.status}</span>
+                <Button
+                  size="xs"
+                  onClick={() => {
+                    setHistoryPath(null);
+                    setInspecting(entry.commit.id);
+                  }}
+                >
+                  Open
+                </Button>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-base text-ink-muted">
+            No commit on this branch has changed this file yet.
+          </p>
         )}
       </Modal>
 

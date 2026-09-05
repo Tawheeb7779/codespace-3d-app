@@ -17,6 +17,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Field';
 import { FileIcon, DirIcon } from '@/components/ide/FileIcon';
+import { OutlinePanel } from '@/components/ide/OutlinePanel';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -63,6 +64,7 @@ export function FileExplorer() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [target, setTarget] = useState<{ path: string; type: 'file' | 'dir' } | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(600);
   const listRef = useRef<HTMLDivElement>(null);
@@ -453,6 +455,21 @@ export function FileExplorer() {
           </div>
         )}
       </div>
+
+      <details className="shrink-0 border-t border-line" open={outlineOpen}>
+        <summary
+          className="cursor-pointer px-2.5 py-1 text-sm text-ink-muted"
+          onClick={(event) => {
+            event.preventDefault();
+            setOutlineOpen((value) => !value);
+          }}
+        >
+          Outline
+        </summary>
+        <div className="h-48 overflow-hidden border-t border-line">
+          <OutlinePanel />
+        </div>
+      </details>
 
       <Menu items={menuItems} anchor={menu.anchor} onClose={menu.close} label="File actions" />
 

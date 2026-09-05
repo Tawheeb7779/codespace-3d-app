@@ -20,6 +20,9 @@ import { useGitStore } from '@/stores/gitStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { buildPreview } from '@/lib/preview';
+import { unifiedDiff } from '@/lib/diff';
+import { headContent as vcsHeadContent } from '@/lib/vcs';
+import { isSensitivePath, readableFiles } from '@/lib/vfs';
 import { useAgentStore, projectContextHeader, readCache } from '@/stores/agentStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { recordActivity } from '@/stores/activityStore';
@@ -89,6 +92,9 @@ interface AiState {
 }
 
 let controller: AbortController | null = null;
+
+/** Ceiling on the diff handed to a model, so one turn cannot carry a project. */
+const MAX_DIFF_CHARS = 40_000;
 
 /**
  * Build the tool context bound to the currently open project.
@@ -170,6 +176,36 @@ function toolContext(): ToolContext {
         detail: `${problems.length} problem(s) reported`,
       });
       return lines.join('\n');
+    },
+
+    /**
+     * The project's uncommitted changes, as a real unified diff.
+     *
+     * Built from the repository's HEAD tree against the working files — the
+     * same comparison the source control panel shows — and filtered through
+     * the protected-path policy, so a review can never be handed a secret.
+     */
+    gitDiff() {
+      const git = useGitStore.getState();
+      if (!git.repo.initialized) return '';
+      const files = readableFiles(useFileStore.getState().files);
+      const changed = [...git.status.staged, ...git.status.unstaged];
+      const seen = new Set<string>();
+      const parts: string[] = [];
+      for (const change of changed) {
+        if (seen.has(change.path)) continue;
+        seen.add(change.path);
+        if (isSensitivePath(change.path)) continue;
+        const before = vcsHeadContent(git.repo, change.path);
+        const after = files[change.path] ?? '';
+        const patch = unifiedDiff(change.path, before, after);
+        if (patch) parts.push(patch);
+        if (parts.join('\n').length > MAX_DIFF_CHARS) {
+          parts.push('… (diff truncated)');
+          break;
+        }
+      }
+      return parts.join('\n\n');
     },
 
     onChange: (path, kind, before, after) => agent.noteChange(path, kind, before, after),
