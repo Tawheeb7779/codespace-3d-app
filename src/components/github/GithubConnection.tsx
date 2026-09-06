@@ -80,7 +80,12 @@ export function GithubConnection({ compact = false }: { compact?: boolean }) {
   if (status === 'checking' || status === 'unknown') {
     return (
       <div className="flex items-center gap-2 text-base text-ink-muted">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking GitHub…
+        {/* The label is in an element of its own because the branch beside
+            this one renders a <div> too, so React reuses this node and
+            reconciles its children — and a bare text node an extension has
+            replaced is one React can no longer remove. */}
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <span>Checking GitHub…</span>
       </div>
     );
   }

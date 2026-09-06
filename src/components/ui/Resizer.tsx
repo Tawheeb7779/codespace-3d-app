@@ -20,14 +20,24 @@ export function Resizer({ orientation, onResize, onDoubleClick, label, step = 16
   const dragging = useRef(false);
   const vertical = orientation === 'vertical';
 
+  /**
+   * Every caller passes `onResize` as an inline arrow closing over the current
+   * size, so it is a different function after each move. Read it through a ref
+   * rather than depending on it: with it in the effect's dependencies, the
+   * render each move caused tore the listeners down, the cleanup called `stop`,
+   * and the drag ended after a single step.
+   */
+  const latestResize = useRef(onResize);
+  latestResize.current = onResize;
+
   const onPointerMove = useCallback(
     (event: PointerEvent) => {
       if (!dragging.current) return;
       const current = vertical ? event.clientX : event.clientY;
-      onResize(current - start.current);
+      latestResize.current(current - start.current);
       start.current = current;
     },
-    [onResize, vertical],
+    [vertical],
   );
 
   const stop = useCallback(() => {

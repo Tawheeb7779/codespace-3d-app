@@ -73,6 +73,15 @@ export function StatusBar() {
   const errors = problems.filter((p) => p.severity === 'error').length;
   const warnings = problems.filter((p) => p.severity === 'warning').length;
 
+  /** The save reading, as an icon that may be absent and a label that never is. */
+  const save: { icon: React.ReactNode; label: string; at: number | null } = saving
+    ? { icon: <Loader2 className="h-3 w-3 animate-spin" />, label: 'saving', at: null }
+    : dirty.size
+      ? { icon: null, label: `${dirty.size} unsaved`, at: null }
+      : lastSavedAt
+        ? { icon: <Check className="h-3 w-3 text-positive" />, label: 'saved', at: lastSavedAt }
+        : { icon: null, label: 'no changes', at: null };
+
   return (
     // `overflow-hidden` is the backstop: whatever the readings add up to, the
     // bar is one 24px line and nothing escapes it onto the row below.
@@ -103,15 +112,19 @@ export function StatusBar() {
         </Item>
         {previewStatus !== 'idle' && (
           <Item tone={previewStatus === 'error' ? 'danger' : 'accent'}>
-            {previewStatus === 'building' ? (
-              <>
-                <Loader2 className="h-3 w-3 animate-spin" /> building
-              </>
-            ) : previewStatus === 'error' ? (
-              'build failed'
-            ) : (
-              'preview running'
-            )}
+            {/* The spinner comes and goes; the label does not. Keeping the text
+                inside an element that survives every transition means React
+                only ever inserts or removes next to an element it still owns —
+                a bare text node here is one an extension can replace, and then
+                the removal throws. */}
+            {previewStatus === 'building' && <Loader2 className="h-3 w-3 animate-spin" />}
+            <span>
+              {previewStatus === 'building'
+                ? 'building'
+                : previewStatus === 'error'
+                  ? 'build failed'
+                  : 'preview running'}
+            </span>
           </Item>
         )}
       </div>
@@ -123,23 +136,15 @@ export function StatusBar() {
           </Item>
         )}
         {role !== 'owner' && role !== 'editor' && <Item tone="caution">read-only</Item>}
+        {/* Same shape as the preview reading: the icon is the part that
+            changes, the label stays in an element of its own. */}
         <Item>
-          {saving ? (
-            <>
-              <Loader2 className="h-3 w-3 animate-spin" /> saving
-            </>
-          ) : dirty.size ? (
-            `${dirty.size} unsaved`
-          ) : lastSavedAt ? (
-            <>
-              <Check className="h-3 w-3 text-positive" />
-              <span>saved</span>
-              {/* The relative time is what pushed this reading past the width
-                  a phone can give it. */}
-              <span className="hidden sm:inline">{formatTimeAgo(lastSavedAt)}</span>
-            </>
-          ) : (
-            'no changes'
+          {save.icon}
+          <span>{save.label}</span>
+          {/* The relative time is what pushed this reading past the width a
+              phone can give it. */}
+          {save.at !== null && (
+            <span className="hidden sm:inline">{formatTimeAgo(save.at)}</span>
           )}
         </Item>
         {activePath && (

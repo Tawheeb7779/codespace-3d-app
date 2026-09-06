@@ -110,7 +110,12 @@ export function ActivityPanel() {
           </div>
         ) : loading && !events.length ? (
           <div className="flex items-center gap-2 p-2.5 text-sm text-ink-faint">
-            <Spinner className="h-3.5 w-3.5" /> Loading…
+            {/* The label is in an element of its own because the branch beside
+                this one renders a <div> too, so React reuses this node and
+                reconciles its children — and a bare text node an extension has
+                replaced is one React can no longer remove. */}
+            <Spinner className="h-3.5 w-3.5" />
+            <span>Loading…</span>
           </div>
         ) : !events.length ? (
           <EmptyState

@@ -30,6 +30,8 @@ interface PreviewState {
   lastBuildMs: number;
   buildToken: number;
   run: () => Promise<void>;
+  /** One build, from the files as they are now. Sequenced by `run`. */
+  buildOnce: () => Promise<void>;
   stop: () => void;
   refresh: () => Promise<void>;
   setDevice: (device: DevicepreSet) => void;
@@ -41,7 +43,29 @@ export const DEVICE_SIZES: Record<DevicepreSet, { width: number; height: number;
   mobile: { width: 390, height: 844, label: '390 × 844' },
 };
 
+/** A build is in flight, so `run` must not start a second one alongside it. */
 let running = false;
+/**
+ * Which build the store is waiting for.
+ *
+ * `buildPreview` takes as long as the project takes, and in that window the
+ * user can stop the preview. The result then arrived and put the document and
+ * the running status back, so a preview the user had dismissed reappeared
+ * showing the code as it was before they stopped it. Every write below is
+ * therefore conditional on the build still being the one that was asked for;
+ * `stop` moves this on, which is what makes an outstanding build irrelevant.
+ */
+let generation = 0;
+/**
+ * A run asked for while one was already going.
+ *
+ * Returning early used to be the whole answer, and it lost the request: the
+ * panel only asks again when the file map changes, so an edit saved during a
+ * build left the preview on the older bundle with nothing to bring it forward.
+ * Remembering it here rebuilds once, on the newest files, however many requests
+ * arrived meanwhile.
+ */
+let queued = false;
 
 export const usePreviewStore = create<PreviewState>()((set, get) => ({
   status: 'idle',
@@ -57,14 +81,35 @@ export const usePreviewStore = create<PreviewState>()((set, get) => ({
   buildToken: 0,
 
   async run() {
-    if (running) return;
+    if (running) {
+      queued = true;
+      return;
+    }
     running = true;
+    try {
+      // A request that arrived during a build is served here, once, on
+      // whatever the files are by then.
+      do {
+        queued = false;
+        await get().buildOnce();
+      } while (queued);
+    } finally {
+      running = false;
+    }
+  },
+
+  async buildOnce() {
+    const mine = ++generation;
     const { clearConsoleOnRun } = useSettingsStore.getState().runtime;
     set({ status: 'building' });
     try {
       const files = useFileStore.getState().files;
       set({ builtFrom: files });
       const result = await buildPreview(files);
+      // Past this point the build may no longer be the one anyone is waiting
+      // for: `stop` and a newer request both move the generation on. Say
+      // nothing and write nothing.
+      if (mine !== generation) return;
       if (clearConsoleOnRun) {
         // Keep build diagnostics; drop stale runtime noise from the last run.
         useConsoleStore.setState((state) => ({
@@ -104,18 +149,21 @@ export const usePreviewStore = create<PreviewState>()((set, get) => ({
         buildToken: get().buildToken + 1,
       });
     } catch (error) {
+      if (mine !== generation) return;
       const message = errorMessage(error);
       consoleLog.build(message, 'error');
       set({
         status: 'error',
         errors: [{ path: '', line: 1, column: 1, message, severity: 'error' }],
       });
-    } finally {
-      running = false;
     }
   },
 
   stop() {
+    // Whatever is still building belongs to a preview the user has dismissed,
+    // and a rebuild queued behind it was for the same one.
+    generation++;
+    queued = false;
     set({ status: 'idle', document: '', builtFrom: null, buildToken: get().buildToken + 1 });
     consoleLog.build('Preview stopped', 'info');
   },
