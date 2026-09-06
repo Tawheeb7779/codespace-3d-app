@@ -35,6 +35,8 @@ interface EditorState {
   closeTab: (path: string) => void;
   closeOthers: (path: string) => void;
   closeAll: () => void;
+  /** Close every tab whose file has nothing unsaved, keeping pinned ones. */
+  closeSaved: (isDirty: (path: string) => boolean) => void;
   setActive: (path: string) => void;
   reorder: (from: number, to: number) => void;
   togglePin: (path: string) => void;
@@ -150,12 +152,39 @@ export const useEditorStore = create<EditorState>()(
     }),
 
   closeOthers: (path) =>
-    set((state) => ({
-      tabs: state.tabs.filter((tab) => tab.path === path || tab.pinned),
-      activePath: path,
-    })),
+    set((state) => {
+      const tabs = state.tabs.filter((tab) => tab.path === path || tab.pinned);
+      return {
+        tabs,
+        activePath: path,
+        // The side pane only renders a path that still has a tab; leaving it
+        // pointing at a closed one lit the split button over an empty pane.
+        splitPath: tabs.some((tab) => tab.path === state.splitPath) ? state.splitPath : null,
+      };
+    }),
 
   closeAll: () => set({ tabs: [], activePath: null, splitPath: null }),
+
+  /**
+   * Close everything with nothing unsaved in it.
+   *
+   * Tab state and file content are separate here — closing a tab never discards
+   * an edit, it just stops showing it — so this is a tidying action rather than
+   * a destructive one, and it is the reason no close asks for confirmation.
+   * Pinned tabs stay, as they do for "close others".
+   */
+  closeSaved: (isDirty) =>
+    set((state) => {
+      const tabs = state.tabs.filter((tab) => tab.pinned || isDirty(tab.path));
+      const activePath = tabs.some((tab) => tab.path === state.activePath)
+        ? state.activePath
+        : (tabs[0]?.path ?? null);
+      return {
+        tabs,
+        activePath,
+        splitPath: tabs.some((tab) => tab.path === state.splitPath) ? state.splitPath : null,
+      };
+    }),
 
   setActive: (path) => set({ activePath: path }),
 

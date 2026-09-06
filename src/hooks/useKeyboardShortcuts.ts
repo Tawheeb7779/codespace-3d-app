@@ -47,7 +47,12 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const chord = chordFromEvent(event);
-      const binding = keybindings.find((b) => b.keys === chord);
+      // A chord a user has bound always wins over a fixed alternate, so
+      // rebinding a command can never be shadowed by another one's convenience
+      // chord.
+      const binding =
+        keybindings.find((b) => b.keys === chord) ??
+        keybindings.find((b) => b.alternate?.includes(chord));
       if (!binding) return;
       const handler = handlers[binding.id];
       if (!handler) return;

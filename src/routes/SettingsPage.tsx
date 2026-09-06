@@ -420,6 +420,14 @@ export default function SettingsPage() {
                     className="flex items-center justify-between gap-3 border-b border-line px-3 py-2 last:border-0"
                   >
                     <span className="text-base text-ink">{binding.label}</span>
+                    {/* The fixed second chord, shown so it is discoverable
+                        rather than folklore. Only the button beside it is the
+                        binding a user owns and can change. */}
+                    {binding.alternate?.length ? (
+                      <span className="ml-auto font-mono text-sm text-ink-faint">
+                        {binding.alternate.map(formatChord).join(' / ')}
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => setRecording(binding.id)}

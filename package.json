@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "audit:reconciliation": "node scripts/audit-reconciliation.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run audit:reconciliation && npm run test && npm run build",
     "test:e2e": "node e2e/smoke.mjs",
     "build:preview-runtime": "node scripts/build-preview-runtime.mjs",
     "predev": "npm run build:preview-runtime",
@@ -27,7 +28,8 @@
     "test:e2e:collab": "node e2e/collaboration.mjs",
     "test:e2e:devexp": "node e2e/devexp.mjs",
     "test:schema": "node scripts/check-schema-conformance.mjs",
-    "test:e2e:integration": "node e2e/integration.mjs"
+    "test:e2e:integration": "node e2e/integration.mjs",
+    "test:e2e:polish": "node e2e/polish.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

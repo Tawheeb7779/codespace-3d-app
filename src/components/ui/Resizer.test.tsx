@@ -31,9 +31,10 @@ const down = (node: Element, x: number) =>
     );
   });
 
-const move = (x: number) =>
+/** `buttons` is 1 while a button is held and 0 once it is not. */
+const move = (x: number, buttons = 1) =>
   act(() => {
-    window.dispatchEvent(pointer('pointermove', { clientX: x, clientY: x }));
+    window.dispatchEvent(pointer('pointermove', { clientX: x, clientY: x, buttons }));
   });
 
 const up = () =>
@@ -102,6 +103,53 @@ describe('dragging a divider', () => {
     up();
     expect(document.body.style.cursor).toBe('');
     expect(document.body.style.userSelect).toBe('');
+  });
+
+  /**
+   * Releasing the button outside the browser window delivers no pointerup, so
+   * the divider used to still believe it was being dragged: moving the pointer
+   * back over the page resized the panel with no button held.
+   */
+  it('gives up the drag when the button was released outside the window', () => {
+    const deltas: number[] = [];
+    const { getByRole } = render(
+      <Resizer orientation="vertical" label="Resize" onResize={(d) => deltas.push(d)} />,
+    );
+
+    down(getByRole('separator'), 100);
+    move(110);
+    // The user let go somewhere off-window; the next move carries no buttons.
+    move(200, 0);
+    move(300);
+
+    expect(deltas).toEqual([10]);
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  /**
+   * The preview divider sits next to a cross-origin iframe, which swallows
+   * pointer events once the pointer crosses into it. Capturing the pointer on
+   * pointerdown retargets every later event to the handle, so the drag keeps
+   * running over the preview instead of dying at its edge.
+   */
+  it('captures the pointer so the drag survives crossing an iframe', () => {
+    const captured: number[] = [];
+    const released: number[] = [];
+    Element.prototype.setPointerCapture = function (id: number) {
+      captured.push(id);
+    };
+    Element.prototype.releasePointerCapture = function (id: number) {
+      released.push(id);
+    };
+    Element.prototype.hasPointerCapture = () => true;
+
+    const { getByRole } = render(
+      <Resizer orientation="vertical" label="Resize" onResize={() => {}} />,
+    );
+    down(getByRole('separator'), 100);
+    expect(captured.length).toBe(1);
+    up();
+    expect(released.length).toBe(1);
   });
 
   it('does not hold the cursor after the divider is unmounted mid-drag', () => {

@@ -30,21 +30,38 @@ export function Resizer({ orientation, onResize, onDoubleClick, label, step = 16
   const latestResize = useRef(onResize);
   latestResize.current = onResize;
 
+  /** The handle, so the drag can hold the pointer and give it back. */
+  const handleRef = useRef<HTMLDivElement>(null);
+  const pointerId = useRef<number | null>(null);
+
+  const stop = useCallback(() => {
+    dragging.current = false;
+    if (pointerId.current !== null) {
+      // Capturing is what keeps the drag alive over the preview iframe; give it
+      // back rather than leaving the handle holding the pointer.
+      handleRef.current?.releasePointerCapture?.(pointerId.current);
+      pointerId.current = null;
+    }
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
+
   const onPointerMove = useCallback(
     (event: PointerEvent) => {
       if (!dragging.current) return;
+      // Releasing the button outside the browser window delivers no pointerup,
+      // so the drag would otherwise still be live when the pointer came back —
+      // the panel resizing with nothing held down. `buttons` says the truth.
+      if (event.buttons === 0) {
+        stop();
+        return;
+      }
       const current = vertical ? event.clientX : event.clientY;
       latestResize.current(current - start.current);
       start.current = current;
     },
-    [vertical],
+    [vertical, stop],
   );
-
-  const stop = useCallback(() => {
-    dragging.current = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  }, []);
 
   useEffect(() => {
     window.addEventListener('pointermove', onPointerMove);
@@ -60,6 +77,7 @@ export function Resizer({ orientation, onResize, onDoubleClick, label, step = 16
 
   return (
     <div
+      ref={handleRef}
       role="separator"
       aria-orientation={vertical ? 'vertical' : 'horizontal'}
       aria-label={label}
@@ -68,9 +86,20 @@ export function Resizer({ orientation, onResize, onDoubleClick, label, step = 16
         event.preventDefault();
         dragging.current = true;
         start.current = vertical ? event.clientX : event.clientY;
+        // Without this the pointer is lost the moment it crosses into the
+        // preview iframe, which is exactly where the preview divider is
+        // dragged. Capturing retargets every later event to this handle.
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          pointerId.current = event.pointerId;
+        } catch {
+          // Older engines and synthetic events; the window listeners still work
+          // everywhere except over a cross-origin frame.
+        }
         document.body.style.cursor = vertical ? 'col-resize' : 'row-resize';
         document.body.style.userSelect = 'none';
       }}
+      onLostPointerCapture={stop}
       onDoubleClick={onDoubleClick}
       onKeyDown={(event) => {
         const back = vertical ? 'ArrowLeft' : 'ArrowUp';

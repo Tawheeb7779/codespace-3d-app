@@ -79,6 +79,19 @@ export interface Keybinding {
   id: string;
   label: string;
   keys: string;
+  /**
+   * Extra chords that also run this command — the ones people already have in
+   * their fingers from other editors. They are fixed rather than rebindable:
+   * `keys` is the binding a user owns and changes, and a row with several
+   * editable chords would be harder to read for a convenience most people
+   * never think about.
+   *
+   * There is more than one because a chord normalises differently per platform.
+   * "Ctrl+`" is `mod+\`` on Windows and Linux, where mod is Ctrl, and
+   * `ctrl+\`` on macOS, where mod is Cmd; listing both is how one physical
+   * shortcut reaches every platform.
+   */
+  alternate?: string[];
 }
 
 /**
@@ -87,10 +100,10 @@ export interface Keybinding {
  * `useKeyboardShortcuts` reads this list rather than hard-coding combinations.
  */
 export const DEFAULT_KEYBINDINGS: Keybinding[] = [
-  { id: 'commandPalette', label: 'Command palette', keys: 'mod+k' },
+  { id: 'commandPalette', label: 'Command palette', keys: 'mod+k', alternate: ['mod+shift+p'] },
   { id: 'quickOpen', label: 'Quick open file', keys: 'mod+p' },
   { id: 'save', label: 'Save file', keys: 'mod+s' },
-  { id: 'toggleTerminal', label: 'Toggle bottom panel', keys: 'mod+j' },
+  { id: 'toggleTerminal', label: 'Toggle bottom panel', keys: 'mod+j', alternate: ['mod+`', 'ctrl+`'] },
   { id: 'toggleSidebar', label: 'Toggle sidebar', keys: 'mod+b' },
   { id: 'togglePreview', label: 'Toggle preview', keys: 'mod+alt+p' },
   { id: 'search', label: 'Search across files', keys: 'mod+shift+f' },
@@ -229,9 +242,14 @@ export const useSettingsStore = create<SettingsState>()(
           git: { ...current.git, ...(saved.git ?? {}) },
           agent: { ...current.agent, ...(saved.agent ?? {}) },
           workspace: { ...current.workspace, ...(saved.workspace ?? {}) },
-          keybindings: DEFAULT_KEYBINDINGS.map(
-            (binding) => saved.keybindings?.find((b) => b.id === binding.id) ?? binding,
-          ),
+          // The label and the alternate chord belong to the release, not to the
+          // user; only the chord they chose is theirs to carry forward.
+          keybindings: DEFAULT_KEYBINDINGS.map((binding) => {
+            const savedKeys = saved.keybindings?.find((b) => b.id === binding.id)?.keys;
+            return typeof savedKeys === 'string' && savedKeys
+              ? { ...binding, keys: savedKeys }
+              : binding;
+          }),
         };
       },
     },

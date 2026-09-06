@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Columns2, Pin, X } from 'lucide-react';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { IconButton } from '@/components/ui/IconButton';
@@ -11,19 +11,62 @@ import { cx } from '@/lib/utils';
 import { useState } from 'react';
 
 export function EditorTabs() {
-  const { tabs, activePath, splitPath, setActive, closeTab, closeOthers, closeAll, togglePin, reorder, setSplit } =
-    useEditorStore();
+  const {
+    tabs,
+    activePath,
+    splitPath,
+    setActive,
+    closeTab,
+    closeOthers,
+    closeAll,
+    closeSaved,
+    togglePin,
+    reorder,
+    setSplit,
+  } = useEditorStore();
   const dirty = useFileStore((s) => s.dirty);
   const menu = useContextMenu();
   const [target, setTarget] = useState<string | null>(null);
   const dragIndex = useRef<number | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Keep the active tab in view.
+   *
+   * A file opened from quick open, the problems panel or a search result
+   * becomes active without anyone having clicked its tab, and with enough tabs
+   * open that tab is somewhere off the end of a strip that scrolls. The editor
+   * then showed a file whose tab could not be seen.
+   */
+  useEffect(() => {
+    if (!activePath) return;
+    const tab = stripRef.current?.querySelector<HTMLElement>(
+      `[data-tab-path="${CSS.escape(activePath)}"]`,
+    );
+    tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activePath]);
 
   if (!tabs.length) return null;
+
+  /** Move focus along the strip, as a tablist is expected to. */
+  const focusTab = (from: number, delta: number) => {
+    const next = (from + delta + tabs.length) % tabs.length;
+    setActive(tabs[next].path);
+    stripRef.current
+      ?.querySelector<HTMLElement>(`[data-tab-path="${CSS.escape(tabs[next].path)}"]`)
+      ?.focus();
+  };
 
   const items: MenuItem[] = target
     ? [
         { id: 'close', label: 'Close', onSelect: () => closeTab(target) },
         { id: 'close-others', label: 'Close others', onSelect: () => closeOthers(target) },
+        {
+          id: 'close-saved',
+          label: 'Close saved',
+          disabled: tabs.every((tab) => dirty.has(tab.path) || tab.pinned),
+          onSelect: () => closeSaved((path) => dirty.has(path)),
+        },
         { id: 'close-all', label: 'Close all', onSelect: closeAll },
         {
           id: 'pin',
@@ -44,6 +87,7 @@ export function EditorTabs() {
   return (
     <>
       <div
+        ref={stripRef}
         role="tablist"
         aria-label="Open editors"
         className="scrollbar-thin flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-line bg-surface"
@@ -54,6 +98,7 @@ export function EditorTabs() {
           return (
             <div
               key={tab.path}
+              data-tab-path={tab.path}
               role="tab"
               aria-selected={active}
               tabIndex={active ? 0 : -1}
@@ -74,6 +119,25 @@ export function EditorTabs() {
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') setActive(tab.path);
                 if (event.key === 'Delete' || event.key === 'Backspace') closeTab(tab.path);
+                // A tablist is walked with the arrow keys; without this the
+                // only way to change tabs from the keyboard was Tab, which
+                // walks straight out of the strip instead.
+                if (event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  focusTab(index, 1);
+                }
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault();
+                  focusTab(index, -1);
+                }
+                if (event.key === 'Home') {
+                  event.preventDefault();
+                  focusTab(index, -index);
+                }
+                if (event.key === 'End') {
+                  event.preventDefault();
+                  focusTab(index, tabs.length - 1 - index);
+                }
               }}
               onContextMenu={(event) => {
                 setTarget(tab.path);

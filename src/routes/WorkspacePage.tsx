@@ -172,8 +172,9 @@ export default function WorkspacePage() {
   } = useUIStore();
 
   const { open, close, loading, error, meta, files, flush, canWrite } = useFileStore();
-  const { activePath, openTab, closeTab, closeOthers, closeAll, tabs, cursor, setSplit } =
+  const { activePath, openTab, closeTab, closeOthers, closeAll, closeSaved, tabs, cursor, setSplit } =
     useEditorStore();
+  const dirty = useFileStore((s) => s.dirty);
   // Reactive slices so the palette re-derives when the repository changes.
   const gitInitialized = useGitStore((s) => s.repo.initialized);
   const gitBranches = useGitStore((s) => s.repo.branches);
@@ -187,9 +188,12 @@ export default function WorkspacePage() {
   const gitInit = useGitStore((s) => s.init);
   const previewRun = usePreviewStore((s) => s.run);
   const previewStop = usePreviewStore((s) => s.stop);
+  const previewRefresh = usePreviewStore((s) => s.refresh);
   const previewStatus = usePreviewStore((s) => s.status);
   const runtime = useSettingsStore((s) => s.runtime);
   const setAppearance = useSettingsStore((s) => s.setAppearance);
+  const editorSettings = useSettingsStore((s) => s.editor);
+  const setEditor = useSettingsStore((s) => s.setEditor);
   const appearance = useSettingsStore((s) => s.appearance);
   const [ready, setReady] = useState(false);
 
@@ -385,11 +389,39 @@ export default function WorkspacePage() {
         run: () => activePath && closeOthers(activePath),
       },
       {
+        id: 'file.closeSaved',
+        group: 'File',
+        label: 'Close saved editor tabs',
+        disabled: tabs.every((tab) => dirty.has(tab.path) || tab.pinned),
+        run: () => closeSaved((path) => dirty.has(path)),
+      },
+      {
         id: 'file.closeAll',
         group: 'File',
         label: 'Close all editor tabs',
         disabled: !tabs.length,
         run: closeAll,
+      },
+      {
+        id: 'view.zoomIn',
+        group: 'View',
+        label: 'Increase editor font size',
+        disabled: editorSettings.fontSize >= 24,
+        run: () => setEditor({ fontSize: Math.min(24, editorSettings.fontSize + 1) }),
+      },
+      {
+        id: 'view.zoomOut',
+        group: 'View',
+        label: 'Decrease editor font size',
+        disabled: editorSettings.fontSize <= 10,
+        run: () => setEditor({ fontSize: Math.max(10, editorSettings.fontSize - 1) }),
+      },
+      {
+        id: 'view.zoomReset',
+        group: 'View',
+        label: 'Reset editor font size',
+        disabled: editorSettings.fontSize === 13,
+        run: () => setEditor({ fontSize: 13 }),
       },
       {
         id: 'edit.format',
@@ -507,6 +539,12 @@ export default function WorkspacePage() {
         run: () => void previewRun(),
       },
       { id: 'run.stop', group: 'Run', label: 'Stop preview', run: previewStop },
+      {
+        id: 'run.restart',
+        group: 'Run',
+        label: 'Restart the preview',
+        run: () => void previewRefresh(),
+      },
       {
         id: 'git.status',
         group: 'Source control',
@@ -647,7 +685,10 @@ export default function WorkspacePage() {
     canWrite,
     closeAll,
     closeOthers,
+    closeSaved,
     closeTab,
+    dirty,
+    editorSettings.fontSize,
     gitAction,
     goToProblem,
     gitBranches,
@@ -656,6 +697,7 @@ export default function WorkspacePage() {
     gitInitialized,
     hasRemote,
     navigate,
+    previewRefresh,
     previewRun,
     previewStop,
     requestCreate,
@@ -664,9 +706,10 @@ export default function WorkspacePage() {
     save,
     setAppearance,
     setBottomTab,
+    setEditor,
     setQuickOpenOpen,
     setSidebarPanel,
-    tabs.length,
+    tabs,
     taskBusy,
     taskConfigs,
     togglePreview,
