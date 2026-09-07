@@ -11,7 +11,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     globals: true,
-    include: ['src/**/*.test.{ts,tsx}'],
+    // `scripts/` holds the standalone checks that ship with the repository —
+    // their tests live beside them rather than under `src/`, which is the
+    // application.
+    include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/lib/**', 'src/stores/**'],

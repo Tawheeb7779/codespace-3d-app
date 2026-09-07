@@ -17,14 +17,21 @@
  *
  * Usage — from the repository root, with your .env in place:
  *
- *   FORGE_TEST_EMAIL=you@example.com FORGE_TEST_PASSWORD=... \
- *     node scripts/verify-cloud-save.mjs
+ *   npm run verify:cloud
+ *
+ * It asks for the account to sign in as. The password is read without echo and
+ * only ever lives in this process: it is not written to .env, not put in the
+ * environment, not passed on a command line where `ps` and shell history would
+ * see it, and never printed — not in a step name, not in an error.
+ *
+ * For a non-interactive run (CI), FORGE_TEST_EMAIL and FORGE_TEST_PASSWORD are
+ * still honoured if they are set. Nothing requires them to be stored anywhere.
  *
  * The account must already exist. Everything it creates is deleted at the end,
  * including on failure. Nothing it prints contains a token, key or password.
  */
 import { readFileSync } from 'node:fs';
-import { env, exit } from 'node:process';
+import { env, exit, stdin, stdout } from 'node:process';
 import { createClient } from '@supabase/supabase-js';
 
 // --------------------------------------------------------------- configuration
@@ -47,19 +54,15 @@ function readEnvFile(path = '.env') {
 const file = readEnvFile();
 const url = env.VITE_SUPABASE_URL ?? file.VITE_SUPABASE_URL;
 const anonKey = env.VITE_SUPABASE_ANON_KEY ?? file.VITE_SUPABASE_ANON_KEY;
-const email = env.FORGE_TEST_EMAIL;
-const password = env.FORGE_TEST_PASSWORD;
 
 const missing = [
   !url && 'VITE_SUPABASE_URL',
   !anonKey && 'VITE_SUPABASE_ANON_KEY',
-  !email && 'FORGE_TEST_EMAIL',
-  !password && 'FORGE_TEST_PASSWORD',
 ].filter(Boolean);
 
 if (missing.length) {
-  console.error(`Missing: ${missing.join(', ')}`);
-  console.error('The first two come from .env; the account is one you already have.');
+  console.error(`Missing from .env: ${missing.join(', ')}`);
+  console.error('These are the same two values the app itself reads.');
   exit(2);
 }
 
@@ -67,6 +70,164 @@ if (/service_role/.test(anonKey) || (anonKey.split('.')[1] ?? '').includes('c2Vy
   console.error('That looks like a service-role key. It bypasses row level security,');
   console.error('so a run with it would prove nothing. Use the anon key.');
   exit(2);
+}
+
+// ------------------------------------------------------------- credentials
+
+/**
+ * Everything read from stdin that a prompt has not consumed yet.
+ *
+ * One reader, not two. An earlier version asked for the email through
+ * `readline` and the password through raw mode, and `readline` buffers whatever
+ * arrives with the line it returns — so a password typed fast enough to land in
+ * the same chunk, or pasted with the email, was swallowed when the interface
+ * closed and the next prompt saw only end-of-input.
+ */
+let pending = '';
+
+/**
+ * Read one line, with the terminal's echo under our control.
+ *
+ * `echo: false` is what keeps a password off the screen, out of the scrollback
+ * and out of a screen share. Raw mode is what makes that possible, so it is
+ * restored on every path out — including Ctrl+C, because leaving a terminal in
+ * raw mode is worse than the error that got us there.
+ */
+function readLine(question, { echo }) {
+  return new Promise((resolve, reject) => {
+    stdout.write(question);
+
+    /** Take a completed line out of the buffer, if there is one. */
+    const takeLine = () => {
+      const at = pending.search(/\r|\n/);
+      if (at === -1) return null;
+      const line = pending.slice(0, at);
+      // Consume the terminator, and the second byte of a CRLF pair.
+      let rest = pending.slice(at + 1);
+      if (pending[at] === '\r' && rest.startsWith('\n')) rest = rest.slice(1);
+      pending = rest;
+      return line;
+    };
+
+    const buffered = takeLine();
+    if (buffered !== null) {
+      // It was already typed or pasted. Echo it only if this prompt echoes.
+      stdout.write(echo ? `${buffered}\n` : '\n');
+      resolve(buffered.trim());
+      return;
+    }
+
+    const wasRaw = stdin.isRaw === true;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+
+    const finish = (error, result) => {
+      stdin.removeListener('data', onData);
+      stdin.setRawMode(wasRaw);
+      stdin.pause();
+      // The newline the suppressed Enter never printed.
+      stdout.write('\n');
+      if (error) reject(error);
+      else resolve(result);
+    };
+
+    const onData = (chunk) => {
+      for (const char of chunk) {
+        // Ctrl+C, and Ctrl+D on an empty line, both mean stop.
+        if (char === '\u0003') return finish(new Error('Cancelled.'));
+        if (char === '\u0004' && !pending) return finish(new Error('Cancelled.'));
+        if (char === '\u0004') continue;
+
+        // Backspace, as either byte a terminal may send for it.
+        if (char === '\u007f' || char === '\b') {
+          if (!pending) continue;
+          pending = pending.slice(0, -1);
+          if (echo) stdout.write('\b \b');
+          continue;
+        }
+
+        pending += char;
+        if (/\r|\n/.test(char)) {
+          const line = takeLine();
+          return finish(null, (line ?? '').trim());
+        }
+        // Arrow keys and the like arrive as escape sequences; none of that
+        // belongs in an email address or a password.
+        if (char < ' ') pending = pending.slice(0, -1);
+        else if (echo) stdout.write(char);
+      }
+    };
+
+    stdin.on('data', onData);
+  });
+}
+
+/**
+ * The account to sign in as.
+ *
+ * The environment still wins when it is set, so a CI job can run this without a
+ * terminal. Otherwise it is asked for here, which is the point: a password kept
+ * in .env is a password on disk, in a file every process in the tree can read,
+ * and one `git add -A` away from being committed.
+ */
+async function credentials() {
+  if (env.FORGE_TEST_EMAIL && env.FORGE_TEST_PASSWORD) {
+    return { email: env.FORGE_TEST_EMAIL, password: env.FORGE_TEST_PASSWORD };
+  }
+  if (!stdin.isTTY) {
+    console.error('No terminal to ask for the account, and no credentials in the environment.');
+    console.error('Run this from a terminal, or set FORGE_TEST_EMAIL and FORGE_TEST_PASSWORD');
+    console.error('for the one command — not in .env, where the password would live on disk.');
+    exit(2);
+  }
+  const host = new URL(url).host;
+  console.log(`Signing in to ${host}. The password is not echoed, stored or logged.\n`);
+  const email = env.FORGE_TEST_EMAIL || (await readLine('Forge account email: ', { echo: true }));
+  if (!email) {
+    console.error('No email given.');
+    exit(2);
+  }
+  const password = env.FORGE_TEST_PASSWORD || (await readLine('Password: ', { echo: false }));
+  if (!password) {
+    console.error('No password given.');
+    exit(2);
+  }
+  return { email, password };
+}
+
+let credentialsForRun;
+try {
+  credentialsForRun = await credentials();
+} catch (error) {
+  // A cancelled prompt, and nothing else: the message is ours, not the user's
+  // input, so printing it cannot leak anything.
+  console.error(error?.message ?? 'Could not read the credentials.');
+  exit(2);
+}
+const { email, password } = credentialsForRun;
+// Drop the only other reference, so the password is reachable from one place.
+credentialsForRun = null;
+
+/**
+ * A last line of defence on the console.
+ *
+ * Nothing below is written to print the password, and nothing does. But the
+ * client library also writes to stderr on a network failure, and "we were
+ * careful" is a weaker guarantee than "it cannot come out of this process".
+ * Anything containing the password is redacted on the way to the terminal.
+ */
+for (const channel of ['log', 'error', 'warn']) {
+  const original = console[channel].bind(console);
+  console[channel] = (...args) => {
+    original(
+      ...args.map((arg) =>
+        typeof arg === 'string' && arg.includes(password)
+          ? arg.split(password).join('[redacted]')
+          : arg,
+      ),
+    );
+  };
 }
 
 // ------------------------------------------------------------------- reporting
@@ -321,11 +482,25 @@ try {
     return `refused (${error.code ?? 'no code'})`;
   });
 } finally {
-  // Clean up whatever got created, whether or not the run succeeded.
-  await client.from('projects').delete().eq('id', projectId);
+  // Clean up whatever got created, whether or not the run succeeded — and
+  // never let the cleanup itself become the output. A run that cannot reach
+  // the database fails at the first step and then fails to delete, and the
+  // report is the thing worth seeing, not a stack trace from the tidying up.
+  let cleanupNote = null;
+  try {
+    const { error } = await client.from('projects').delete().eq('id', projectId);
+    if (error) cleanupNote = error.message;
+  } catch (error) {
+    cleanupNote = error?.message ?? String(error);
+  }
   await client.auth.signOut().catch(() => {});
 
   console.log(`\n${passed} passed, ${failed} failed`);
+  if (cleanupNote) {
+    console.log(`\nCould not delete the project this run created (${projectId}):`);
+    console.log(`  ${cleanupNote}`);
+    console.log('  Remove it from the dashboard if it is there.');
+  }
   if (failed) {
     console.log('\nWhat to do:');
     for (const failure of failures) console.log(`  - ${failure.name}`);
