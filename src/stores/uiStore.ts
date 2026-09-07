@@ -14,6 +14,106 @@ export type SidebarPanel =
 export type BottomTab = 'terminal' | 'problems' | 'output' | 'ports';
 export type MobilePane = 'files' | 'editor' | 'preview' | 'terminal' | 'assistant';
 
+/**
+ * A named arrangement of the workspace.
+ *
+ * These are not new state — each one is a set of values for the panels that
+ * already exist. What they add is the ability to say "I am debugging now"
+ * in one keystroke instead of dragging four dividers, and to get back to
+ * where you were afterwards.
+ */
+export type LayoutId = 'coding' | 'debugging' | 'ai' | 'preview' | 'git' | 'focus';
+
+export interface LayoutPreset {
+  id: LayoutId;
+  label: string;
+  description: string;
+  /** What the panels look like in this arrangement. */
+  apply: Pick<
+    UIState,
+    | 'sidebarPanel'
+    | 'sidebarOpen'
+    | 'previewOpen'
+    | 'bottomOpen'
+    | 'bottomTab'
+  >;
+}
+
+export const LAYOUTS: LayoutPreset[] = [
+  {
+    id: 'coding',
+    label: 'Coding',
+    description: 'Files beside the editor, terminal below, preview to one side.',
+    apply: {
+      sidebarPanel: 'explorer',
+      sidebarOpen: true,
+      previewOpen: true,
+      bottomOpen: true,
+      bottomTab: 'terminal',
+    },
+  },
+  {
+    id: 'debugging',
+    label: 'Debugging',
+    description: 'Problems open and the preview visible, so a fix can be seen landing.',
+    apply: {
+      sidebarPanel: 'explorer',
+      sidebarOpen: true,
+      previewOpen: true,
+      bottomOpen: true,
+      bottomTab: 'problems',
+    },
+  },
+  {
+    id: 'ai',
+    label: 'Assistant',
+    description: 'The assistant beside the editor, with its output panel below.',
+    apply: {
+      sidebarPanel: 'assistant',
+      sidebarOpen: true,
+      previewOpen: false,
+      bottomOpen: true,
+      bottomTab: 'output',
+    },
+  },
+  {
+    id: 'preview',
+    label: 'Preview',
+    description: 'The running app takes the width; the tree steps out of the way.',
+    apply: {
+      sidebarPanel: 'explorer',
+      sidebarOpen: false,
+      previewOpen: true,
+      bottomOpen: false,
+      bottomTab: 'terminal',
+    },
+  },
+  {
+    id: 'git',
+    label: 'Source control',
+    description: 'Changes and history beside the diff.',
+    apply: {
+      sidebarPanel: 'git',
+      sidebarOpen: true,
+      previewOpen: false,
+      bottomOpen: false,
+      bottomTab: 'terminal',
+    },
+  },
+  {
+    id: 'focus',
+    label: 'Focus',
+    description: 'The editor and the status bar. Nothing else.',
+    apply: {
+      sidebarPanel: 'explorer',
+      sidebarOpen: false,
+      previewOpen: false,
+      bottomOpen: false,
+      bottomTab: 'terminal',
+    },
+  },
+];
+
 interface UIState {
   sidebarPanel: SidebarPanel;
   sidebarOpen: boolean;
@@ -35,6 +135,13 @@ interface UIState {
   searchWantsReplace: boolean;
   mobilePane: MobilePane;
   mobileDrawerOpen: boolean;
+  /** The arrangement last chosen, so the workspace can say which one it is in. */
+  layout: LayoutId | null;
+  /**
+   * What the panels looked like before focus mode, so leaving it puts them
+   * back rather than guessing at a default the user never chose.
+   */
+  beforeFocus: LayoutPreset['apply'] | null;
 
   setSidebarPanel: (panel: SidebarPanel) => void;
   toggleSidebar: (open?: boolean) => void;
@@ -53,6 +160,8 @@ interface UIState {
   setMobilePane: (pane: MobilePane) => void;
   setMobileDrawerOpen: (open: boolean) => void;
   resetLayout: () => void;
+  applyLayout: (id: LayoutId) => void;
+  toggleFocus: (on?: boolean) => void;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -78,6 +187,8 @@ export const useUIStore = create<UIState>()(
       searchWantsReplace: false,
       mobilePane: 'editor',
       mobileDrawerOpen: false,
+      layout: null,
+      beforeFocus: null,
 
       setSidebarPanel: (panel) =>
         set((state) => ({
@@ -101,7 +212,43 @@ export const useUIStore = create<UIState>()(
       setQuickOpenOpen: (open) => set({ quickOpenOpen: open, commandPaletteOpen: false }),
       setMobilePane: (pane) => set({ mobilePane: pane, mobileDrawerOpen: false }),
       setMobileDrawerOpen: (open) => set({ mobileDrawerOpen: open }),
-      resetLayout: () => set(DEFAULTS),
+      resetLayout: () => set({ ...DEFAULTS, layout: null, beforeFocus: null }),
+
+      applyLayout: (id) => {
+        const preset = LAYOUTS.find((entry) => entry.id === id);
+        if (!preset) return;
+        set({ ...preset.apply, layout: id, beforeFocus: null });
+      },
+
+      /**
+       * Focus mode, and the way back out.
+       *
+       * Entering remembers the arrangement it replaced; leaving restores it.
+       * Without that, the way out of focus mode is a guess, and a user who had
+       * carefully arranged three panels loses them to a keystroke.
+       */
+      toggleFocus: (on) =>
+        set((state) => {
+          const focused = state.layout === 'focus';
+          const next = on ?? !focused;
+          if (next === focused) return state;
+          if (next) {
+            const focus = LAYOUTS.find((entry) => entry.id === 'focus');
+            return {
+              ...(focus?.apply ?? {}),
+              layout: 'focus' as const,
+              beforeFocus: {
+                sidebarPanel: state.sidebarPanel,
+                sidebarOpen: state.sidebarOpen,
+                previewOpen: state.previewOpen,
+                bottomOpen: state.bottomOpen,
+                bottomTab: state.bottomTab,
+              },
+            };
+          }
+          const restored = state.beforeFocus ?? LAYOUTS[0].apply;
+          return { ...restored, layout: null, beforeFocus: null };
+        }),
     }),
     {
       name: 'forge.layout',
@@ -115,6 +262,8 @@ export const useUIStore = create<UIState>()(
         bottomOpen: state.bottomOpen,
         bottomHeight: state.bottomHeight,
         bottomTab: state.bottomTab,
+        layout: state.layout,
+        beforeFocus: state.beforeFocus,
       }),
     },
   ),

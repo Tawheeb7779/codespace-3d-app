@@ -24,6 +24,10 @@ interface TerminalState {
   run: (id: string, command: string) => Promise<void>;
   append: (id: string, lines: ShellLine[]) => void;
   clear: (id: string) => void;
+  /** Give a session a name of its own, so several are tellable apart. */
+  renameSession: (id: string, name: string) => void;
+  /** Everything one session has printed, as plain text for copying or saving. */
+  transcript: (id: string) => string;
   recentOutput: (limit?: number) => string;
 }
 
@@ -84,6 +88,21 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
   },
 
   setActive: (id) => set({ activeId: id }),
+
+  renameSession: (id, name) =>
+    set((state) => ({
+      sessions: state.sessions.map((session) =>
+        // An empty name would leave a tab with nothing to click, so a blank
+        // rename is a no-op rather than an unlabelled session.
+        session.id === id ? { ...session, name: name.trim() || session.name } : session,
+      ),
+    })),
+
+  transcript: (id) => {
+    const session = get().sessions.find((entry) => entry.id === id);
+    if (!session) return '';
+    return session.lines.map((line) => line.text).join('\n');
+  },
 
   append(id, lines) {
     if (!lines.length) return;

@@ -3,6 +3,7 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { setupMonaco, monaco as monacoApi } from '@/lib/monaco';
 import { monacoLanguage } from '@/lib/languages';
+import { registerAskAboutSelection, registerInlineAi } from '@/lib/inlineAi';
 import { useFileStore } from '@/stores/fileStore';
 import { useAiStore } from '@/stores/aiStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -103,8 +104,17 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
       void useFileStore.getState().flush();
     });
 
+    // The assistant's workflows, on the code they are about. These are the
+    // same workflows the panel runs; this only adds a second way in.
+    const releaseInlineAi = registerInlineAi(instance);
+    const releaseAsk = registerAskAboutSelection(instance);
+
     const disposable = monacoApi.editor.onDidChangeMarkers(() => collectProblems());
-    instance.onDidDispose(() => disposable.dispose());
+    instance.onDidDispose(() => {
+      disposable.dispose();
+      releaseInlineAi();
+      releaseAsk();
+    });
     collectProblems();
   };
 

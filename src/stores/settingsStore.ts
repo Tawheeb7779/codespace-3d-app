@@ -112,10 +112,15 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { id: 'format', label: 'Format document', keys: 'mod+shift+i' },
   { id: 'nextTab', label: 'Next editor tab', keys: 'mod+alt+arrowright' },
   { id: 'previousTab', label: 'Previous editor tab', keys: 'mod+alt+arrowleft' },
-  { id: 'splitEditor', label: 'Split editor', keys: 'mod+backslash' },
+  // The key token has to be what `KeyboardEvent.key` actually reports, so the
+  // backslash key is '\' and not the word "backslash" — spelling it out reads
+  // well and matches nothing.
+  { id: 'splitEditor', label: 'Split editor', keys: 'mod+\\' },
   { id: 'sourceControl', label: 'Show source control', keys: 'mod+shift+g' },
   { id: 'explorer', label: 'Show explorer', keys: 'mod+shift+e' },
   { id: 'assistant', label: 'Show the assistant', keys: 'mod+shift+a' },
+  { id: 'focusMode', label: 'Focus mode', keys: 'mod+shift+enter' },
+  { id: 'shortcutHelp', label: 'Keyboard shortcuts', keys: 'mod+/' },
 ];
 
 interface SettingsState {

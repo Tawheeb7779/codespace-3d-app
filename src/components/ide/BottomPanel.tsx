@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Copy,
+  Download,
   AlertCircle,
   AlertTriangle,
   ChevronDown,
@@ -30,7 +32,9 @@ import {
   nextProblem,
   type ProblemFilter,
 } from '@/lib/problems';
-import { cx, formatClock } from '@/lib/utils';
+import { cx, errorMessage, formatClock } from '@/lib/utils';
+import { downloadText } from '@/lib/archive';
+import { toast } from '@/stores/toastStore';
 import { basename } from '@/lib/vfs';
 
 const SEVERITY_ICON = {
@@ -370,8 +374,17 @@ function PortsPanel() {
 
 export function BottomPanel() {
   const { bottomTab, setBottomTab, toggleBottom } = useUIStore();
-  const { sessions, activeId, createSession, ensureSession, killSession, setActive } =
-    useTerminalStore();
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const {
+    sessions,
+    activeId,
+    createSession,
+    ensureSession,
+    killSession,
+    setActive,
+    renameSession,
+    transcript,
+  } = useTerminalStore();
   const problemCount = useEditorStore((s) => s.problems.filter((p) => p.severity === 'error').length);
   const warningCount = useEditorStore((s) => s.problems.filter((p) => p.severity === 'warning').length);
 
@@ -436,9 +449,31 @@ export function BottomPanel() {
                     : 'text-ink-faint hover:text-ink',
                 )}
               >
-                <button type="button" onClick={() => setActive(session.id)}>
-                  {session.name}
-                </button>
+                {renaming === session.id ? (
+                  <input
+                    autoFocus
+                    aria-label="Terminal name"
+                    defaultValue={session.name}
+                    onBlur={(event) => {
+                      renameSession(session.id, event.target.value);
+                      setRenaming(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur();
+                      if (event.key === 'Escape') setRenaming(null);
+                    }}
+                    className="w-20 rounded-sm border border-accent bg-surface-sunken px-1 text-sm text-ink outline-none"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActive(session.id)}
+                    onDoubleClick={() => setRenaming(session.id)}
+                    title="Double-click to rename"
+                  >
+                    {session.name}
+                  </button>
+                )}
                 {sessions.length > 1 && (
                   <button
                     type="button"
@@ -456,6 +491,43 @@ export function BottomPanel() {
               size="xs"
               icon={<Plus className="h-3 w-3" />}
               onClick={() => createSession()}
+            />
+            <IconButton
+              label="Copy terminal output"
+              size="xs"
+              disabled={!activeId}
+              icon={<Copy className="h-3 w-3" />}
+              onClick={() => {
+                if (!activeId) return;
+                const text = transcript(activeId);
+                if (!text) {
+                  toast.info('Nothing to copy', 'This terminal has produced no output yet.');
+                  return;
+                }
+                // Reporting the real outcome matters: the clipboard is refused
+                // outright in some contexts, and a silent failure here would
+                // look identical to a copy that worked.
+                navigator.clipboard
+                  .writeText(text)
+                  .then(() => toast.success('Copied', `${text.split('\n').length} lines.`))
+                  .catch((error) => toast.error('Could not copy', errorMessage(error)));
+              }}
+            />
+            <IconButton
+              label="Download terminal log"
+              size="xs"
+              disabled={!activeId}
+              icon={<Download className="h-3 w-3" />}
+              onClick={() => {
+                if (!activeId) return;
+                const session = sessions.find((entry) => entry.id === activeId);
+                const text = transcript(activeId);
+                if (!text) {
+                  toast.info('Nothing to save', 'This terminal has produced no output yet.');
+                  return;
+                }
+                downloadText(`${session?.name ?? 'terminal'}.log`, text);
+              }}
             />
           </div>
         )}

@@ -25,7 +25,7 @@ import { Resizer } from '@/components/ui/Resizer';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/Primitives';
 import { Button } from '@/components/ui/Button';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { useUIStore } from '@/stores/uiStore';
+import { LAYOUTS, useUIStore } from '@/stores/uiStore';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore, splitTargetFor } from '@/stores/editorStore';
 import { useGitStore } from '@/stores/gitStore';
@@ -41,6 +41,9 @@ import { isTextFile } from '@/lib/vfs';
 import { canFormat } from '@/lib/languages';
 import { buildProblems, mergeProblems, nextProblem } from '@/lib/problems';
 import { cx, errorMessage } from '@/lib/utils';
+import { ShortcutHelp } from '@/components/ide/ShortcutHelp';
+import { NotificationCenter } from '@/components/ide/NotificationCenter';
+import { useToastStore } from '@/stores/toastStore';
 
 function SidePanel() {
   const panel = useUIStore((s) => s.sidebarPanel);
@@ -169,6 +172,9 @@ export default function WorkspacePage() {
     setCommandPaletteOpen,
     setQuickOpenOpen,
     setMobilePane,
+    layout,
+    applyLayout,
+    toggleFocus,
   } = useUIStore();
 
   const { open, close, loading, error, meta, files, flush, canWrite } = useFileStore();
@@ -196,6 +202,8 @@ export default function WorkspacePage() {
   const setEditor = useSettingsStore((s) => s.setEditor);
   const appearance = useSettingsStore((s) => s.appearance);
   const [ready, setReady] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   // Load the project, then its version history.
   useEffect(() => {
@@ -403,6 +411,36 @@ export default function WorkspacePage() {
         disabled: !tabs.length,
         run: closeAll,
       },
+      {
+        id: 'help.notifications',
+        group: 'Help',
+        label: 'Show notifications',
+        run: () => {
+          useToastStore.getState().markRead();
+          setNotificationsOpen(true);
+        },
+      },
+      {
+        id: 'help.shortcuts',
+        group: 'Help',
+        label: 'Keyboard shortcuts',
+        keys: 'mod+/',
+        run: () => setShortcutsOpen(true),
+      },
+      {
+        id: 'view.focus',
+        group: 'View',
+        label: layout === 'focus' ? 'Leave focus mode' : 'Enter focus mode',
+        keys: 'mod+shift+enter',
+        run: () => toggleFocus(),
+      },
+      ...LAYOUTS.filter((preset) => preset.id !== 'focus').map((preset) => ({
+        id: `view.layout.${preset.id}`,
+        group: 'View',
+        label: `Layout: ${preset.label}`,
+        disabled: layout === preset.id,
+        run: () => applyLayout(preset.id),
+      })),
       {
         id: 'view.zoomIn',
         group: 'View',
@@ -705,6 +743,8 @@ export default function WorkspacePage() {
     requestReplace,
     runRemote,
     save,
+    applyLayout,
+    layout,
     setAppearance,
     setBottomTab,
     setEditor,
@@ -713,6 +753,7 @@ export default function WorkspacePage() {
     tabs,
     taskBusy,
     taskConfigs,
+    toggleFocus,
     togglePreview,
     toggleSidebar,
     toggleTerminalPanel,
@@ -737,6 +778,8 @@ export default function WorkspacePage() {
         sourceControl: () => setSidebarPanel('git'),
         explorer: () => setSidebarPanel('explorer'),
         assistant: () => setSidebarPanel('assistant'),
+        focusMode: () => toggleFocus(),
+        shortcutHelp: () => setShortcutsOpen(true),
       }),
       [
         activePath,
@@ -751,6 +794,7 @@ export default function WorkspacePage() {
         tabs,
         togglePreview,
         toggleSidebar,
+        toggleFocus,
         toggleTerminalPanel,
       ],
     ),
@@ -810,7 +854,10 @@ export default function WorkspacePage() {
   if (isMobile) {
     return (
       <div className="flex h-full flex-col overflow-hidden bg-canvas">
-        <WorkspaceTopBar onCommandPalette={() => setCommandPaletteOpen(true)} />
+        <WorkspaceTopBar
+        onCommandPalette={() => setCommandPaletteOpen(true)}
+        onNotifications={() => setNotificationsOpen(true)}
+      />
         <main className="min-h-0 flex-1 overflow-hidden">
           <ErrorBoundary area="Workspace">
             {mobilePane === 'files' && <SidePanel />}
@@ -851,13 +898,18 @@ export default function WorkspacePage() {
         </nav>
         <StatusBar />
         {palette}
+      <ShortcutHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <NotificationCenter open={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
       </div>
     );
   }
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-canvas">
-      <WorkspaceTopBar onCommandPalette={() => setCommandPaletteOpen(true)} />
+      <WorkspaceTopBar
+        onCommandPalette={() => setCommandPaletteOpen(true)}
+        onNotifications={() => setNotificationsOpen(true)}
+      />
 
       <div className="flex min-h-0 flex-1">
         <ActivityBar />
@@ -928,6 +980,8 @@ export default function WorkspacePage() {
 
       <StatusBar />
       {palette}
+      <ShortcutHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <NotificationCenter open={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
       <Onboarding />
     </div>
   );

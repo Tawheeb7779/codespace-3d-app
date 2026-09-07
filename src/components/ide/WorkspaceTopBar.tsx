@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Bell,
   ArrowLeft,
   Command,
   Download,
@@ -25,11 +26,20 @@ import { getTemplate } from '@/lib/templates';
 import { errorMessage } from '@/lib/utils';
 import { formatChord } from '@/hooks/useKeyboardShortcuts';
 import { Mark } from '@/components/ui/Wordmark';
+import { useToastStore } from '@/stores/toastStore';
 
-export function WorkspaceTopBar({ onCommandPalette }: { onCommandPalette: () => void }) {
+export function WorkspaceTopBar({
+  onCommandPalette,
+  onNotifications,
+}: {
+  onCommandPalette: () => void;
+  onNotifications: () => void;
+}) {
   const { sidebarOpen, previewOpen, bottomOpen, toggleSidebar, togglePreview, toggleBottom } =
     useUIStore();
   const { meta, files, dirs, dirty, flush, saving } = useFileStore();
+  const unread = useToastStore((s) => s.unread);
+  const markRead = useToastStore((s) => s.markRead);
   const previewStatus = usePreviewStore((s) => s.status);
   const run = usePreviewStore((s) => s.run);
   const stop = usePreviewStore((s) => s.stop);
@@ -111,6 +121,23 @@ export function WorkspaceTopBar({ onCommandPalette }: { onCommandPalette: () => 
         )}
 
         <div className="mx-1 h-4 w-px bg-line" />
+
+        <span className="relative">
+          <IconButton
+            label={unread > 0 ? `Notifications (${unread} new)` : 'Notifications'}
+            icon={<Bell className="h-3.5 w-3.5" />}
+            onClick={() => {
+              markRead();
+              onNotifications();
+            }}
+          />
+          {unread > 0 && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-accent"
+            />
+          )}
+        </span>
 
         <IconButton
           label="Toggle sidebar"

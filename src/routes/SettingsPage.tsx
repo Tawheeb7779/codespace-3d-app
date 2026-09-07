@@ -35,6 +35,26 @@ const SECTIONS = [
 ] as const;
 type Section = (typeof SECTIONS)[number];
 
+/**
+ * What each section is about, in the words someone would actually type.
+ *
+ * Search has to find "dark mode" in Appearance and "tab size" in Editor, and
+ * neither phrase appears in a section's own name. This is the index that makes
+ * the filter useful rather than a spell-checker for headings.
+ */
+const KEYWORDS: Record<Section, string> = {
+  editor: 'font size family indent tab spaces word wrap minimap line numbers bracket colours auto save format on save typography',
+  appearance: 'theme dark light colour color system density comfortable compact reduced motion animation',
+  terminal: 'shell font size scrollback banner console',
+  runtime: 'preview auto run reload on save clear console port cdn esm packages bundler',
+  sourceControl: 'git branch default commit stage push pull version control',
+  assistant: 'ai agent model provider api key destructive confirm verify build',
+  workspace: 'session restore confirm delete onboarding layout reset tour',
+  integrations: 'github supabase connect token repository cloud sync database',
+  keyboard: 'shortcut keybinding chord keys rebind palette hotkey',
+  account: 'sign out email profile session local mode delete',
+};
+
 const LABELS: Record<Section, string> = {
   editor: 'Editor',
   appearance: 'Appearance',
@@ -83,6 +103,20 @@ export default function SettingsPage() {
   const { user, localMode, signOut } = useAuthStore();
 
   const [section, setSection] = useState<Section>('editor');
+  const [query, setQuery] = useState('');
+
+  // Sections whose name or keywords match. An empty query matches everything,
+  // so the list is complete until someone narrows it.
+  const needle = query.trim().toLowerCase();
+  const matching = SECTIONS.filter(
+    (item) =>
+      !needle ||
+      LABELS[item].toLowerCase().includes(needle) ||
+      KEYWORDS[item].includes(needle),
+  );
+  // Searching should move you to what you found, not leave you on a section
+  // that is no longer in the list.
+  const shown = matching.includes(section) ? section : (matching[0] ?? section);
   const [recording, setRecording] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const persistence = persistenceStatus();
@@ -99,15 +133,26 @@ export default function SettingsPage() {
 
       <div className="flex min-h-0 flex-1">
         <nav aria-label="Settings sections" className="w-44 shrink-0 border-r border-line p-2">
-          {SECTIONS.map((item) => (
+          <input
+            type="search"
+            aria-label="Search settings"
+            placeholder="Search settings"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="mb-2 h-7 w-full rounded border border-line bg-surface-sunken px-2 text-base text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+          />
+          {matching.length === 0 && (
+            <p className="px-2.5 py-1.5 text-sm text-ink-faint">No section matches that.</p>
+          )}
+          {matching.map((item) => (
             <button
               key={item}
               type="button"
-              aria-current={section === item}
+              aria-current={shown === item}
               onClick={() => setSection(item)}
               className={cx(
                 'block w-full rounded px-2.5 py-1.5 text-left text-base transition-colors',
-                section === item
+                shown === item
                   ? 'bg-surface-raised text-ink'
                   : 'text-ink-muted hover:bg-surface hover:text-ink',
               )}
@@ -118,7 +163,7 @@ export default function SettingsPage() {
         </nav>
 
         <div className="scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
-          {section === 'editor' && (
+          {shown === 'editor' && (
             <>
               <Group title="Typography" description="Applies to the code editor and terminal.">
                 <Input
@@ -186,7 +231,7 @@ export default function SettingsPage() {
             </>
           )}
 
-          {section === 'appearance' && (
+          {shown === 'appearance' && (
             <>
               <Group title="Theme">
                 <Select
@@ -239,7 +284,7 @@ export default function SettingsPage() {
             </>
           )}
 
-          {section === 'terminal' && (
+          {shown === 'terminal' && (
             <Group
               title="Terminal"
               description="The shell runs against this project's virtual file system. It never reaches the host machine."
@@ -275,7 +320,7 @@ export default function SettingsPage() {
             </Group>
           )}
 
-          {section === 'sourceControl' && (
+          {shown === 'sourceControl' && (
             <Group title="Source control" description="Defaults for TA CODE's version control and pushes to GitHub.">
               <Input
                 label="Default branch for new repositories"
@@ -293,7 +338,7 @@ export default function SettingsPage() {
             </Group>
           )}
 
-          {section === 'assistant' && (
+          {shown === 'assistant' && (
             <Group
               title="Assistant"
               description="How the coding agent behaves. Provider and API key are set in the assistant panel, and the key is never written to disk."
@@ -313,7 +358,7 @@ export default function SettingsPage() {
             </Group>
           )}
 
-          {section === 'workspace' && (
+          {shown === 'workspace' && (
             <Group title="Workspace" description="What happens when you open and leave a project.">
               <Switch
                 label="Restore the last session"
@@ -346,7 +391,7 @@ export default function SettingsPage() {
             </Group>
           )}
 
-          {section === 'runtime' && (
+          {shown === 'runtime' && (
             <Group
               title="Preview"
               description="How the in-browser bundler and preview behave."
@@ -391,7 +436,7 @@ export default function SettingsPage() {
             </Group>
           )}
 
-          {section === 'integrations' && (
+          {shown === 'integrations' && (
 
             <Group
 
@@ -408,7 +453,7 @@ export default function SettingsPage() {
           )}
 
 
-          {section === 'keyboard' && (
+          {shown === 'keyboard' && (
             <Group
               title="Shortcuts"
               description="Click a shortcut, then press the combination you want."
@@ -468,7 +513,7 @@ export default function SettingsPage() {
             </Group>
           )}
 
-          {section === 'account' && (
+          {shown === 'account' && (
             <>
               <Group title="Signed in as">
                 <div className="flex items-center gap-3 rounded-lg border border-line p-3">
