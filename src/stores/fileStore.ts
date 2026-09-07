@@ -57,6 +57,8 @@ interface FileState {
   assertWritable: () => void;
 }
 
+/** The project `open` is currently loading; a later call supersedes an earlier. */
+let opening: string | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 /** Tail of the serialised save queue. Never rejects; see `flush`. */
 let saveChain: Promise<void> = Promise.resolve();
@@ -115,12 +117,19 @@ export const useFileStore = create<FileState>()((set, get) => ({
   async open(id) {
     if (get().projectId === id) return;
     await get().flush();
+    // Two opens can be in flight — clicking one project and then another, or a
+    // back-navigation — and this is the working tree, so a stale answer landing
+    // is worse than a wrong display: `flush` writes `files` to `projectId`, and
+    // both come from here, so a project loaded into the wrong slot is a project
+    // about to be written over. Only the newest request may land.
+    const request = (opening = id);
     set({ loading: true, error: null });
     try {
       const project = await repository().getProject(id);
       if (!project) throw new Error('This project does not exist, or you do not have access to it.');
       const { files, dirs, ...meta } = project;
       const role = await resolveRole(project);
+      if (opening !== request) return;
       set({
         projectId: id,
         meta,
@@ -132,6 +141,7 @@ export const useFileStore = create<FileState>()((set, get) => ({
         lastSavedAt: project.updatedAt,
       });
     } catch (error) {
+      if (opening !== request) return;
       set({ loading: false, error: errorMessage(error) });
       throw error;
     }
@@ -361,21 +371,5 @@ if (typeof window !== 'undefined') {
     if (document.visibilityState === 'hidden') {
       void useFileStore.getState().flush().catch(() => undefined);
     }
-  });
-
-  /**
-   * Do not let a reload take unsaved work silently.
-   *
-   * The tab going away is the moment the in-memory tree stops existing, and it
-   * is exactly when the reported failure happened: create a file, save, refresh,
-   * and it is gone. If anything is still dirty — because a save failed, or
-   * because auto-save is off and none has run — the browser asks first.
-   */
-  window.addEventListener('beforeunload', (event) => {
-    const { dirty, projectId } = useFileStore.getState();
-    if (!projectId || !dirty.size) return;
-    event.preventDefault();
-    // Browsers show their own wording; a non-empty value is what asks at all.
-    event.returnValue = '';
   });
 }

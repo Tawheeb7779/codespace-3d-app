@@ -102,6 +102,17 @@ function author() {
   return { name: user?.displayName ?? 'Local Developer', email: user?.email ?? 'you@localhost' };
 }
 
+/**
+ * Has the workspace moved on from the project this answer belongs to?
+ *
+ * The open project is the one the file store holds, and it is also the one
+ * every write below targets, so it is the right thing to compare against.
+ */
+function staleFor(projectId: string): boolean {
+  const open = useFileStore.getState().projectId;
+  return open !== null && open !== projectId;
+}
+
 async function persist(repo: Repo) {
   const projectId = useFileStore.getState().projectId;
   if (!projectId) return;
@@ -184,6 +195,12 @@ export const useGitStore = create<GitState>()((set, get) => ({
       const store = repositoryFor(useAuthStore.getState().user?.provider);
       const stored = await store.loadVcs(projectId);
       const remote = await store.loadRemote(projectId).catch(() => null);
+      // A slow answer for a project the user has since left must not land.
+      // Everything that persists history writes to the project that is *open*
+      // — `useFileStore.getState().projectId` — so a stale repository here is
+      // not just a wrong display: the next commit would write one project's
+      // history onto another.
+      if (staleFor(projectId)) return;
       const repo = stored ?? vcs.emptyRepo();
       set({
         repo,
@@ -198,6 +215,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
         loading: false,
       });
     } catch (error) {
+      if (staleFor(projectId)) return;
       set({ loading: false, error: errorMessage(error) });
     }
   },
