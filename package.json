@@ -30,7 +30,8 @@
     "test:schema": "node scripts/check-schema-conformance.mjs",
     "test:e2e:integration": "node e2e/integration.mjs",
     "test:e2e:polish": "node e2e/polish.mjs",
-    "test:e2e:persistence": "node e2e/persistence.mjs"
+    "test:e2e:persistence": "node e2e/persistence.mjs",
+    "verify:cloud": "node scripts/verify-cloud-save.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
