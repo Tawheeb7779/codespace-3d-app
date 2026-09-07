@@ -23,7 +23,15 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
 import { toast } from '@/stores/toastStore';
-import { buildTree, flattenTree, basename, dirname, isDescendant, joinPath } from '@/lib/vfs';
+import {
+  ancestors,
+  buildTree,
+  flattenTree,
+  basename,
+  dirname,
+  isDescendant,
+  joinPath,
+} from '@/lib/vfs';
 import { downloadText } from '@/lib/archive';
 import { cx, errorMessage } from '@/lib/utils';
 
@@ -155,6 +163,24 @@ export function FileExplorer() {
     setPendingValue('');
   };
 
+  /**
+   * Open every folder above a path, so a thing just created can be seen.
+   *
+   * A name may carry its own folders — typing `api/routes/index.ts` creates
+   * two — and only the folder the creation started in was expanded. Anything
+   * deeper was created correctly and then sat inside a collapsed row, which
+   * reads exactly like the creation having failed.
+   */
+  const reveal = (path: string, isFolder = false) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      for (const parent of ancestors(path)) next.add(parent);
+      // A new folder opens itself, so the next thing put in it is visible.
+      if (isFolder) next.add(path);
+      return next;
+    });
+  };
+
   const commitPending = () => {
     if (!pending) return;
     const value = pendingValue.trim();
@@ -165,9 +191,10 @@ export function FileExplorer() {
     try {
       if (pending.kind === 'file') {
         const created = createFile(joinPath(pending.base, value));
+        reveal(created);
         openTab(created);
       } else if (pending.kind === 'folder') {
-        createDir(joinPath(pending.base, value));
+        reveal(createDir(joinPath(pending.base, value)), true);
       } else {
         const next = renamePath(pending.base, value);
         editorRename(pending.base, next);

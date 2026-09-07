@@ -60,7 +60,7 @@ export function StatusBar() {
   const activePath = useEditorStore((s) => s.activePath);
   const cursor = useEditorStore((s) => s.cursor);
   const problems = useEditorStore((s) => s.problems);
-  const { dirty, saving, lastSavedAt, role } = useFileStore();
+  const { dirty, saving, lastSavedAt, role, error: saveError } = useFileStore();
   const repo = useGitStore((s) => s.repo);
   const status = useGitStore((s) => s.status);
   const previewStatus = usePreviewStore((s) => s.status);
@@ -73,14 +73,29 @@ export function StatusBar() {
   const errors = problems.filter((p) => p.severity === 'error').length;
   const warnings = problems.filter((p) => p.severity === 'warning').length;
 
-  /** The save reading, as an icon that may be absent and a label that never is. */
-  const save: { icon: React.ReactNode; label: string; at: number | null } = saving
-    ? { icon: <Loader2 className="h-3 w-3 animate-spin" />, label: 'saving', at: null }
-    : dirty.size
-      ? { icon: null, label: `${dirty.size} unsaved`, at: null }
-      : lastSavedAt
-        ? { icon: <Check className="h-3 w-3 text-positive" />, label: 'saved', at: lastSavedAt }
-        : { icon: null, label: 'no changes', at: null };
+  /**
+   * The save reading, as an icon that may be absent and a label that never is.
+   *
+   * A failed save comes first. It used to read as "1 unsaved", which is what an
+   * edit you have not saved yet also reads as, so a cloud deployment refusing
+   * every write looked exactly like normal typing — right up to the reload that
+   * threw the work away.
+   */
+  const save: { icon: React.ReactNode; label: string; at: number | null; tone?: 'danger' } =
+    saving
+      ? { icon: <Loader2 className="h-3 w-3 animate-spin" />, label: 'saving', at: null }
+      : saveError && dirty.size
+        ? {
+            icon: <AlertCircle className="h-3 w-3" />,
+            label: `${dirty.size} not saved`,
+            at: null,
+            tone: 'danger',
+          }
+        : dirty.size
+          ? { icon: null, label: `${dirty.size} unsaved`, at: null }
+          : lastSavedAt
+            ? { icon: <Check className="h-3 w-3 text-positive" />, label: 'saved', at: lastSavedAt }
+            : { icon: null, label: 'no changes', at: null };
 
   return (
     // `overflow-hidden` is the backstop: whatever the readings add up to, the
@@ -138,7 +153,11 @@ export function StatusBar() {
         {role !== 'owner' && role !== 'editor' && <Item tone="caution">read-only</Item>}
         {/* Same shape as the preview reading: the icon is the part that
             changes, the label stays in an element of its own. */}
-        <Item>
+        <Item
+          tone={save.tone}
+          onClick={save.tone ? () => setBottomTab('output') : undefined}
+          label={save.tone ? 'Saving failed — open the output panel' : undefined}
+        >
           {save.icon}
           <span>{save.label}</span>
           {/* The relative time is what pushed this reading past the width a

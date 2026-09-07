@@ -189,6 +189,32 @@ function assertChanged(rows: unknown[] | null, context: string): void {
   throw new Error(`${context}. It may have been deleted, or you may not have permission.`);
 }
 
+/** How many paths to name before the message stops being readable. */
+const NAMED_PATHS = 5;
+
+/**
+ * Assert that every file the save sent actually came back.
+ *
+ * The same silence as {@link assertChanged}, but per row: a policy can accept
+ * some paths and refuse others, and reporting "saved" for a partial write is
+ * how a single file goes missing while the rest of the project looks fine.
+ * Naming the paths is the point — it tells the operator which rows the policy
+ * refused instead of leaving them to guess.
+ */
+function assertWrote(written: string[], expected: string[]): void {
+  const landed = new Set(written);
+  const missing = expected.filter((path) => !landed.has(path));
+  if (!missing.length) return;
+  const named = missing.slice(0, NAMED_PATHS).join(', ');
+  const rest = missing.length > NAMED_PATHS ? ` and ${missing.length - NAMED_PATHS} more` : '';
+  throw new Error(
+    `${missing.length} of ${expected.length} files were not saved: ${named}${rest}. ` +
+      'The database accepted the request but stored nothing, which is what a row ' +
+      'level security policy does when it refuses a write. Your changes are still ' +
+      'open in the editor.',
+  );
+}
+
 export const supabaseRepository: ProjectRepository = {
   kind: 'supabase',
 
@@ -346,10 +372,25 @@ export const supabaseRepository: ProjectRepository = {
       updated_at: new Date().toISOString(),
     }));
     if (rows.length) {
-      const { error } = await client
+      // Ask for the paths back and check them. This is the same guard the rest
+      // of this file applies with `assertChanged`, and the file rows — the ones
+      // actually carrying the user's work — were the only write without it: a
+      // policy that silently matched nothing returned 200 with no rows, the
+      // editor called it a save, and the work was gone on the next reload.
+      //
+      // Asking for a representation is safe here in a way it was not for
+      // `projects`: `project_files_select` is `can_read_project(project_id)`,
+      // which is answerable from a project row that already exists, rather than
+      // from the row the same statement is inserting.
+      const { data: written, error } = await client
         .from('project_files')
-        .upsert(rows, { onConflict: 'project_id,path' });
+        .upsert(rows, { onConflict: 'project_id,path' })
+        .select('path');
       if (error) fail('Could not save files', error);
+      assertWrote(
+        (written ?? []).map((row) => (row as { path: string }).path),
+        rows.map((row) => row.path),
+      );
     }
 
     const { data: metaRows, error: metaError } = await client

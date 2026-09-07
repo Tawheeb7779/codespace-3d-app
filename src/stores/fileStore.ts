@@ -16,6 +16,8 @@ import {
 import { detectProjectLanguage } from '@/lib/languages';
 import { capabilitiesFor } from '@/lib/permissions';
 import { errorMessage } from '@/lib/utils';
+import { toast } from '@/stores/toastStore';
+import { consoleLog } from '@/stores/consoleStore';
 
 /**
  * The working tree for the open project.
@@ -317,9 +319,40 @@ async function runSave(): Promise<void> {
     if (current) useProjectStore.getState().upsertLocal({ ...current, updatedAt });
   } catch (error) {
     // Keep the dirty set so the next flush retries the same work.
-    set({ saving: false, error: errorMessage(error) });
+    const message = errorMessage(error);
+    set({ saving: false, error: message });
+    reportSaveFailure(message);
     throw error;
   }
+}
+
+/**
+ * Say out loud that a save failed.
+ *
+ * Auto-save is on by default, so most saves are ones nobody asked for and
+ * nobody is awaiting: `scheduleSave` and the visibility handler both absorb the
+ * rejection, and the explicit Ctrl+S path was the only one that reported
+ * anything. A cloud deployment refusing writes therefore looked like nothing at
+ * all — the file stayed on screen, the status bar said "1 unsaved", and the
+ * work was gone on the next reload. Reporting from here covers every path,
+ * which is why the Ctrl+S handler no longer reports separately.
+ *
+ * Repeats are collapsed: a failing project retries on every edit, and a toast
+ * per keystroke would bury the one that matters.
+ */
+let lastReported: { message: string; at: number } | null = null;
+const REPORT_AGAIN_AFTER = 20_000;
+
+function reportSaveFailure(message: string) {
+  const now = Date.now();
+  if (lastReported && lastReported.message === message && now - lastReported.at < REPORT_AGAIN_AFTER) {
+    return;
+  }
+  lastReported = { message, at: now };
+  // The output panel keeps the full text; the toast and the status bar both
+  // point at it, because a policy refusal is longer than either has room for.
+  consoleLog.ide(`Save failed: ${message}`, 'error');
+  toast.error('Your changes are not saved', message);
 }
 
 /** Persist pending edits when the tab goes away. */
@@ -328,5 +361,21 @@ if (typeof window !== 'undefined') {
     if (document.visibilityState === 'hidden') {
       void useFileStore.getState().flush().catch(() => undefined);
     }
+  });
+
+  /**
+   * Do not let a reload take unsaved work silently.
+   *
+   * The tab going away is the moment the in-memory tree stops existing, and it
+   * is exactly when the reported failure happened: create a file, save, refresh,
+   * and it is gone. If anything is still dirty — because a save failed, or
+   * because auto-save is off and none has run — the browser asks first.
+   */
+  window.addEventListener('beforeunload', (event) => {
+    const { dirty, projectId } = useFileStore.getState();
+    if (!projectId || !dirty.size) return;
+    event.preventDefault();
+    // Browsers show their own wording; a non-empty value is what asks at all.
+    event.returnValue = '';
   });
 }

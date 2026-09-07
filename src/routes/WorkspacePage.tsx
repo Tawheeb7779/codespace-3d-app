@@ -333,8 +333,9 @@ export default function WorkspacePage() {
         await formatDocument();
       }
       await flush();
-    } catch (caught) {
-      toast.error('Save failed', errorMessage(caught));
+    } catch {
+      // The store reports it: every save path fails the same way, and auto-save
+      // failing silently was the whole problem.
     }
   }, [flush, activePath]);
 
