@@ -175,7 +175,7 @@ export function Switch({ checked, onChange, label, description, disabled }: Swit
       >
         <span
           className={cx(
-            'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+            'absolute top-0.5 h-3 w-3 rounded-full bg-surface shadow-sm transition-transform',
             checked ? 'translate-x-3.5' : 'translate-x-0.5',
           )}
         />

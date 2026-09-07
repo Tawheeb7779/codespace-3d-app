@@ -9,7 +9,6 @@ import {
   GitBranch,
   Github,
   Globe,
-  Hammer,
   KeyRound,
   Layers,
   Lock,
@@ -25,6 +24,7 @@ import { Badge } from '@/components/ui/Primitives';
 
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
+import { Wordmark } from '@/components/ui/Wordmark';
 
 // Monaco is ~3 MB. Keeping the demo editor behind a lazy boundary keeps it out
 // of the landing page's initial chunk; the component itself waits for the
@@ -104,11 +104,8 @@ export default function LandingPage() {
     <div className="h-full overflow-y-auto overflow-x-hidden bg-canvas">
       <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 backdrop-blur">
         <nav className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <Link to="/" className="flex items-center gap-2 text-ink" aria-label="Forge IDE home">
-            <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-accent-ink">
-              <Hammer className="h-3.5 w-3.5" />
-            </span>
-            <span className="text-md font-semibold tracking-tight">Forge</span>
+          <Link to="/" className="flex items-center gap-2 text-ink" aria-label="TA CODE home">
+            <Wordmark />
             <Badge tone="neutral" className="hidden sm:inline-flex">
               IDE
             </Badge>
@@ -160,7 +157,7 @@ export default function LandingPage() {
       <main>
         {/* Hero */}
         <section className="relative overflow-hidden border-b border-line">
-          <div aria-hidden className="pointer-events-none absolute inset-0 grid-backdrop" />
+          <div aria-hidden className="pointer-events-none absolute inset-0 ta-ground-wide" />
           <div className="relative mx-auto max-w-6xl px-4 pb-16 pt-20 sm:px-6 sm:pb-20 sm:pt-28">
             <div className="mx-auto max-w-3xl text-center">
               <Badge tone="accent">
@@ -170,7 +167,7 @@ export default function LandingPage() {
                 A real IDE that opens in a tab
               </h1>
               <p className="mx-auto mt-5 max-w-2xl text-lg text-ink-muted">
-                Forge gives you the editor, terminal, bundler, version control and preview of a
+                TA CODE gives you the editor, terminal, bundler, version control and preview of a
                 local setup, with nothing to install. Every panel does the thing it says it does.
               </p>
               <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -215,7 +212,7 @@ export default function LandingPage() {
             <SectionHeading
               eyebrow="What you get"
               title="The full loop, not a code viewer"
-              body="Write, build, run, inspect, commit. Forge closes the loop in the browser instead of stopping at syntax highlighting."
+              body="Write, build, run, inspect, commit. TA CODE closes the loop in the browser instead of stopping at syntax highlighting."
             />
             <div className="mt-12 grid gap-4 md:grid-cols-3">
               {[
@@ -262,7 +259,7 @@ export default function LandingPage() {
             <SectionHeading
               eyebrow="Capabilities"
               title="Built like a tool, not a demo"
-              body="Each of these is wired to real behaviour. Where a browser genuinely cannot do something, Forge says so instead of faking it."
+              body="Each of these is wired to real behaviour. Where a browser genuinely cannot do something, TA CODE says so instead of faking it."
             />
             <div className="mt-12 grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map((feature) => (
@@ -437,10 +434,7 @@ export default function LandingPage() {
       <footer className="border-t border-line py-10">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:flex-row sm:px-6">
           <div className="flex items-center gap-2 text-ink-muted">
-            <span className="flex h-5 w-5 items-center justify-center rounded bg-accent text-accent-ink">
-              <Hammer className="h-3 w-3" />
-            </span>
-            <span className="text-base font-medium text-ink">Forge IDE</span>
+            <Wordmark size="sm" />
             <span className="text-sm text-ink-faint">A browser development environment</span>
           </div>
           <div className="flex items-center gap-5 text-sm text-ink-faint">

@@ -165,7 +165,7 @@ const COMMANDS: CommandDef[] = [
       }
       const width = Math.max(...COMMANDS.map((c) => c.name.length));
       return ok([
-        info('Forge Shell — commands run against this project\'s virtual file system.'),
+        info('TA CODE shell — commands run against this project\'s virtual file system.'),
         info('There is no host operating system here; unlisted commands are not simulated.'),
         out(''),
         ...COMMANDS.map((c) => out(`  ${c.name.padEnd(width + 2)}${c.summary}`)),
@@ -497,7 +497,7 @@ const COMMANDS: CommandDef[] = [
   {
     name: 'git',
     usage: 'git <init|status|add|commit|log|branch|checkout|merge|diff>',
-    summary: 'Forge VCS — local, git-style version control',
+    summary: 'TA CODE version control — local, git-style',
     run: (args, _session, host) => host.git(args).then((lines) => ({
       lines,
       exitCode: lines.some((l) => l.kind === 'stderr') ? 1 : 0,

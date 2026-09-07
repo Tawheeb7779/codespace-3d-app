@@ -94,7 +94,7 @@ export function edgeTransport(projectId?: string): (r: GithubRequest) => Promise
     if (!supabase) throw new GithubError('not-connected', 'Supabase is not configured.');
     const { data } = await supabase.auth.getSession();
     const accessToken = data.session?.access_token;
-    if (!accessToken) throw new GithubError('unauthorized', 'Your Forge session has expired.');
+    if (!accessToken) throw new GithubError('unauthorized', 'Your TA CODE session has expired.');
 
     const { data: result, error } = await supabase.functions.invoke<{
       status: number;

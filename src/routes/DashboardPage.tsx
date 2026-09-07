@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  FolderPlus,
   Archive,
   ArchiveRestore,
   Copy,
-  Hammer,
   Layers,
   LogOut,
   MoreHorizontal,
@@ -33,6 +33,7 @@ import { toast } from '@/stores/toastStore';
 import type { ProjectMeta } from '@/types';
 import { cx, errorMessage, formatTimeAgo } from '@/lib/utils';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { Wordmark } from '@/components/ui/Wordmark';
 
 type Filter = 'all' | 'starred' | 'archived';
 type Sort = 'updated' | 'created' | 'name';
@@ -297,10 +298,7 @@ export default function DashboardPage() {
     <div className="flex h-full flex-col overflow-hidden bg-canvas">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-3 sm:px-4">
         <Link to="/" className="flex items-center gap-2 text-ink">
-          <span className="flex h-5 w-5 items-center justify-center rounded bg-accent text-accent-ink">
-            <Hammer className="h-3 w-3" />
-          </span>
-          <span className="text-base font-semibold">Forge</span>
+          <Wordmark size="sm" />
         </Link>
 
         {localMode && <Badge tone="caution">Local Mode</Badge>}
@@ -434,7 +432,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               <EmptyState
-                icon={<Hammer className="h-4 w-4" />}
+                icon={<FolderPlus className="h-4 w-4" />}
                 title={query ? 'No projects match that search' : 'No projects yet'}
                 description={
                   query

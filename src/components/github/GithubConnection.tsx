@@ -160,7 +160,7 @@ export function GithubConnection({ compact = false }: { compact?: boolean }) {
             Connect GitHub
           </Button>
           <p className="text-sm text-ink-faint">
-            You will be sent to GitHub to authorize Forge. The access token is stored on the server
+            You will be sent to GitHub to authorize TA CODE. The access token is stored on the server
             and never reaches this browser.
           </p>
         </>
@@ -168,7 +168,7 @@ export function GithubConnection({ compact = false }: { compact?: boolean }) {
         <>
           <Badge tone="caution">Local Development Mode</Badge>
           <p className="text-sm text-ink-muted">
-            There is no Forge server in local mode, so GitHub is reached directly from this tab with
+            There is no TA CODE server in local mode, so GitHub is reached directly from this tab with
             a token you supply. It is kept in <code>sessionStorage</code> for this tab only — never
             written to disk, never put in a URL, and not available to project code or the assistant.
             Deploy with Supabase configured to move the credential server side.

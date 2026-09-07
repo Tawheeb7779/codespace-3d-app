@@ -165,7 +165,7 @@ export function GitPanel() {
         <EmptyState
           icon={<GitBranch className="h-4 w-4" />}
           title="No repository yet"
-          description="Forge VCS keeps commits, branches and diffs with this project, entirely in your browser."
+          description="TA CODE keeps commits, branches and diffs with this project, entirely in your browser."
           action={
             <Button
               size="sm"

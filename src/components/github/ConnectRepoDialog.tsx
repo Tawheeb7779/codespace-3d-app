@@ -99,7 +99,7 @@ export function ConnectRepoDialog({ open, onClose }: { open: boolean; onClose: (
       open={open}
       onClose={onClose}
       title="Connect a GitHub repository"
-      description="Forge will fetch from and push to the branch you pick. Nothing moves until you ask."
+      description="TA CODE will fetch from and push to the branch you pick. Nothing moves until you ask."
       size="md"
       footer={
         <>

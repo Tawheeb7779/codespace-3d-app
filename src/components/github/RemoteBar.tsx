@@ -281,7 +281,7 @@ export function RemoteBar() {
         open={confirmDisconnect}
         onClose={() => setConfirmDisconnect(false)}
         title="Disconnect this repository?"
-        description={`Forge will stop syncing with ${remote.owner}/${remote.repo}. Your files and local history stay exactly as they are, and nothing on GitHub changes.`}
+        description={`TA CODE will stop syncing with ${remote.owner}/${remote.repo}. Your files and local history stay exactly as they are, and nothing on GitHub changes.`}
         size="sm"
         footer={
           <>
@@ -303,7 +303,7 @@ export function RemoteBar() {
         {repo.initialized && useGitStore.getState().outgoing().length > 0 && (
           <p className="rounded border border-caution/40 bg-caution/5 p-2.5 text-sm text-ink">
             {useGitStore.getState().outgoing().length} commit(s) have not been
-            pushed. They will remain in your local history, but Forge will
+            pushed. They will remain in your local history, but TA CODE will
             forget where they were going.
           </p>
         )}

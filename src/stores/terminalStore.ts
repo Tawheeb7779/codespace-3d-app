@@ -28,7 +28,7 @@ interface TerminalState {
 }
 
 const BANNER: ShellLine[] = [
-  { kind: 'info', text: 'Forge Shell — commands operate on this project\'s virtual file system.' },
+  { kind: 'info', text: 'TA CODE shell — commands operate on this project\'s virtual file system.' },
   { kind: 'info', text: 'Type "help" for the full list. Unlisted commands are not simulated.' },
 ];
 
@@ -49,7 +49,7 @@ function trim(lines: ShellLine[]): ShellLine[] {
 function newSession(index: number): TerminalSession {
   return {
     id: uid('term'),
-    name: index === 0 ? 'forge' : `forge ${index + 1}`,
+    name: index === 0 ? 'shell' : `shell ${index + 1}`,
     cwd: '',
     history: [],
     lines: useSettingsStore.getState().terminal.showBanner ? [...BANNER] : [],

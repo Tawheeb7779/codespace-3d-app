@@ -75,7 +75,7 @@ export function GithubRepoImport({ onDone }: { onDone: () => void }) {
       }
       const tree = await client.readTree(spec, tip);
       if (tree.truncated) {
-        setError('That repository is too large for Forge to read in one request.');
+        setError('That repository is too large for TA CODE to read in one request.');
         return;
       }
 
@@ -109,7 +109,7 @@ export function GithubRepoImport({ onDone }: { onDone: () => void }) {
        * commit over the branch it came from.
        */
       const author = {
-        name: useAuthStore.getState().user?.displayName ?? 'Forge',
+        name: useAuthStore.getState().user?.displayName ?? 'TA CODE',
         email: useAuthStore.getState().user?.email ?? 'you@localhost',
       };
       const head = await client.commit(spec, tip);

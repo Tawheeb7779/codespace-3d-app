@@ -525,7 +525,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
     useFileStore.getState().assertWritable();
     const name = assertBranchName(branch);
     if (name === remote.defaultBranch) {
-      throw new Error(`${name} is the default branch on GitHub and cannot be deleted from Forge.`);
+      throw new Error(`${name} is the default branch on GitHub and cannot be deleted from TA CODE.`);
     }
     const client = githubClient(useFileStore.getState().projectId ?? undefined);
     await client.deleteBranch(remote, name);
@@ -542,7 +542,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
 
     if (!sub) {
       return [
-        info('Forge VCS — local, git-style version control. Subcommands:'),
+        info('TA CODE version control — local, git-style. Subcommands:'),
         out('  init, status, add, reset, commit -m <msg>, log, branch, checkout, merge, diff'),
         out('  remote, fetch, pull, push  (against the connected GitHub repository)'),
         info('Connect a repository from the Source Control panel to enable the network commands.'),
@@ -550,7 +550,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
     }
 
     if (sub !== 'init' && !state.repo.initialized) {
-      return [err('fatal: not a Forge VCS repository. Run "git init" first.')];
+      return [err('fatal: not a TA CODE repository. Run "git init" first.')];
     }
 
     try {
@@ -558,7 +558,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
         case 'init': {
           if (state.repo.initialized) return [info('Repository already initialized')];
           await state.init();
-          return [info('Initialized empty Forge VCS repository on branch "main"')];
+          return [info('Initialized empty TA CODE repository on branch "main"')];
         }
         case 'status': {
           state.refresh();
@@ -686,13 +686,13 @@ export const useGitStore = create<GitState>()((set, get) => ({
         }
         case 'clone':
           return [
-            err('git clone is not available in Forge.'),
+            err('git clone is not available in TA CODE.'),
             info(
               'Use Import from GitHub on the dashboard, or connect a repository from the Source Control panel.',
             ),
           ];
         default:
-          return [err(`git: '${sub}' is not a Forge VCS command. Run "git" for the list.`)];
+          return [err(`git: '${sub}' is not a TA CODE command. Run "git" for the list.`)];
       }
     } catch (error) {
       return [err(`git: ${errorMessage(error)}`)];

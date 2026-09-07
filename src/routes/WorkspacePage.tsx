@@ -770,7 +770,7 @@ export default function WorkspacePage() {
 
   if (loading && !meta) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 bg-canvas">
+      <div className="ta-ground flex h-full flex-col items-center justify-center gap-3">
         <Spinner className="h-5 w-5" />
         <p className="text-sm text-ink-faint">Opening project…</p>
       </div>
@@ -779,7 +779,7 @@ export default function WorkspacePage() {
 
   if (error && !meta) {
     return (
-      <div className="flex h-full items-center justify-center bg-canvas p-6">
+      <div className="ta-ground flex h-full items-center justify-center p-6">
         <div className="w-full max-w-md">
           <ErrorState title="Could not open this project" detail={error} />
           <Button className="mt-3" onClick={() => navigate('/dashboard')}>
@@ -883,7 +883,7 @@ export default function WorkspacePage() {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
-            <section aria-label="Editor" className="flex min-w-0 flex-1 flex-col bg-canvas">
+            <section aria-label="Editor" className="ta-ground flex min-w-0 flex-1 flex-col">
               <EditorTabs />
               {activePath && <Breadcrumbs path={activePath} />}
               <ErrorBoundary area="Editor">

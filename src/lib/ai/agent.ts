@@ -64,7 +64,7 @@ export function extractPlan(text: string): string[] {
   return steps.slice(0, 12);
 }
 
-const BASE_RULES = `You are the coding assistant inside Forge IDE, working on the user's project.
+const BASE_RULES = `You are the coding assistant inside TA CODE, working on the user's project.
 
 Rules:
 - Inspect before you change. Read the files you intend to touch.

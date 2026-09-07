@@ -80,9 +80,9 @@ export async function dispatch(request: Request): Promise<Response> {
   --space-3: 12px;
   --radius: 6px;
 
-  --surface: #0e121a;
-  --ink: #e2e8f5;
-  --accent: #608fff;
+  --surface: #111418;
+  --ink: #e3e7ed;
+  --accent: #38b0d6;
 }
 
 .panel {

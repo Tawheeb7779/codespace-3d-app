@@ -85,7 +85,7 @@ export function Onboarding() {
     <Modal
       open={open}
       onClose={dismiss}
-      title="Welcome to Forge"
+      title="Welcome to TA CODE"
       description="Six things worth knowing. You can reopen this from settings."
       size="lg"
       footer={

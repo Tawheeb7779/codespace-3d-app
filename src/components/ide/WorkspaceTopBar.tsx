@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Command,
   Download,
-  Hammer,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -25,6 +24,7 @@ import { downloadBlob, exportZip, safeArchiveName } from '@/lib/archive';
 import { getTemplate } from '@/lib/templates';
 import { errorMessage } from '@/lib/utils';
 import { formatChord } from '@/hooks/useKeyboardShortcuts';
+import { Mark } from '@/components/ui/Wordmark';
 
 export function WorkspaceTopBar({ onCommandPalette }: { onCommandPalette: () => void }) {
   const { sidebarOpen, previewOpen, bottomOpen, toggleSidebar, togglePreview, toggleBottom } =
@@ -58,7 +58,7 @@ export function WorkspaceTopBar({ onCommandPalette }: { onCommandPalette: () => 
       <Link to="/dashboard" aria-label="Back to dashboard" className="flex items-center gap-1.5 pr-1">
         <ArrowLeft className="h-3.5 w-3.5 text-ink-faint" />
         <span className="flex h-5 w-5 items-center justify-center rounded bg-accent text-accent-ink">
-          <Hammer className="h-3 w-3" />
+          <Mark className="h-3.5 w-3.5" />
         </span>
       </Link>
 

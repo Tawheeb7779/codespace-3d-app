@@ -92,7 +92,7 @@ export function Modal({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
       <div
-        className="fixed inset-0 animate-fade-in bg-black/60 backdrop-blur-[2px]"
+        className="ta-scrim fixed inset-0 animate-fade-in"
         onClick={dismissible ? onClose : undefined}
         aria-hidden
       />

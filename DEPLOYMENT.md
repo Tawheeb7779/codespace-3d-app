@@ -1,6 +1,6 @@
-# Deploying Forge IDE
+# Deploying TA CODE
 
-Forge is a static single-page application. The build output in `dist/` is
+TA CODE is a static single-page application. The build output in `dist/` is
 plain files; there is no server component except the Supabase Edge Functions,
 which deploy separately.
 
@@ -11,7 +11,7 @@ npm run build      # typecheck, then vite build -> dist/
 
 ## 1. The one hosting requirement: SPA fallback
 
-Forge uses history routing (`/dashboard`, `/project/:id`, `/invite`,
+TA CODE uses history routing (`/dashboard`, `/project/:id`, `/invite`,
 `/settings/github/callback`). A static host that does not rewrite unknown
 paths to `index.html` will return 404 on refresh and break every deep link —
 including the GitHub OAuth callback and invitation links, which are only ever
@@ -56,9 +56,9 @@ Set these:
 | --- | --- | --- |
 | `X-Content-Type-Options` | `nosniff` | The preview serves user code; never let a response be re-interpreted. |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Invitation tokens live in the URL fragment, which is never sent — this covers the rest. |
-| `X-Frame-Options` | `DENY` | Forge is not meant to be framed. |
+| `X-Frame-Options` | `DENY` | TA CODE is not meant to be framed. |
 
-**Do not set `Cross-Origin-Embedder-Policy`.** Forge does not use
+**Do not set `Cross-Origin-Embedder-Policy`.** TA CODE does not use
 `SharedArrayBuffer`: esbuild-wasm runs in an ordinary Web Worker
 (`worker: true`, no shared memory), so cross-origin isolation buys nothing —
 and COEP would block the preview from fetching packages from esm.sh or
@@ -77,7 +77,7 @@ VITE_SUPABASE_ANON_KEY=<anon / publishable key>
 ```
 
 The anon key grants nothing on its own — every table is behind row level
-security. Forge refuses to start if it is handed a service-role key, and says
+security. TA CODE refuses to start if it is handed a service-role key, and says
 why.
 
 With neither set the app runs in **Local Development Mode**: a browser-local

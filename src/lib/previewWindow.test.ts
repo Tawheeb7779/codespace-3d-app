@@ -57,7 +57,7 @@ describe('opening the preview in a new tab', () => {
 
   it('names the tab after the project', () => {
     const { doc, opener } = fakeTab();
-    openPreviewWindow('<p>x</p>', 'Landing — Forge preview', opener);
-    expect(doc.title).toBe('Landing — Forge preview');
+    openPreviewWindow('<p>x</p>', 'Landing — TA CODE preview', opener);
+    expect(doc.title).toBe('Landing — TA CODE preview');
   });
 });

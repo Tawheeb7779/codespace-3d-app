@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "audit:reconciliation": "node scripts/audit-reconciliation.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run audit:reconciliation && npm run test && npm run build",
+    "audit:contrast": "node scripts/audit-contrast.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run audit:reconciliation && npm run audit:contrast && npm run test && npm run build",
     "test:e2e": "node e2e/smoke.mjs",
     "build:preview-runtime": "node scripts/build-preview-runtime.mjs",
     "predev": "npm run build:preview-runtime",
@@ -31,6 +32,8 @@
     "test:e2e:integration": "node e2e/integration.mjs",
     "test:e2e:polish": "node e2e/polish.mjs",
     "test:e2e:persistence": "node e2e/persistence.mjs",
+    "test:e2e:product": "node e2e/product.mjs",
+    "test:e2e:stress": "node e2e/stress.mjs",
     "verify:cloud": "node scripts/verify-cloud-save.mjs"
   },
   "dependencies": {

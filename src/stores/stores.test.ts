@@ -319,7 +319,7 @@ describe('version control integration', () => {
     const project = await freshProject();
     await useGitStore.getState().load(project.id);
     const before = await useGitStore.getState().runCommand(['status']);
-    expect(before.map((l) => l.text).join('\n')).toContain('not a Forge VCS repository');
+    expect(before.map((l) => l.text).join('\n')).toContain('not a TA CODE repository');
 
     await useGitStore.getState().runCommand(['init']);
     const after = await useGitStore.getState().runCommand(['status']);

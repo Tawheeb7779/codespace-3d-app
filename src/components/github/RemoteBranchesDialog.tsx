@@ -138,7 +138,7 @@ export function RemoteBranchesDialog({ open, onClose }: { open: boolean; onClose
                       disabled={!canWrite || isDefault || branch.protected || busy !== null}
                       title={
                         isDefault
-                          ? 'The default branch cannot be deleted from Forge'
+                          ? 'The default branch cannot be deleted from TA CODE'
                           : branch.protected
                             ? 'This branch is protected on GitHub'
                             : `Delete ${branch.name} on GitHub`

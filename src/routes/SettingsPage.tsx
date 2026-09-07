@@ -88,7 +88,7 @@ export default function SettingsPage() {
   const persistence = persistenceStatus();
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-canvas">
+    <div className="ta-ground flex h-full flex-col overflow-hidden">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4">
         <Link to="/dashboard" className="flex items-center gap-1.5 text-ink-muted hover:text-ink">
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -196,8 +196,8 @@ export default function SettingsPage() {
                     setAppearance({ theme: event.target.value as ThemeName })
                   }
                   options={[
-                    { value: 'forge-dark', label: 'Forge Dark' },
-                    { value: 'forge-light', label: 'Forge Light' },
+                    { value: 'forge-dark', label: 'TA Dark' },
+                    { value: 'forge-light', label: 'TA Light' },
                     { value: 'system', label: 'Match system' },
                   ]}
                 />
@@ -276,7 +276,7 @@ export default function SettingsPage() {
           )}
 
           {section === 'sourceControl' && (
-            <Group title="Source control" description="Defaults for Forge VCS and pushes to GitHub.">
+            <Group title="Source control" description="Defaults for TA CODE's version control and pushes to GitHub.">
               <Input
                 label="Default branch for new repositories"
                 value={git.defaultBranch}

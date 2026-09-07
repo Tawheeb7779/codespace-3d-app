@@ -1,7 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#608fff" />
-  <path
-    d="M11 9h11.5v3.2h-8v4h7v3.2h-7V25H11V9Z"
-    fill="#080b11"
-  />
+  <!--
+    The same caret-and-baseline as the in-app mark, drawn a little heavier so it
+    holds together at 16px in a browser tab. Colours are the palette's accent
+    and the ink that sits on it.
+  -->
+  <rect width="32" height="32" rx="7" fill="#38b0d6" />
+  <g
+    fill="none"
+    stroke="#050d11"
+    stroke-width="3.2"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  >
+    <path d="M10 10l6 6-6 6" />
+    <path d="M18 22h5" />
+  </g>
 </svg>

@@ -41,38 +41,47 @@ export function setupMonaco(): typeof monaco {
     },
   };
 
+  /*
+   * The editor's own colours, matched to the interface's.
+   *
+   * `editor.background` is the sunken surface rather than the panel surface:
+   * code sits under the frame, and that one step of separation is what stops
+   * the editor from dissolving into the sidebar. The syntax hues are held
+   * apart from the interface accent on purpose — a keyword that shares a colour
+   * with the focus ring makes both harder to find.
+   */
   monaco.editor.defineTheme('forge-dark', {
     base: 'vs-dark',
     inherit: true,
     rules: [
-      { token: 'comment', foreground: '5c6780', fontStyle: 'italic' },
-      { token: 'keyword', foreground: 'c792ea' },
-      { token: 'string', foreground: '9ece6a' },
-      { token: 'number', foreground: 'ff9e64' },
-      { token: 'type', foreground: '7dcfff' },
-      { token: 'function', foreground: '82aaff' },
-      { token: 'variable', foreground: 'e2e8f5' },
-      { token: 'tag', foreground: 'f7768e' },
-      { token: 'attribute.name', foreground: 'bb9af7' },
+      { token: 'comment', foreground: '6d7581', fontStyle: 'italic' },
+      { token: 'keyword', foreground: 'c39ae0' },
+      { token: 'string', foreground: '8fca7a' },
+      { token: 'number', foreground: 'e0a76a' },
+      { token: 'type', foreground: '6fc6dd' },
+      { token: 'function', foreground: '7fb2e8' },
+      { token: 'variable', foreground: 'e3e7ed' },
+      { token: 'tag', foreground: 'e88b93' },
+      { token: 'attribute.name', foreground: 'c0a2dd' },
     ],
     colors: {
-      'editor.background': '#0e121a',
-      'editor.foreground': '#e2e8f5',
-      'editorLineNumber.foreground': '#3b465c',
-      'editorLineNumber.activeForeground': '#8a96b0',
-      'editor.selectionBackground': '#243a6a',
-      'editor.lineHighlightBackground': '#141926',
-      'editorCursor.foreground': '#608fff',
-      'editorIndentGuide.background1': '#1d2431',
-      'editorIndentGuide.activeBackground1': '#2f3a4d',
-      'editorGutter.background': '#0e121a',
-      'editorWidget.background': '#181e2a',
-      'editorWidget.border': '#212938',
-      'editorSuggestWidget.background': '#181e2a',
-      'editorSuggestWidget.selectedBackground': '#1a284a',
-      'editorHoverWidget.background': '#181e2a',
-      'scrollbarSlider.background': '#2b3448',
-      'minimap.background': '#0b0f17',
+      'editor.background': '#070909',
+      'editor.foreground': '#e3e7ed',
+      'editorLineNumber.foreground': '#3a424e',
+      'editorLineNumber.activeForeground': '#98a0ac',
+      'editor.selectionBackground': '#12384a',
+      'editor.lineHighlightBackground': '#111418',
+      'editorCursor.foreground': '#38b0d6',
+      'editorIndentGuide.background1': '#1b1f25',
+      'editorIndentGuide.activeBackground1': '#2c333c',
+      'editorGutter.background': '#070909',
+      'editorWidget.background': '#1c2127',
+      'editorWidget.border': '#242a32',
+      'editorSuggestWidget.background': '#1c2127',
+      'editorSuggestWidget.selectedBackground': '#0d2a36',
+      'editorHoverWidget.background': '#1c2127',
+      'scrollbarSlider.background': '#39424e',
+      'minimap.background': '#070909',
     },
   });
 
@@ -80,19 +89,29 @@ export function setupMonaco(): typeof monaco {
     base: 'vs',
     inherit: true,
     rules: [
-      { token: 'comment', foreground: '7a839a', fontStyle: 'italic' },
-      { token: 'keyword', foreground: '8c2fbf' },
-      { token: 'string', foreground: '18794e' },
-      { token: 'number', foreground: 'b45309' },
-      { token: 'type', foreground: '0b6f9d' },
-      { token: 'function', foreground: '2a5be0' },
+      { token: 'comment', foreground: '74808f', fontStyle: 'italic' },
+      { token: 'keyword', foreground: '7c2d9e' },
+      { token: 'string', foreground: '0d7742' },
+      { token: 'number', foreground: '8d5c06' },
+      { token: 'type', foreground: '0d749c' },
+      { token: 'function', foreground: '1d5fb8' },
+      { token: 'tag', foreground: 'ba2828' },
+      { token: 'attribute.name', foreground: '7c2d9e' },
     ],
     colors: {
       'editor.background': '#ffffff',
-      'editor.foreground': '#161b26',
-      'editorLineNumber.foreground': '#b3bacb',
-      'editor.lineHighlightBackground': '#f4f6fb',
-      'editorCursor.foreground': '#2a5be0',
+      'editor.foreground': '#15191f',
+      'editorLineNumber.foreground': '#b4bbc5',
+      'editorLineNumber.activeForeground': '#555c67',
+      'editor.selectionBackground': '#dbf0f8',
+      'editor.lineHighlightBackground': '#f6f7f9',
+      'editorCursor.foreground': '#0d749c',
+      'editorIndentGuide.background1': '#e7e9ee',
+      'editorIndentGuide.activeBackground1': '#c9ced7',
+      'editorWidget.background': '#ffffff',
+      'editorWidget.border': '#dfe2e8',
+      'editorSuggestWidget.background': '#ffffff',
+      'editorSuggestWidget.selectedBackground': '#dbf0f8',
     },
   });
 

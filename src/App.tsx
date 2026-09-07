@@ -18,7 +18,7 @@ const InvitePage = lazy(() => import('@/routes/InvitePage'));
 
 function FullPageSpinner({ label }: { label: string }) {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas">
+    <div className="ta-ground flex h-full w-full flex-col items-center justify-center gap-3">
       <Spinner className="h-5 w-5" />
       <p className="text-sm text-ink-faint">{label}</p>
     </div>
@@ -45,7 +45,7 @@ export default function App() {
   }, [initialize]);
 
   return (
-    <ErrorBoundary area="Forge IDE">
+    <ErrorBoundary area="TA CODE">
       <Suspense fallback={<FullPageSpinner label="Loading…" />}>
         <Routes>
           <Route path="/" element={<LandingPage />} />

@@ -5,46 +5,71 @@
 @tailwind utilities;
 
 @layer base {
-  /* Dark is the product's native theme; light is a first-class alternate. */
+  /*
+   * TA CODE's palette.
+   *
+   * The surfaces are neutral graphite rather than blue-black. A blue cast on
+   * every panel is what makes a dark interface read as generic; taking it out
+   * leaves the only saturated things on screen being the ones that mean
+   * something — which is the whole point of a tool you stare at all day.
+   *
+   * Depth is carried by five surface steps, not by shadow. Sunken is where
+   * content sits *under* the frame (the editor gutter, a well), surface is the
+   * frame itself, raised is a row you are pointing at, overlay is something
+   * floating above everything. Each step is a small luminance move, so the
+   * hierarchy is legible without any of it shouting.
+   *
+   * The accent sits at ~196°, a cyan-leaning signal blue. Blue is not a taste
+   * decision: success, warning and error already own green, amber and red, and
+   * an accent that shares a hue with a status is a control that looks like a
+   * verdict. `scripts/audit-contrast.mjs` measures every pair here against WCAG
+   * and holds the accent apart from all three by hue, so these are numbers
+   * rather than opinions.
+   */
   :root,
   [data-theme='forge-dark'] {
     color-scheme: dark;
-    --c-canvas: 8 11 17;
-    --c-surface: 14 18 26;
-    --c-surface-raised: 20 25 35;
-    --c-surface-sunken: 5 7 12;
-    --c-surface-overlay: 24 30 42;
-    --c-line: 33 41 56;
-    --c-line-strong: 52 63 82;
-    --c-ink: 226 232 245;
-    --c-ink-muted: 150 161 184;
-    --c-ink-faint: 104 116 140;
-    --c-accent: 96 143 255;
-    --c-accent-soft: 26 40 74;
-    --c-accent-ink: 8 11 17;
-    --c-positive: 74 222 128;
-    --c-caution: 250 204 21;
-    --c-danger: 248 113 113;
+    --c-canvas: 11 13 16;
+    --c-surface: 17 20 24;
+    --c-surface-raised: 24 28 33;
+    --c-surface-sunken: 7 9 11;
+    --c-surface-overlay: 28 33 39;
+    --c-line: 36 42 50;
+    --c-line-strong: 57 66 78;
+    --c-ink: 227 231 237;
+    --c-ink-muted: 152 160 172;
+    --c-ink-faint: 109 117 129;
+    --c-accent: 56 176 214;
+    --c-accent-soft: 13 42 54;
+    --c-accent-ink: 5 13 17;
+    --c-positive: 61 199 130;
+    --c-caution: 230 176 74;
+    --c-danger: 240 113 113;
   }
 
   [data-theme='forge-light'] {
     color-scheme: light;
-    --c-canvas: 247 248 251;
+    --c-canvas: 246 247 249;
     --c-surface: 255 255 255;
-    --c-surface-raised: 255 255 255;
-    --c-surface-sunken: 241 243 248;
+    /* Raised is a shade *down* in light, not up: on white, a row you are
+       pointing at reads as recessed, and there is nowhere brighter to go. */
+    --c-surface-raised: 241 243 246;
+    --c-surface-sunken: 237 239 243;
     --c-surface-overlay: 255 255 255;
-    --c-line: 223 227 236;
-    --c-line-strong: 197 203 216;
-    --c-ink: 22 27 38;
-    --c-ink-muted: 87 96 115;
-    --c-ink-faint: 130 139 158;
-    --c-accent: 42 91 224;
-    --c-accent-soft: 226 234 254;
+    --c-line: 223 226 232;
+    --c-line-strong: 190 196 205;
+    --c-ink: 21 25 31;
+    --c-ink-muted: 85 92 103;
+    --c-ink-faint: 116 124 136;
+    --c-accent: 13 116 156;
+    --c-accent-soft: 219 240 248;
     --c-accent-ink: 255 255 255;
-    --c-positive: 21 143 74;
-    --c-caution: 176 122 8;
-    --c-danger: 200 45 45;
+    /* Darker than the dark theme's equivalents: the same hue that reads
+       clearly on graphite is unreadable on white, and a status nobody can
+       read is not a status. */
+    --c-positive: 13 119 66;
+    --c-caution: 141 92 6;
+    --c-danger: 186 40 40;
   }
 
   * {
@@ -131,6 +156,19 @@
     background-clip: content-box;
   }
 
+  /*
+   * The scrim behind anything modal.
+   *
+   * The dialog and the command palette had drifted to two different opacities,
+   * which is visible when one opens over the other. One rule now, tied to the
+   * sunken surface rather than to black, so it dims the workspace in light mode
+   * instead of bruising it.
+   */
+  .ta-scrim {
+    background-color: rgb(var(--c-surface-sunken) / 0.72);
+    backdrop-filter: blur(2px);
+  }
+
   .panel-label {
     @apply text-2xs font-semibold uppercase tracking-[0.12em] text-ink-faint;
   }
@@ -139,13 +177,76 @@
     @apply border-line;
   }
 
-  /* Subtle technical grid used behind hero and empty states. */
-  .grid-backdrop {
+  /*
+   * The workspace ground.
+   *
+   * Three flat layers, no image and no animation: a measured grid at the scale
+   * of the editor's own indentation, a single wide light source in the top
+   * left, and a floor that darkens towards the status bar. Together they give
+   * the panels something to sit *on* rather than float in — depth from
+   * luminance, which costs one paint, instead of from blur or shadow, which
+   * costs one every frame.
+   *
+   * It is only ever seen at the edges and in empty states. Every panel above it
+   * is opaque, so no amount of texture here can reach the code: contrast
+   * against a background you cannot see through is contrast against the panel.
+   *
+   * The grid is `--ta-grid` so a denser layout can retune it in one place.
+   */
+  .ta-ground {
+    --ta-grid: 32px;
+    background-color: rgb(var(--c-canvas));
     background-image:
-      linear-gradient(to right, rgb(var(--c-line) / 0.55) 1px, transparent 1px),
-      linear-gradient(to bottom, rgb(var(--c-line) / 0.55) 1px, transparent 1px);
-    background-size: 56px 56px;
-    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+      radial-gradient(
+        ellipse 120% 80% at 12% -10%,
+        rgb(var(--c-accent) / 0.05) 0%,
+        transparent 60%
+      ),
+      linear-gradient(to bottom, transparent 55%, rgb(var(--c-surface-sunken) / 0.65) 100%),
+      linear-gradient(to right, rgb(var(--c-line) / 0.24) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--c-line) / 0.24) 1px, transparent 1px);
+    background-size:
+      100% 100%,
+      100% 100%,
+      var(--ta-grid) var(--ta-grid),
+      var(--ta-grid) var(--ta-grid);
+  }
+
+  /* On white the same three layers would be mud; the grid alone carries it. */
+  [data-theme='forge-light'] .ta-ground {
+    background-image:
+      radial-gradient(
+        ellipse 120% 80% at 12% -10%,
+        rgb(var(--c-accent) / 0.045) 0%,
+        transparent 60%
+      ),
+      linear-gradient(to right, rgb(var(--c-line) / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--c-line) / 0.5) 1px, transparent 1px);
+    background-size:
+      100% 100%,
+      var(--ta-grid) var(--ta-grid),
+      var(--ta-grid) var(--ta-grid);
+  }
+
+  /*
+   * The same ground, at the scale a marketing page is read from.
+   *
+   * The workspace grid is sized to the editor; on a landing page, at arm's
+   * length, that reads as noise. This one is coarser and fades out below the
+   * fold so it never competes with the text it sits behind.
+   */
+  .ta-ground-wide {
+    --ta-grid: 72px;
+    background-color: rgb(var(--c-canvas));
+    background-image:
+      radial-gradient(ellipse 90% 55% at 50% -8%, rgb(var(--c-accent) / 0.08) 0%, transparent 65%),
+      linear-gradient(to right, rgb(var(--c-line) / 0.3) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--c-line) / 0.3) 1px, transparent 1px);
+    background-size:
+      100% 100%,
+      var(--ta-grid) var(--ta-grid),
+      var(--ta-grid) var(--ta-grid);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
   }
 
   .skeleton {

@@ -107,7 +107,7 @@ export async function pullRemote(
   if (tree.truncated) {
     return {
       kind: 'blocked',
-      reason: 'That repository is too large for Forge to read in one tree.',
+      reason: 'That repository is too large for TA CODE to read in one tree.',
       remote: fetched.remote,
     };
   }

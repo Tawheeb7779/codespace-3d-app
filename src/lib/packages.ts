@@ -45,7 +45,7 @@ async function registryFetch(url: string, init?: RequestInit): Promise<Response>
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new RegistryError(
       `Could not reach ${REGISTRY}. Check your network, proxy or extensions — ` +
-        'Forge talks to the npm registry directly from this tab.',
+        'TA CODE talks to the npm registry directly from this tab.',
     );
   }
 }

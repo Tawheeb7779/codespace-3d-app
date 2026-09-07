@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, Hammer, XCircle } from 'lucide-react';
+import { CheckCircle2, XCircle } from 'lucide-react';
+import { Mark } from '@/components/ui/Wordmark';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Primitives';
 import { useAuthStore } from '@/stores/authStore';
@@ -73,10 +74,10 @@ export default function InvitePage() {
   }, [user, restoring, navigate]);
 
   return (
-    <div className="flex h-full items-center justify-center bg-canvas p-6">
+    <div className="ta-ground flex h-full items-center justify-center p-6">
       <div className="w-full max-w-md text-center">
         <span className="mx-auto mb-4 flex h-9 w-9 items-center justify-center rounded bg-accent text-accent-ink">
-          <Hammer aria-hidden className="h-4 w-4" />
+          <Mark className="h-4 w-4" />
         </span>
 
         {(status === 'reading' || status === 'accepting') && (

@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { AlertCircle, Github, Hammer, Loader2, Mail } from 'lucide-react';
+import { AlertCircle, Github, Loader2, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Field';
 import { Badge } from '@/components/ui/Primitives';
 import { useAuthStore } from '@/stores/authStore';
 import { isSupabaseConfigured, supabaseConfigDetail } from '@/lib/supabase';
+import { Wordmark } from '@/components/ui/Wordmark';
 
 interface AuthPageProps {
   mode: 'signin' | 'signup' | 'callback';
@@ -96,12 +97,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
     <div className="grid h-full grid-cols-1 overflow-y-auto bg-canvas lg:grid-cols-2">
       {/* Brand rail */}
       <aside className="relative hidden flex-col justify-between border-r border-line p-10 lg:flex">
-        <div aria-hidden className="pointer-events-none absolute inset-0 grid-backdrop" />
+        <div aria-hidden className="pointer-events-none absolute inset-0 ta-ground-wide" />
         <Link to="/" className="relative flex items-center gap-2">
-          <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-accent-ink">
-            <Hammer className="h-3.5 w-3.5" />
-          </span>
-          <span className="text-md font-semibold text-ink">Forge</span>
+          <Wordmark />
         </Link>
         <div className="relative max-w-sm">
           <h2 className="text-2xl font-semibold text-ink">
@@ -123,14 +121,11 @@ export default function AuthPage({ mode }: AuthPageProps) {
       <main className="flex items-center justify-center px-4 py-12 sm:px-8">
         <div className="w-full max-w-sm">
           <Link to="/" className="mb-8 flex items-center gap-2 lg:hidden">
-            <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-accent-ink">
-              <Hammer className="h-3.5 w-3.5" />
-            </span>
-            <span className="text-md font-semibold text-ink">Forge</span>
+            <Wordmark />
           </Link>
 
           <h1 className="text-xl font-semibold text-ink">
-            {isSignup ? 'Create your account' : 'Sign in to Forge'}
+            {isSignup ? 'Create your account' : 'Sign in to TA CODE'}
           </h1>
           <p className="mt-1.5 text-base text-ink-muted">
             {isSignup
@@ -249,7 +244,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
           )}
 
           <p className="mt-8 text-center text-base text-ink-muted">
-            {isSignup ? 'Already have an account?' : 'New to Forge?'}{' '}
+            {isSignup ? 'Already have an account?' : 'New to TA CODE?'}{' '}
             <Link
               to={isSignup ? '/signin' : '/signup'}
               className="font-medium text-accent hover:underline"

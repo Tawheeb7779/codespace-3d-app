@@ -35,7 +35,7 @@ const ERROR_ADVICE: Record<ProviderErrorKind, string> = {
   server: 'The provider is having trouble. Retrying usually works.',
   timeout: 'The provider did not answer in time. Try again.',
   network: 'Could not reach the provider. Check the base URL and your network.',
-  malformed: 'The provider sent a response Forge could not read.',
+  malformed: 'The provider sent a response TA CODE could not read.',
   request: 'The provider refused the request.',
 };
 
@@ -91,7 +91,7 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
       open={open}
       onClose={onClose}
       title="Connect a model provider"
-      description="Forge does not ship an API key. Bring your own, or point at a proxy you control."
+      description="TA CODE does not ship an API key. Bring your own, or point at a proxy you control."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>

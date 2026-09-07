@@ -180,7 +180,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
               placeholder="vercel/next.js or a full GitHub URL"
               value={repoSpec}
               onChange={(event) => setRepoSpec(event.target.value)}
-              hint="Public repositories only — Forge does not store GitHub tokens."
+              hint="Public repositories only — TA CODE does not store GitHub tokens."
             />
             <Button size="sm" loading={busy} disabled={!repoSpec.trim()} onClick={() => void fromGithub()}>
               Fetch repository

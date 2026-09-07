@@ -349,7 +349,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'run_command',
     description:
-      'Run a Forge Shell command in the workspace (for example "build", "git status", "npm ls"). Returns the real output.',
+      'Run a TA CODE shell command in the workspace (for example "build", "git status", "npm ls"). Returns the real output.',
     input_schema: {
       type: 'object',
       properties: { command: { type: 'string', description: 'Shell command line' } },

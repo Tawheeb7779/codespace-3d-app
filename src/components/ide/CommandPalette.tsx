@@ -91,7 +91,7 @@ export function CommandPalette({
 
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-start justify-center p-4">
-      <div className="fixed inset-0 animate-fade-in bg-black/50" onClick={onClose} aria-hidden />
+      <div className="ta-scrim fixed inset-0 animate-fade-in" onClick={onClose} aria-hidden />
       <div
         role="dialog"
         aria-modal="true"

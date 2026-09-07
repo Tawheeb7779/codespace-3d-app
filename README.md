@@ -1,10 +1,10 @@
-# Forge IDE
+# TA CODE
 
 A browser-based development environment: the Monaco editor, a real bundler, a
 working shell, version control and a sandboxed live preview — all running client
 side, with nothing to install.
 
-Forge is built on one rule: **every visible feature either works, or says
+TA CODE is built on one rule: **every visible feature either works, or says
 plainly that it cannot.** Where a browser genuinely cannot do something (bind a
 TCP port, talk to a git remote, populate `node_modules`), the UI states the
 limitation instead of miming the behaviour.
@@ -37,8 +37,8 @@ limitation instead of miming the behaviour.
 | **Editor** | Monaco with language workers, IntelliSense, folding, multi-cursor, find/replace, go-to-symbol, breadcrumbs, split view, per-file view state, format-on-save. |
 | **Build** | `esbuild-wasm` compiles the project's real source in a worker. React and its JSX runtimes are bundled in from this origin, so React previews need no network. Diagnostics carry file, line and column, and clicking one jumps there. |
 | **Preview** | A sandboxed iframe (`allow-scripts` only, no `allow-same-origin`). Console output, runtime errors and unhandled rejections are piped back. Device presets, refresh, open-in-tab. |
-| **Terminal** | xterm.js over *Forge Shell*, a command interpreter that mutates the real virtual file system. History, tab completion, multiple sessions. |
-| **Version control** | *Forge VCS*: content-addressed blobs, commits, branches, staging, three-way merge with conflict markers, line-level diff viewer. |
+| **Terminal** | xterm.js over *the TA CODE shell*, a command interpreter that mutates the real virtual file system. History, tab completion, multiple sessions. |
+| **Version control** | *TA CODE's version control*: content-addressed blobs, commits, branches, staging, three-way merge with conflict markers, line-level diff viewer. |
 | **Search** | Project-wide search in a worker: regex, whole word, case, include/exclude globs, replace across files. |
 | **Packages** | Live npm registry search and version resolution, written into `package.json`; anything not in the local runtime is imported at that exact version from a CDN, and an unreachable CDN produces a named, actionable error rather than a blank frame. |
 | **AI assistant** | An agent loop over nine real tools. Bring your own provider; every tool call and its result are shown. |
@@ -75,7 +75,7 @@ fileStore      working tree for the open project, dirty tracking, autosave
 editorStore    tabs, active file, cursor, problems, reveal requests
 terminalStore  shell sessions and scrollback
 previewStore   build status and the generated preview document
-gitStore       Forge VCS state, status and history
+gitStore       TA CODE's version control state, status and history
 aiStore        assistant transcript and provider config
 consoleStore   the output/console buffer
 uiStore        panel geometry and overlays
@@ -136,7 +136,7 @@ when `event.source` is that exact frame. Uncaught exceptions, unhandled
 rejections and failed resource loads are reported to the Output panel and drawn
 as an overlay inside the preview.
 
-### Forge VCS
+### TA CODE's version control
 
 Not git, and it does not claim to be. It is a snapshot engine with the concepts
 the IDE needs: a blob store keyed by content hash, commits with parents,
@@ -206,7 +206,7 @@ The anon key is embedded in the client bundle by design: on its own it grants
 nothing, because every table is protected by row level security.
 
 **Never set a service-role key here.** It bypasses RLS, and anything prefixed
-`VITE_` ships to every visitor. Forge inspects the key's JWT payload at startup
+`VITE_` ships to every visitor. TA CODE inspects the key's JWT payload at startup
 and refuses to use one that carries `role: service_role`, logging an error
 instead.
 
@@ -444,7 +444,7 @@ src/
     preview.ts     preview document assembly and the sandbox bridge
     shell.ts       command interpreter (pure)
     shellHost.ts   binds the interpreter to live stores
-    vcs.ts         Forge VCS engine
+    vcs.ts         TA CODE's version control engine
     diff.ts        LCS diff and three-way merge
     search.ts      search, glob and replace
     packages.ts    npm registry client
@@ -480,7 +480,7 @@ supabase/
 A project can track a real GitHub repository and fetch, pull and push against
 it. Pushing builds real git objects through the Git Data API — blobs, trees,
 commits — and moves the branch with `force: false`, so **GitHub** performs the
-fast-forward check. Forge never reports a push as successful before GitHub has
+fast-forward check. TA CODE never reports a push as successful before GitHub has
 confirmed the ref update, and never forces.
 
 ### Where the credential lives
@@ -538,7 +538,7 @@ being executed rather than from anything the model claims.
 
 ### What it can verify
 
-Forge runs in a browser, so there is no Node process: `npm test`, `tsc` and
+TA CODE runs in a browser, so there is no Node process: `npm test`, `tsc` and
 `npm run <script>` do not exist here and the agent is told so rather than being
 handed a tool that pretends. The checks it does have are real:
 
@@ -565,7 +565,7 @@ The agent reaches the project and nothing else. Paths go through the shared VFS
 validator, absolute paths are refused outright rather than reinterpreted, and
 protected files (`.env`, `.git/`, `node_modules/`, `.ssh/`) are unreadable —
 including through a content search. It has no GitHub tool, no access to any
-credential, and no host shell: `run_command` reaches the Forge Shell over the
+credential, and no host shell: `run_command` reaches the the TA CODE shell over the
 project's virtual file system. One task holds a project at a time, and
 cancelling stops the loop, settles any pending approval and reports what was
 completed.
@@ -582,10 +582,10 @@ These are deliberate, and the UI says so where a user would otherwise be misled:
 - **The git remote is GitHub over REST, not the git wire protocol.** Fetch,
   pull and push are real — they create genuine git blobs, trees and commits
   through GitHub's Git Data API, and GitHub itself performs the fast-forward
-  check on every ref update. What Forge does not implement is `git clone` over
+  check on every ref update. What TA CODE does not implement is `git clone` over
   smart HTTP, arbitrary git hosts, force pushing, tags, submodules or LFS. A
-  divergent pull merges with Forge's own three-way merge, so the local history
-  graph is Forge's, not a byte-identical copy of the remote's.
+  divergent pull merges with TA CODE's own three-way merge, so the local history
+  graph is TA CODE's, not a byte-identical copy of the remote's.
 - **Node and Next.js templates cannot preview.** They need a server process.
   Editing, search, version control and export work normally; the preview panel
   explains why it is unavailable rather than showing a blank frame.

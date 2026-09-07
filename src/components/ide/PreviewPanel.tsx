@@ -88,7 +88,7 @@ export function PreviewPanel() {
 
   const openInTab = () => {
     if (!doc) return;
-    const result = openPreviewWindow(doc, `${name ?? 'Preview'} — Forge preview`);
+    const result = openPreviewWindow(doc, `${name ?? 'Preview'} — TA CODE preview`);
     if (result === 'blocked') {
       toast.warning('Popup blocked', 'Allow popups for this site to open the preview.');
     } else if (result === 'unavailable') {

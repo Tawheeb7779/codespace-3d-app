@@ -105,7 +105,7 @@ export function describeDatabaseError(error: DatabaseError | null): string {
       return 'The database could not be reached. Check your network connection.';
     case 'schema':
       return (
-        'The database is missing something this version of Forge expects. ' +
+        'The database is missing something this version of TA CODE expects. ' +
         'Apply the migrations in supabase/migrations to this project.'
       );
     case 'conflict':
