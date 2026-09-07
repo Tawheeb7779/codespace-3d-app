@@ -15,23 +15,36 @@
  *
  * A step that returns no rows fails here, exactly as it now fails in the app.
  *
- * Usage — from the repository root, with your .env in place:
+  * Usage — from the repository root, with your .env in place:
  *
  *   npm run verify:cloud
  *
- * It asks for the account to sign in as. The password is read without echo and
- * only ever lives in this process: it is not written to .env, not put in the
- * environment, not passed on a command line where `ps` and shell history would
- * see it, and never printed — not in a step name, not in an error.
+ * It signs in the way you actually sign in. By default that is a real OAuth
+ * round trip: it opens your browser at Supabase's authorize URL, you complete
+ * Google (or GitHub) as normal, and the provider redirects back to a one-shot
+ * listener on localhost that this process is holding open. Nothing here ever
+ * sees your Google password, and no Forge password has to exist.
  *
- * For a non-interactive run (CI), FORGE_TEST_EMAIL and FORGE_TEST_PASSWORD are
- * still honoured if they are set. Nothing requires them to be stored anywhere.
+ *   --provider github     use GitHub instead of Google
+ *   --session             skip the browser: paste a session the app already has
+ *   --port 8910           the localhost port the redirect comes back to
+ *   --browser             do the OAuth round trip even with no terminal
+ *
+ * `--session` is the way out when the redirect URL is not in your project's
+ * allowlist: sign in to Forge as usual, take the session from the running app,
+ * and paste it here. The tokens are read without echo and are not stored.
+ *
+ * For a non-interactive run (CI), either FORGE_TEST_EMAIL and
+ * FORGE_TEST_PASSWORD, or FORGE_TEST_ACCESS_TOKEN and FORGE_TEST_REFRESH_TOKEN,
+ * are honoured if set. Nothing requires any of them to be stored anywhere.
  *
  * The account must already exist. Everything it creates is deleted at the end,
  * including on failure. Nothing it prints contains a token, key or password.
  */
 import { readFileSync } from 'node:fs';
-import { env, exit, stdin, stdout } from 'node:process';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { argv, env, exit, platform, stdin, stdout } from 'node:process';
 import { createClient } from '@supabase/supabase-js';
 
 // --------------------------------------------------------------- configuration
@@ -163,69 +176,281 @@ function readLine(question, { echo }) {
   });
 }
 
-/**
- * The account to sign in as.
- *
- * The environment still wins when it is set, so a CI job can run this without a
- * terminal. Otherwise it is asked for here, which is the point: a password kept
- * in .env is a password on disk, in a file every process in the tree can read,
- * and one `git add -A` away from being committed.
- */
-async function credentials() {
-  if (env.FORGE_TEST_EMAIL && env.FORGE_TEST_PASSWORD) {
-    return { email: env.FORGE_TEST_EMAIL, password: env.FORGE_TEST_PASSWORD };
-  }
-  if (!stdin.isTTY) {
-    console.error('No terminal to ask for the account, and no credentials in the environment.');
-    console.error('Run this from a terminal, or set FORGE_TEST_EMAIL and FORGE_TEST_PASSWORD');
-    console.error('for the one command — not in .env, where the password would live on disk.');
-    exit(2);
-  }
-  const host = new URL(url).host;
-  console.log(`Signing in to ${host}. The password is not echoed, stored or logged.\n`);
-  const email = env.FORGE_TEST_EMAIL || (await readLine('Forge account email: ', { echo: true }));
-  if (!email) {
-    console.error('No email given.');
-    exit(2);
-  }
-  const password = env.FORGE_TEST_PASSWORD || (await readLine('Password: ', { echo: false }));
-  if (!password) {
-    console.error('No password given.');
-    exit(2);
-  }
-  return { email, password };
-}
+// ----------------------------------------------------------------- arguments
 
-let credentialsForRun;
-try {
-  credentialsForRun = await credentials();
-} catch (error) {
-  // A cancelled prompt, and nothing else: the message is ours, not the user's
-  // input, so printing it cannot leak anything.
-  console.error(error?.message ?? 'Could not read the credentials.');
+const flag = (name) => argv.includes(`--${name}`);
+const option = (name, fallback) => {
+  const at = argv.indexOf(`--${name}`);
+  return at === -1 ? fallback : (argv[at + 1] ?? fallback);
+};
+
+const provider = option('provider', 'google');
+const callbackPort = Number(option('port', env.FORGE_VERIFY_PORT ?? 8910));
+if (!Number.isInteger(callbackPort) || callbackPort < 1024 || callbackPort > 65535) {
+  console.error(`--port must be a number between 1024 and 65535, not ${option('port', '')}`);
   exit(2);
 }
-const { email, password } = credentialsForRun;
-// Drop the only other reference, so the password is reachable from one place.
-credentialsForRun = null;
+
+// ------------------------------------------------------------- authentication
+
+/**
+ * Somewhere for the auth client to keep the PKCE code verifier.
+ *
+ * The verifier is minted when the authorize URL is built and needed again when
+ * the code comes back, so it has to survive between the two — but only within
+ * this process. Memory, not disk: nothing about this run should outlive it.
+ */
+const memoryStorage = () => {
+  const held = new Map();
+  return {
+    getItem: (key) => held.get(key) ?? null,
+    setItem: (key, value) => void held.set(key, value),
+    removeItem: (key) => void held.delete(key),
+  };
+};
+
+const authClient = (storage) =>
+  createClient(url, anonKey, {
+    auth: {
+      flowType: 'pkce',
+      persistSession: Boolean(storage),
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      ...(storage ? { storage } : {}),
+    },
+  });
+
+/** Ask the desktop to open a URL, and say so if it cannot. */
+function openInBrowser(target) {
+  const [command, args] =
+    platform === 'darwin'
+      ? ['open', [target]]
+      : platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', target]]
+        : ['xdg-open', [target]];
+  try {
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The real OAuth round trip, with a one-shot listener for the redirect.
+ *
+ * This is the flow `gh auth login` and `supabase login` use, and it is the only
+ * honest way to test an account that has no password: the provider is the one
+ * asking for credentials, in the browser, and this process only ever receives
+ * the authorization code that comes back.
+ */
+async function signInWithBrowser(client) {
+  const redirectTo = `http://localhost:${callbackPort}/callback`;
+  const { data, error } = await client.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo, skipBrowserRedirect: true },
+  });
+  if (error) throw new Error(`Could not start the ${provider} sign-in: ${error.message}`);
+  if (!data?.url) throw new Error('Supabase returned no authorize URL to open.');
+
+  const code = await new Promise((resolve, reject) => {
+    const server = createServer((request, response) => {
+      const requested = new URL(request.url, `http://localhost:${callbackPort}`);
+      if (requested.pathname !== '/callback') {
+        response.writeHead(404).end('Not here.');
+        return;
+      }
+      const returned = requested.searchParams.get('code');
+      const failure =
+        requested.searchParams.get('error_description') ?? requested.searchParams.get('error');
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(
+        `<!doctype html><meta charset="utf-8"><title>Forge</title>` +
+          `<body style="font:15px system-ui;padding:3rem;max-width:32rem">` +
+          `<h1 style="font-size:1.1rem">${returned ? 'Signed in.' : 'Sign-in failed.'}</h1>` +
+          `<p>${returned ? 'You can close this tab and go back to the terminal.' : 'Go back to the terminal for the details.'}</p>`,
+      );
+      // One request is all this listener exists for.
+      server.close();
+      if (returned) resolve(returned);
+      else reject(new Error(failure ?? 'The provider came back without an authorization code.'));
+    });
+
+    server.on('error', (serverError) => {
+      reject(
+        serverError.code === 'EADDRINUSE'
+          ? new Error(
+              `Port ${callbackPort} is already in use. Pass --port with a free one, and add ` +
+                'that address to the redirect allowlist too.',
+            )
+          : serverError,
+      );
+    });
+
+    server.listen(callbackPort, '127.0.0.1', () => {
+      console.log(`Opening your browser to sign in with ${provider}.`);
+      console.log('If it does not open, paste this into a browser yourself:\n');
+      console.log(`  ${data.url}\n`);
+      console.log(`Waiting for the redirect to ${redirectTo} …`);
+      openInBrowser(data.url);
+    });
+
+    // Do not hold the terminal for ever if the browser never comes back.
+    const giveUp = setTimeout(
+      () => {
+        server.close();
+        reject(new Error('Timed out after five minutes waiting for the browser to come back.'));
+      },
+      5 * 60 * 1000,
+    );
+    giveUp.unref?.();
+  });
+
+  const { data: exchanged, error: exchangeError } = await client.auth.exchangeCodeForSession(code);
+  if (exchangeError) {
+    throw new Error(
+      `The authorization code was refused: ${exchangeError.message}\n` +
+        `If it mentions the redirect, add ${redirectTo} to Authentication → URL ` +
+        'Configuration → Redirect URLs in the Supabase dashboard.',
+    );
+  }
+  return exchanged.session ?? null;
+}
+
+/**
+ * Use a session the app already holds.
+ *
+ * The way out when the localhost redirect is not allowlisted and adding it is
+ * not worth it. The tokens are read without echo, held only in this process,
+ * and expire on their own — but they are still bearer credentials, which is why
+ * this is the fallback and not the default.
+ */
+async function signInWithPastedSession(client) {
+  const accessToken =
+    env.FORGE_TEST_ACCESS_TOKEN ||
+    (await readLine('Access token: ', { echo: false }));
+  if (!accessToken) throw new Error('No access token given.');
+  const refreshToken =
+    env.FORGE_TEST_REFRESH_TOKEN ||
+    (await readLine('Refresh token (Enter to skip): ', { echo: false }));
+
+  const { data, error } = await client.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken || accessToken,
+  });
+  if (error) throw new Error(`That session was not accepted: ${error.message}`);
+  return data.session ?? null;
+}
+
+/** Print how to get a session out of the running app, without guessing at it. */
+function explainPastedSession() {
+  const ref = new URL(url).host.split('.')[0];
+  console.log('Sign in to Forge as you normally do, then in that tab open the browser');
+  console.log('console and run:\n');
+  console.log(`  JSON.parse(localStorage.getItem('sb-${ref}-auth-token'))\n`);
+  console.log('Copy `access_token` and `refresh_token` from what it prints.');
+  console.log('Nothing is echoed as you paste, and nothing is written to disk.\n');
+}
+
+/**
+ * Sign in, by whichever route this account actually has.
+ *
+ * Order matters: anything already in the environment wins, so a CI job never
+ * waits on a browser. Otherwise the browser round trip is the default, because
+ * it is how the person running this signs in — an account that only exists
+ * through Google has no password to ask for, and inventing one just for a test
+ * would be a credential created for no reason.
+ */
+async function authenticate() {
+  const password = env.FORGE_TEST_PASSWORD;
+  const email = env.FORGE_TEST_EMAIL;
+
+  if (email && password) {
+    const client = authClient(null);
+    return { client, mode: 'password', email, password };
+  }
+  if (env.FORGE_TEST_ACCESS_TOKEN) {
+    const client = authClient(null);
+    return { client, mode: 'session', session: await signInWithPastedSession(client) };
+  }
+  const host = new URL(url).host;
+
+  // The browser round trip reads nothing from stdin — the provider does the
+  // asking, in the browser — so it does not need a terminal. What it does need
+  // is somebody watching to complete it, which is why a run with no terminal
+  // has to say so explicitly rather than sit for five minutes in a CI job.
+  const canWait = stdin.isTTY || flag('browser');
+
+  if (flag('session')) {
+    if (!stdin.isTTY) {
+      console.error('--session pastes a token at a prompt, and there is no terminal here.');
+      console.error('Set FORGE_TEST_ACCESS_TOKEN and FORGE_TEST_REFRESH_TOKEN instead.');
+      exit(2);
+    }
+    console.log(`Signing in to ${host}.\n`);
+    explainPastedSession();
+    const client = authClient(null);
+    return { client, mode: 'session', session: await signInWithPastedSession(client) };
+  }
+
+  if (!canWait) {
+    console.error('No terminal to sign in at, and no credentials in the environment.');
+    console.error('Either run this from a terminal, add --browser to wait for an OAuth');
+    console.error('round trip anyway, or set one of these pairs for the one command:');
+    console.error('  FORGE_TEST_ACCESS_TOKEN and FORGE_TEST_REFRESH_TOKEN  (a session)');
+    console.error('  FORGE_TEST_EMAIL and FORGE_TEST_PASSWORD              (password accounts)');
+    console.error('Not in .env, where they would live on disk.');
+    exit(2);
+  }
+
+  console.log(`Signing in to ${host}.\n`);
+  const client = authClient(memoryStorage());
+  return { client, mode: 'oauth', session: await signInWithBrowser(client) };
+}
+
+let authenticated;
+try {
+  authenticated = await authenticate();
+} catch (error) {
+  // Our own message, or the provider's — neither contains a credential.
+  console.error(`\n${error?.message ?? 'Could not sign in.'}`);
+  exit(2);
+}
+
+const { client, mode } = authenticated;
+const email = authenticated.email ?? null;
+const password = authenticated.password ?? null;
+let session = authenticated.session ?? null;
+authenticated = null;
 
 /**
  * A last line of defence on the console.
  *
- * Nothing below is written to print the password, and nothing does. But the
+ * Nothing below is written to print a credential, and nothing does. But the
  * client library also writes to stderr on a network failure, and "we were
  * careful" is a weaker guarantee than "it cannot come out of this process".
- * Anything containing the password is redacted on the way to the terminal.
+ * Anything containing a secret is redacted on the way to the terminal.
  */
+const secrets = () =>
+  [password, session?.access_token, session?.refresh_token].filter(
+    (secret) => typeof secret === 'string' && secret.length >= 8,
+  );
+
 for (const channel of ['log', 'error', 'warn']) {
   const original = console[channel].bind(console);
   console[channel] = (...args) => {
+    const held = secrets();
     original(
-      ...args.map((arg) =>
-        typeof arg === 'string' && arg.includes(password)
-          ? arg.split(password).join('[redacted]')
-          : arg,
-      ),
+      ...args.map((arg) => {
+        if (typeof arg !== 'string') return arg;
+        let text = arg;
+        for (const secret of held) {
+          if (text.includes(secret)) text = text.split(secret).join('[redacted]');
+        }
+        return text;
+      }),
     );
   };
 }
@@ -275,10 +500,6 @@ const check = (error, context) => {
 
 // ------------------------------------------------------------------- the run
 
-const client = createClient(url, anonKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
 const host = new URL(url).host;
 const suffix = Date.now();
 const projectId = crypto.randomUUID();
@@ -293,12 +514,20 @@ let userId = null;
 console.log(`Verifying cloud persistence against ${host}\n`);
 
 try {
-  await step('sign in', async () => {
-    const { data, error } = await client.auth.signInWithPassword({ email, password });
-    check(error, 'Sign-in was refused');
-    userId = data.user?.id ?? null;
+  await step(`sign in (${mode})`, async () => {
+    if (mode === 'password') {
+      const { data, error } = await client.auth.signInWithPassword({ email, password });
+      check(error, 'Sign-in was refused');
+      session = data.session ?? null;
+    }
+    // The OAuth and pasted-session routes already hold a session by the time
+    // the run starts; there is nothing left to do but confirm the server
+    // agrees it is a session, which `getUser` asks it directly.
+    const { data: whoami, error: whoamiError } = await client.auth.getUser();
+    check(whoamiError, 'The auth server did not accept this session');
+    userId = whoami.user?.id ?? null;
     if (!userId) throw new Error('Signed in, but the session carries no user id.');
-    // The id is a uuid, not a credential; the token is never printed.
+    // The id is a uuid, not a credential; no token is ever printed.
     return `session user ${userId}`;
   });
 
@@ -415,12 +644,33 @@ try {
     return 'stored';
   });
 
-  await step('a fresh session reads it all back (what a refresh does)', async () => {
+  await step('a second session reads it all back (what a refresh does)', async () => {
+    // A second client, with its own empty cache, issuing its own requests. For
+    // a password account that is a second sign-in; for an OAuth or pasted
+    // session it is the same credential presented by a client that wrote none
+    // of this — which is what the check is about. Either way the rows have to
+    // come from the database rather than from anything the writer remembered.
     const reader = createClient(url, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const { error: signInError } = await reader.auth.signInWithPassword({ email, password });
-    check(signInError, 'The second sign-in was refused');
+
+    if (mode === 'password') {
+      const { error: signInError } = await reader.auth.signInWithPassword({ email, password });
+      check(signInError, 'The second sign-in was refused');
+    } else {
+      const { error: setError } = await reader.auth.setSession({
+        access_token: session?.access_token ?? '',
+        refresh_token: session?.refresh_token ?? '',
+      });
+      check(setError, 'The second client could not take the session');
+      // `getUser` is a request to the auth server, not a local decode, so this
+      // is the server confirming the second client's session independently.
+      const { data: whoami, error: whoamiError } = await reader.auth.getUser();
+      check(whoamiError, 'The auth server did not accept the second session');
+      if (whoami.user?.id !== userId) {
+        throw new Error('The second session belongs to a different user.');
+      }
+    }
 
     const { data: project, error: projectError } = await reader
       .from('projects')
@@ -449,7 +699,7 @@ try {
     if (missingDirs.length) {
       throw new Error(`Empty folders did not survive: ${missingDirs.join(', ')}`);
     }
-    await reader.auth.signOut();
+    if (mode === 'password') await reader.auth.signOut();
     return `${Object.keys(byPath).length} files, ${storedDirs.length} folders`;
   });
 
@@ -493,7 +743,9 @@ try {
   } catch (error) {
     cleanupNote = error?.message ?? String(error);
   }
-  await client.auth.signOut().catch(() => {});
+  // Only a session this script created is ours to end. Signing out of a
+  // session the browser is still using would sign the person out of Forge.
+  if (mode === 'password') await client.auth.signOut().catch(() => {});
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (cleanupNote) {
