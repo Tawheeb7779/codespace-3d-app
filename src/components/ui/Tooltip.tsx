@@ -91,7 +91,22 @@ export function Tooltip({ content, children, side = 'bottom', hint, delay = 350 
     },
     onMouseEnter: show,
     onMouseLeave: hide,
-    onFocus: () => {
+    onFocus: (event: FocusEvent & { currentTarget: HTMLElement }) => {
+      // Keyboard focus only, which is what this was always meant to be.
+      //
+      // `onFocus` fires for a click and a tap as well, so every icon button
+      // summoned a tooltip the moment it was pressed — and a dialog that moves
+      // focus to its close button on open showed one immediately, parked over
+      // the content it had just opened. `:focus-visible` is the browser's own
+      // answer to "did this focus come from the keyboard".
+      let keyboard = true;
+      try {
+        keyboard = event.currentTarget.matches(':focus-visible');
+      } catch {
+        // Older engines without the selector keep the previous behaviour
+        // rather than losing the tooltip entirely.
+      }
+      if (!keyboard) return;
       place();
       setOpen(true);
     },
