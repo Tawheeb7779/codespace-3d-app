@@ -34,6 +34,7 @@
     "test:e2e:persistence": "node e2e/persistence.mjs",
     "test:e2e:product": "node e2e/product.mjs",
     "test:e2e:stress": "node e2e/stress.mjs",
+    "test:e2e:platform": "node e2e/platform.mjs",
     "verify:cloud": "node scripts/verify-cloud-save.mjs"
   },
   "dependencies": {
