@@ -22,6 +22,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useConsoleStore, ALL_LEVELS } from '@/stores/consoleStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useIsMobile } from '@/hooks/useMediaQuery';
 import {
   DEFAULT_PROBLEM_FILTER,
   buildProblems,
@@ -374,6 +375,7 @@ function PortsPanel() {
 
 export function BottomPanel() {
   const { bottomTab, setBottomTab, toggleBottom } = useUIStore();
+  const isMobile = useIsMobile();
   const [renaming, setRenaming] = useState<string | null>(null);
   const {
     sessions,
@@ -406,8 +408,12 @@ export function BottomPanel() {
 
   return (
     <section aria-label="Panel" className="flex h-full flex-col border-t border-line bg-surface">
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-line px-1.5">
-        <div role="tablist" aria-label="Panel tabs" className="flex">
+      {/* The strip carries the four tabs and, on the terminal tab, the session
+          controls. At phone width that is wider than the screen, and with no
+          overflow rule the session tabs and the copy/download buttons were
+          simply clipped away — unreachable rather than merely cramped. */}
+      <div className="scrollbar-thin flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-1.5">
+        <div role="tablist" aria-label="Panel tabs" className="flex shrink-0">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -532,12 +538,18 @@ export function BottomPanel() {
           </div>
         )}
 
-        <IconButton
-          label="Collapse panel"
-          className="ml-auto"
-          icon={<ChevronDown className="h-3.5 w-3.5" />}
-          onClick={() => toggleBottom(false)}
-        />
+        {/* On a phone this panel is a whole screen reached from the bottom
+            navigation, and nothing there reads bottomOpen — collapsing would be
+            a button that visibly does nothing, on the width least able to spare
+            the room. */}
+        {!isMobile && (
+          <IconButton
+            label="Collapse panel"
+            className="ml-auto"
+            icon={<ChevronDown className="h-3.5 w-3.5" />}
+            onClick={() => toggleBottom(false)}
+          />
+        )}
       </div>
 
       <div className="min-h-0 flex-1">

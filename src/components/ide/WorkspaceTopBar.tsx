@@ -27,6 +27,7 @@ import { errorMessage } from '@/lib/utils';
 import { formatChord } from '@/hooks/useKeyboardShortcuts';
 import { Mark } from '@/components/ui/Wordmark';
 import { useToastStore } from '@/stores/toastStore';
+import { useIsMobile } from '@/hooks/useMediaQuery';
 
 export function WorkspaceTopBar({
   onCommandPalette,
@@ -40,6 +41,13 @@ export function WorkspaceTopBar({
   const { meta, files, dirs, dirty, flush, saving } = useFileStore();
   const unread = useToastStore((s) => s.unread);
   const markRead = useToastStore((s) => s.markRead);
+  // The mobile workspace is a single pane chosen from the bottom navigation, so
+  // it never reads sidebarOpen/bottomOpen/previewOpen. Showing their toggles
+  // there gives three buttons that visibly change nothing — and they crowd the
+  // bar hard enough that the project name truncates away to nothing, which is
+  // the one thing on it that says where you are. Same hook as the layout, so
+  // the two cannot disagree about what "mobile" means.
+  const isMobile = useIsMobile();
   const previewStatus = usePreviewStore((s) => s.status);
   const run = usePreviewStore((s) => s.run);
   const stop = usePreviewStore((s) => s.stop);
@@ -139,24 +147,28 @@ export function WorkspaceTopBar({
           )}
         </span>
 
-        <IconButton
-          label="Toggle sidebar"
-          active={sidebarOpen}
-          icon={<PanelLeft className="h-3.5 w-3.5" />}
-          onClick={() => toggleSidebar()}
-        />
-        <IconButton
-          label="Toggle bottom panel"
-          active={bottomOpen}
-          icon={<PanelBottom className="h-3.5 w-3.5" />}
-          onClick={() => toggleBottom()}
-        />
-        <IconButton
-          label="Toggle preview"
-          active={previewOpen}
-          icon={<PanelRight className="h-3.5 w-3.5" />}
-          onClick={() => togglePreview()}
-        />
+        {!isMobile && (
+          <>
+            <IconButton
+              label="Toggle sidebar"
+              active={sidebarOpen}
+              icon={<PanelLeft className="h-3.5 w-3.5" />}
+              onClick={() => toggleSidebar()}
+            />
+            <IconButton
+              label="Toggle bottom panel"
+              active={bottomOpen}
+              icon={<PanelBottom className="h-3.5 w-3.5" />}
+              onClick={() => toggleBottom()}
+            />
+            <IconButton
+              label="Toggle preview"
+              active={previewOpen}
+              icon={<PanelRight className="h-3.5 w-3.5" />}
+              onClick={() => togglePreview()}
+            />
+          </>
+        )}
         <IconLink to="/settings" label="Settings" icon={<Settings className="h-3.5 w-3.5" />} />
       </div>
     </header>

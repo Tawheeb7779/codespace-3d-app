@@ -9,6 +9,7 @@ import { useAiStore } from '@/stores/aiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useMonacoTheme } from '@/hooks/useTheme';
+import { useIsMobile } from '@/hooks/useMediaQuery';
 import { Spinner } from '@/components/ui/Primitives';
 import type { Problem } from '@/types';
 import { uid } from '@/lib/utils';
@@ -41,6 +42,12 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
   const reveal = useEditorStore((s) => s.reveal);
   const consumeReveal = useEditorStore((s) => s.consumeReveal);
   const settings = useSettingsStore((s) => s.editor);
+  // On a phone the minimap takes about a quarter of the line width to show an
+  // unreadable thumbnail of code you can already see. The setting still means
+  // "show the minimap"; there is simply nowhere to put it at this size, and
+  // honouring it literally would make the editor worse at the width where
+  // every column counts.
+  const isMobile = useIsMobile();
   const theme = useMonacoTheme();
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -176,7 +183,7 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
         fontFamily: settings.fontFamily,
         tabSize: settings.tabSize,
         wordWrap: settings.wordWrap ? 'on' : 'off',
-        minimap: { enabled: settings.minimap, renderCharacters: false },
+        minimap: { enabled: settings.minimap && !isMobile, renderCharacters: false },
         lineNumbers: settings.lineNumbers ? 'on' : 'off',
         bracketPairColorization: { enabled: settings.bracketPairColorization },
         automaticLayout: true,

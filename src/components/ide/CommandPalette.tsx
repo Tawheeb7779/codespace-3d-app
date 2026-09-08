@@ -5,12 +5,23 @@ import { FileIcon } from '@/components/ide/FileIcon';
 import { rankPaths } from '@/lib/search';
 import { cx } from '@/lib/utils';
 import { formatChord } from '@/hooks/useKeyboardShortcuts';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { basename, dirname } from '@/lib/vfs';
 
 export interface Command {
   id: string;
   label: string;
   group: string;
+  /**
+   * The keymap binding this command shares a chord with.
+   *
+   * Prefer this over `keys`. A literal chord here is a second copy of something
+   * the user can change in Settings → Keyboard, and the copy does not move: the
+   * palette would keep advertising a key that no longer does anything. Naming
+   * the binding instead means the palette reads whatever is currently bound.
+   */
+  binding?: string;
+  /** A literal chord, for the few commands the keymap does not own. */
   keys?: string;
   disabled?: boolean;
   run: () => void;
@@ -42,6 +53,13 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
+  const keybindings = useSettingsStore((s) => s.keybindings);
+
+  /** What this command's chord is right now, not what it was when it was written. */
+  const chordFor = (command: Command) =>
+    (command.binding && keybindings.find((b) => b.id === command.binding)?.keys) ||
+    command.keys ||
+    '';
 
   useEffect(() => {
     if (open) {
@@ -151,9 +169,9 @@ export function CommandPalette({
                     {result.command.group}
                   </span>
                   <span className="min-w-0 flex-1 truncate">{result.command.label}</span>
-                  {result.command.keys && (
+                  {chordFor(result.command) && (
                     <span className="shrink-0 font-mono text-sm text-ink-faint">
-                      {formatChord(result.command.keys)}
+                      {formatChord(chordFor(result.command))}
                     </span>
                   )}
                 </li>

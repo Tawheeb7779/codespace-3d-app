@@ -25,6 +25,13 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
   })) as unknown as typeof window.matchMedia;
 }
 
+// jsdom does no layout, so it implements no scrolling either. Components that
+// keep a highlighted row in view call this on every selection change; without
+// it they throw during render for a reason that has nothing to do with them.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
