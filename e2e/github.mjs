@@ -292,17 +292,36 @@ try {
     });
 
     await openFile('CHANGELOG.md');
-    // Type only once the editor really shows the pre-edit content. Without
-    // this the step can race a slow model load and silently edit stale text,
-    // which produces a clean merge and a confusing failure two steps later.
-    await page
-      .locator('.monaco-editor .view-lines')
-      .first()
-      .filter({ hasText: '# changes' })
-      .waitFor({ timeout: 20000 });
-    const baseline = await page.locator('.monaco-editor .view-lines').first().innerText();
-    if (/from github/.test(baseline)) {
-      throw new Error(`the editor already shows the remote edit: ${baseline.slice(0, 120)}`);
+    /*
+     * Type only once the editor really shows the pre-edit content, and check
+     * that positively rather than by ruling one string out.
+     *
+     * Monaco renders only the lines in view, so `.view-lines` can report a
+     * partial model. A guard that merely asserted "from github" was absent
+     * passed against a half-rendered file, the step typed a third line onto
+     * content it had never seen, and the two sides then merged cleanly instead
+     * of conflicting — failing two steps later with a message about conflict
+     * markers. Observed once under sweep load; the file was three lines.
+     *
+     * So: wait for the text to stop changing, then require it to be exactly
+     * the one line this step is built on.
+     */
+    const lines = page.locator('.monaco-editor .view-lines').first();
+    await lines.filter({ hasText: '# changes' }).waitFor({ timeout: 20000 });
+    let baseline = '';
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const first = (await lines.innerText()).trim();
+      await page.waitForTimeout(250);
+      const second = (await lines.innerText()).trim();
+      if (first === second) {
+        baseline = second;
+        if (baseline === '# changes') break;
+      }
+    }
+    if (baseline !== '# changes') {
+      throw new Error(
+        `the editor never settled on the pre-edit content; it shows: ${JSON.stringify(baseline.slice(0, 160))}`,
+      );
     }
     await typeAtEnd('from forge\n');
     await commitAll('Local edit');
