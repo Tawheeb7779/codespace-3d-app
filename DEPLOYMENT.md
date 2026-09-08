@@ -97,6 +97,36 @@ supabase functions deploy github-proxy
 Register the GitHub OAuth app with callback
 `<FORGE_APP_ORIGIN>/settings/github/callback`.
 
+### The shared assistant
+
+Gemini is provided by the deployment, so signed-in users never enter a key.
+One secret and one function:
+
+```
+supabase secrets set GEMINI_API_KEY=...
+supabase functions deploy ai-proxy
+```
+
+`ai-proxy` verifies the caller's Supabase session, enforces a per-user rate
+limit against the `ai_requests` table (migration `0008`), caps the request and
+the reply, and only then attaches the key. Optional settings, all with working
+defaults:
+
+| Secret | Default | What it does |
+| --- | --- | --- |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | The model used when the client asks for none. |
+| `GEMINI_ALLOWED_MODELS` | the above | Comma-separated allowlist. Anything else is a 400. |
+| `AI_RATE_LIMIT_PER_MINUTE` | `60` | Per user. One agent turn is up to 12 calls, so this is roughly five turns a minute. |
+| `AI_RATE_LIMIT_PER_DAY` | `1500` | Per user. |
+| `AI_MAX_REQUEST_BYTES` | `524288` | Bodies above this are refused with 413. |
+| `AI_MAX_OUTPUT_TOKENS` | `4096` | The cap the server sets on every completion. |
+| `AI_MAX_MESSAGES` | `200` | Longest conversation accepted. |
+
+Changing a secret takes effect on the next `functions deploy`.
+
+Without `GEMINI_API_KEY` the function answers 503 and says the deployment is
+not configured; nothing else breaks, and the other providers are unaffected.
+
 ## 4. Database
 
 Apply migrations in order — they are idempotent, so re-running is safe:

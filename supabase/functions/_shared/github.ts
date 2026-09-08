@@ -10,26 +10,11 @@
 
 // deno-lint-ignore-file no-explicit-any
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import { HttpError } from './http.ts';
+
+export { CORS_HEADERS, HttpError, envInt, fail, json } from './http.ts';
 
 export const GITHUB_API = 'https://api.github.com';
-
-export const CORS_HEADERS: Record<string, string> = {
-  'access-control-allow-origin': Deno.env.get('FORGE_APP_ORIGIN') ?? '*',
-  'access-control-allow-headers': 'authorization, content-type',
-  'access-control-allow-methods': 'POST, OPTIONS',
-  'access-control-max-age': '600',
-};
-
-export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json', ...CORS_HEADERS, ...headers },
-  });
-}
-
-export function fail(status: number, message: string): Response {
-  return json({ message }, status);
-}
 
 /** Service-role client. Bypasses RLS, so it never sees a user-supplied filter. */
 export function serviceClient(): SupabaseClient {
@@ -52,13 +37,6 @@ export async function requireUser(request: Request): Promise<{ id: string; email
   const { data, error } = await serviceClient().auth.getUser(token);
   if (error || !data.user) throw new HttpError(401, 'Your session has expired. Sign in again.');
   return { id: data.user.id, email: data.user.email ?? '' };
-}
-
-export class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-    this.name = 'HttpError';
-  }
 }
 
 /** The caller's role on a project, straight from the same helper RLS uses. */

@@ -23,6 +23,7 @@ import { buildPreview } from '@/lib/preview';
 import { unifiedDiff } from '@/lib/diff';
 import { headContent as vcsHeadContent } from '@/lib/vcs';
 import { isSensitivePath, readableFiles } from '@/lib/vfs';
+import { hostedResolverFor } from '@/lib/ai/hosted';
 import { useAgentStore, projectContextHeader, readCache } from '@/stores/agentStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { recordActivity } from '@/stores/activityStore';
@@ -421,6 +422,9 @@ export const useAiStore = create<AiState>()(
               onToolStart: (tool) => useAgentStore.getState().noteActivityPhase(tool),
               onPlan: (plan) => useAgentStore.getState().setPlan(plan),
               verifyAfterEdits: useSettingsStore.getState().agent.verifyAfterEdits,
+              // Null for every bring-your-own-key provider, which is every
+              // provider but the hosted Gemini this deployment pays for.
+              hostedEndpoint: hostedResolverFor(get().provider.kind) ?? undefined,
             },
             controller.signal,
           );

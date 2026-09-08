@@ -210,23 +210,38 @@ nothing, because every table is protected by row level security.
 and refuses to use one that carries `role: service_role`, logging an error
 instead.
 
-The AI provider key is *not* an environment variable. It is entered in the
-assistant panel and held in `sessionStorage` for that tab only — never
-persisted, never synced, never sent anywhere but your chosen provider.
+### The assistant's credentials
 
-That includes Gemini. Setting `GEMINI_API_KEY` (or `OPENAI_API_KEY`, or any
-sibling) in Vercel, Netlify or any other host does nothing: TA CODE is a static
-site with no server of its own, so there is nothing running there to read it.
-Renaming it to `VITE_GEMINI_API_KEY` would be worse than useless — Vite inlines
-`VITE_*` values into the JavaScript every visitor downloads, publishing the key.
+Two arrangements, and which one is in force depends on whether the deployment
+has a server.
 
-If you want one key for a whole team rather than one per person, put it behind
-something that can hold a secret *and* decide who may spend it, and point the
-provider's Base URL at that. A Supabase Edge Function is the pattern this
-repository already uses for exactly this problem — see `supabase/functions/
-github-proxy`, which checks the caller's session and their role on the project
-before attaching a server-held credential. An endpoint that attaches a key
-without checking who is calling is an open, billable proxy to your account.
+**Gemini is provided by TA CODE.** The key lives in the `ai-proxy` Edge
+Function as the server-only secret `GEMINI_API_KEY`, and a signed-in user never
+sees it, sends it, or needs one. The browser sends its Supabase session; the
+function verifies it, checks the caller against a per-user rate limit, and only
+then attaches the key. Set it with:
+
+```
+supabase secrets set GEMINI_API_KEY=...
+supabase functions deploy ai-proxy
+```
+
+**Anthropic and OpenAI-compatible endpoints stay bring-your-own-key.** Those
+are entered in the assistant panel and held in `sessionStorage` for that tab
+only — never persisted, never synced, never sent anywhere but the provider you
+chose. So does Gemini in Local Development Mode, where there is no server to
+hold anything.
+
+**`GEMINI_API_KEY` is server-only, and there is no client spelling of it.** A
+`VITE_`-prefixed value is inlined by Vite into JavaScript every visitor
+downloads, so prefixing this one would publish the key rather than deploy it —
+silently, with no error and nothing visibly different. `npm run audit:secrets`
+fails the build on that rename, on a service-role value read from client code,
+and on anything credential-shaped committed anywhere in the repository.
+
+Setting `GEMINI_API_KEY` on a static host — Vercel, Netlify, Cloudflare Pages —
+does nothing at all. Those serve TA CODE's built files and run no code of ours;
+the secret belongs to the Edge Function, which is deployed separately.
 
 ---
 

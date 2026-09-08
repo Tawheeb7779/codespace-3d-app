@@ -2,6 +2,7 @@ import {
   complete,
   toolResultMessage,
   type ChatMessage,
+  type HostedResolver,
   type ProviderConfig,
 } from '@/lib/ai/provider';
 import { runTool, toolsFor, type ToolContext } from '@/lib/ai/tools';
@@ -34,6 +35,15 @@ export interface AgentTurn {
   onPlan?: (plan: string[]) => void;
   /** Ask the agent to verify edits with a real build. Defaults to on. */
   verifyAfterEdits?: boolean;
+  /**
+   * Where to send the completion when the deployment hosts the credential.
+   *
+   * Called once per step rather than once per turn: a turn is up to
+   * {@link MAX_STEPS} calls over minutes, long enough for a session token to
+   * need refreshing. Absent — or resolving to null — is the bring-your-own-key
+   * path, unchanged.
+   */
+  hostedEndpoint?: HostedResolver;
 }
 
 export const MAX_STEPS = 12;
@@ -152,6 +162,7 @@ export async function runAgent(
       messages,
       tools,
       signal,
+      (await turn.hostedEndpoint?.()) ?? null,
     );
 
     if (response.text) {

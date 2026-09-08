@@ -57,6 +57,31 @@ export const DEFAULT_PROVIDER: ProviderConfig = {
 };
 
 /**
+ * A completion endpoint that holds its own credential.
+ *
+ * The hosted assistant: TA CODE's Edge Function owns the Gemini key, and what
+ * the browser sends is its Supabase session — proof of who is asking, not
+ * permission to spend. Shaped as data rather than a second transport because
+ * the request on the wire is the same OpenAI chat-completions call, so
+ * {@link callOpenAi} sends it and parses the reply either way.
+ */
+export interface HostedEndpoint {
+  /** The full URL to POST to; no path is appended. */
+  url: string;
+  /** Sent verbatim. Carries a session token, never a provider key. */
+  headers: Record<string, string>;
+}
+
+/**
+ * Resolved per request, not once per turn.
+ *
+ * An agent turn is up to `MAX_STEPS` calls over minutes, and a Supabase access
+ * token can expire inside one. Asking again each time gets a refreshed token
+ * instead of failing the eleventh step with a 401.
+ */
+export type HostedResolver = () => Promise<HostedEndpoint | null>;
+
+/**
  * Where a completion is actually sent.
  *
  * Gemini falls back to Google's endpoint so that choosing it is enough; a
@@ -382,19 +407,24 @@ async function callOpenAi(
   tools: ToolDefinition[],
   signal: AbortSignal,
   label = 'The provider',
+  hosted: HostedEndpoint | null = null,
 ): Promise<CompletionResult> {
-  const base = resolveBaseUrl(config);
-  if (!base) {
+  // Hosted names its own URL and carries its own headers; the key argument is
+  // not consulted at all, so a stale one cannot leak into a hosted request.
+  const base = hosted ? '' : resolveBaseUrl(config);
+  if (!hosted && !base) {
     throw new ProviderError('Set a base URL for the OpenAI-compatible provider.', 'not-configured');
   }
   const response = await providerFetch(
-    `${base}/chat/completions`,
+    hosted ? hosted.url : `${base}/chat/completions`,
     {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-      },
+      headers: hosted
+        ? { 'content-type': 'application/json', ...hosted.headers }
+        : {
+            'content-type': 'application/json',
+            ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+          },
       body: JSON.stringify({
         model: config.model,
         messages: [{ role: 'system', content: system }, ...messages],
@@ -456,6 +486,7 @@ export function complete(
   messages: ChatMessage[],
   tools: ToolDefinition[],
   signal: AbortSignal,
+  hosted: HostedEndpoint | null = null,
 ): Promise<CompletionResult> {
   if (config.kind === 'anthropic') {
     if (!apiKey) {
@@ -471,10 +502,14 @@ export function complete(
     return callOpenAi(config, apiKey, system, messages, tools, signal);
   }
   if (config.kind === 'gemini') {
+    // Hosted: the deployment's key, behind its own sign-in check. The browser
+    // has no Gemini credential to be missing, so there is nothing to ask for.
+    if (hosted) return callOpenAi(config, '', system, messages, tools, signal, 'Gemini', hosted);
     if (!apiKey) {
-      // Without this, an empty key reaches Google as a bearer-less request and
-      // comes back as a 400 about the Authorization header — a transport
-      // complaint for what is really "you have not connected anything yet".
+      // Local Development Mode, where there is no server to hold a key. Without
+      // this, an empty key reaches Google as a bearer-less request and comes
+      // back as a 400 about the Authorization header — a transport complaint
+      // for what is really "you have not connected anything yet".
       return Promise.reject(
         new ProviderError('Add a Gemini API key to use the assistant.', 'not-configured'),
       );

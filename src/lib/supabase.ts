@@ -137,6 +137,18 @@ export function supabaseHost(): string {
   }
 }
 
+/**
+ * The URL of a deployed Edge Function, or null when there is no project.
+ *
+ * Callers that need a real `Response` — for the status code and the body, not
+ * just parsed data — fetch this directly instead of going through
+ * `functions.invoke`, which collapses a non-2xx into an opaque error.
+ */
+export function functionUrl(name: string): string | null {
+  if (!config.ok) return null;
+  return `${config.url.replace(/\/+$/, '')}/functions/v1/${name}`;
+}
+
 export const isSupabaseConfigured = config.ok;
 /** Why Supabase is unavailable, for the UI to explain the mode accurately. */
 export const supabaseConfigReason = config.reason;

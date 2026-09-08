@@ -14,7 +14,7 @@
     "test:coverage": "vitest run --coverage",
     "audit:reconciliation": "node scripts/audit-reconciliation.mjs",
     "audit:contrast": "node scripts/audit-contrast.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run audit:reconciliation && npm run audit:contrast && npm run test && npm run build",
+    "verify": "npm run typecheck && npm run lint && npm run audit:reconciliation && npm run audit:contrast && npm run audit:secrets && npm run test && npm run build",
     "test:e2e": "node e2e/smoke.mjs",
     "build:preview-runtime": "node scripts/build-preview-runtime.mjs",
     "predev": "npm run build:preview-runtime",
@@ -35,7 +35,9 @@
     "test:e2e:product": "node e2e/product.mjs",
     "test:e2e:stress": "node e2e/stress.mjs",
     "test:e2e:platform": "node e2e/platform.mjs",
-    "verify:cloud": "node scripts/verify-cloud-save.mjs"
+    "verify:cloud": "node scripts/verify-cloud-save.mjs",
+    "test:edge": "deno test --allow-env --allow-net --no-check supabase/functions/ai-proxy/index.test.ts",
+    "audit:secrets": "node scripts/audit-secrets.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

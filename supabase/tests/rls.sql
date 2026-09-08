@@ -1300,6 +1300,97 @@ update public.project_invitations set revoked_at = now()
  where token_hash = pg_temp.token_hash(repeat('d', 64));
 select pg_temp.assert(true, 'an administrator can revoke an invitation');
 
+-- --------------------------------------------------------------------------
+-- The assistant's usage ledger
+--
+-- The deployment holds one Gemini key for everybody, and this table is what
+-- stops one account spending it all. That makes it a target in a way an
+-- ordinary table is not: a user who can delete their own rows has no rate
+-- limit, and one who can read everybody's rows can see how much each of them
+-- uses the assistant. Only the service role — the Edge Function — writes here.
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as_admin();
+insert into public.ai_requests (user_id, model, request_bytes, response_bytes, upstream_status)
+values
+  ('11111111-1111-1111-1111-111111111111', 'gemini-2.5-flash', 100, 200, 200),
+  ('22222222-2222-2222-2222-222222222222', 'gemini-2.5-flash', 100, 200, 200);
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+
+select pg_temp.assert(
+  (select count(*) from public.ai_requests) = 1,
+  'a user sees only their own assistant usage'
+);
+select pg_temp.assert(
+  (select count(*) from public.ai_requests
+    where user_id = '22222222-2222-2222-2222-222222222222') = 0,
+  'another user''s assistant usage is invisible'
+);
+
+-- Deleting is how a rate limit would be reset.
+do $$
+begin
+  begin
+    delete from public.ai_requests;
+    if found then
+      raise exception 'FAIL  a user erased their own usage, resetting their rate limit';
+    end if;
+    raise notice 'ok    a user cannot erase their usage to reset a rate limit';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot erase their usage to reset a rate limit';
+  end;
+end $$;
+
+-- Inserting is how usage would be filed under somebody else.
+do $$
+begin
+  begin
+    insert into public.ai_requests (user_id, model)
+    values ('22222222-2222-2222-2222-222222222222', 'gemini-2.5-flash');
+    raise exception 'FAIL  a user filed assistant usage against another account';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot file assistant usage against another account';
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    a user cannot file assistant usage against another account';
+  end;
+end $$;
+
+-- Nor against themselves: every row here is the server's word, not a client's.
+do $$
+begin
+  begin
+    insert into public.ai_requests (user_id, model)
+    values ('11111111-1111-1111-1111-111111111111', 'gemini-2.5-flash');
+    raise exception 'FAIL  a user wrote their own assistant usage';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot write their own assistant usage either';
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    a user cannot write their own assistant usage either';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    update public.ai_requests set request_bytes = 0;
+    if found then
+      raise exception 'FAIL  a user rewrote their assistant usage';
+    end if;
+    raise notice 'ok    a user cannot rewrite their assistant usage';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot rewrite their assistant usage';
+  end;
+end $$;
+
 select pg_temp.act_as_admin();
 select pg_temp.assert(true, 'all authorization assertions passed');
 

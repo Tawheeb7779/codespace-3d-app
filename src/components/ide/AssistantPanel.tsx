@@ -27,6 +27,7 @@ import {
   type ProviderKind,
 } from '@/lib/ai/provider';
 import type { AgentActivity } from '@/lib/ai/agent';
+import { hostedAiAvailable } from '@/lib/ai/hosted';
 import { cx } from '@/lib/utils';
 import { useIsTouch } from '@/hooks/useMediaQuery';
 
@@ -86,9 +87,17 @@ function ActivityList({ activities }: { activities: AgentActivity[] }) {
   );
 }
 
-function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * Exported for the test that checks a hosted deployment asks for nothing. The
+ * assertion that matters is the absence of fields, and absence is only
+ * meaningful against the dialog itself.
+ */
+export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { provider, setProvider, setApiKey, apiKeyPresent } = useAiStore();
   const [key, setKey] = useState('');
+  // Gemini is the deployment's to provide; in Local Development Mode there is
+  // no deployment, so it falls back to the key the developer supplies.
+  const geminiHosted = provider.kind === 'gemini' && hostedAiAvailable();
 
   useEffect(() => {
     if (open) setKey(readApiKey());
@@ -99,7 +108,11 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
       open={open}
       onClose={onClose}
       title="Connect a model provider"
-      description="TA CODE does not ship an API key. Bring your own, or point at a proxy you control."
+      description={
+        hostedAiAvailable()
+          ? 'Gemini is provided by TA CODE and needs no key. Anthropic and OpenAI-compatible endpoints use your own.'
+          : 'TA CODE does not ship an API key. Bring your own, or point at a proxy you control.'
+      }
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -137,6 +150,11 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
           value={provider.model}
           onChange={(event) => setProvider({ model: event.target.value })}
           placeholder={provider.kind === 'gemini' ? DEFAULT_GEMINI_MODEL : 'claude-sonnet-5'}
+          hint={
+            geminiHosted
+              ? 'Your deployment decides which Gemini models it will run.'
+              : undefined
+          }
         />
         {provider.kind === 'openai' && (
           <Input
@@ -147,7 +165,7 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
             hint="Anything exposing POST /chat/completions."
           />
         )}
-        {provider.kind === 'gemini' && (
+        {provider.kind === 'gemini' && !geminiHosted && (
           <Input
             label="Base URL"
             value={provider.baseUrl}
@@ -156,7 +174,15 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
             hint="Leave blank for Google. Set this only to route through a proxy of your own."
           />
         )}
-        {provider.kind !== 'none' && (
+        {/*
+          * The hosted assistant asks for nothing. There is no key field because
+          * there is no key for you to have: the deployment holds one, on the
+          * other side of a function that checks your session before it spends
+          * it. A disabled field, or one explaining what to leave blank, would
+          * still be a field about credentials on a screen that no longer has
+          * any.
+          */}
+        {provider.kind !== 'none' && !geminiHosted && (
           <Input
             label="API key"
             type="password"
@@ -172,11 +198,21 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
             hint="Held in sessionStorage only. It is never written to disk, synced, or sent anywhere except your chosen provider."
           />
         )}
-        {provider.kind === 'gemini' && (
+        {provider.kind === 'gemini' && geminiHosted && (
+          <p className="rounded border border-line bg-surface-sunken p-2.5 text-sm text-ink-muted">
+            <span>
+              Provided by TA CODE. Requests go to this deployment's assistant, which is signed in as
+              you and holds the Google credential server-side — nothing to enter, and no key of
+              yours in this browser. Fair-use limits apply per account.
+            </span>
+          </p>
+        )}
+        {provider.kind === 'gemini' && !geminiHosted && (
           <p className="rounded border border-caution/30 bg-caution/5 p-2.5 text-sm text-ink-muted">
             <span>
-              Your own key from Google AI Studio, sent straight from this browser to Google. TA CODE
-              is a static site with no server, so it has no key of its own to lend you.
+              Local Development Mode has no server to hold a key, so this one is yours: it comes
+              from Google AI Studio and goes straight from this browser to Google. A deployment with
+              Supabase configured provides the assistant instead, and asks for nothing.
             </span>
           </p>
         )}
@@ -292,7 +328,18 @@ export function AssistantPanel() {
   const [connectOpen, setConnectOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const connected = provider.kind !== 'none' && (provider.kind === 'openai' || apiKeyPresent);
+  /**
+   * Connected means "a request would go somewhere", which is not the same as
+   * "a key is present". An OpenAI-compatible endpoint may be a proxy that
+   * attaches the key itself, and the hosted Gemini keeps its key on the server
+   * — asking either of them for one would be asking for something that does
+   * not exist.
+   */
+  const connected =
+    provider.kind !== 'none' &&
+    (provider.kind === 'openai' ||
+      (provider.kind === 'gemini' && hostedAiAvailable()) ||
+      apiKeyPresent);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
