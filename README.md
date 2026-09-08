@@ -214,6 +214,20 @@ The AI provider key is *not* an environment variable. It is entered in the
 assistant panel and held in `sessionStorage` for that tab only — never
 persisted, never synced, never sent anywhere but your chosen provider.
 
+That includes Gemini. Setting `GEMINI_API_KEY` (or `OPENAI_API_KEY`, or any
+sibling) in Vercel, Netlify or any other host does nothing: TA CODE is a static
+site with no server of its own, so there is nothing running there to read it.
+Renaming it to `VITE_GEMINI_API_KEY` would be worse than useless — Vite inlines
+`VITE_*` values into the JavaScript every visitor downloads, publishing the key.
+
+If you want one key for a whole team rather than one per person, put it behind
+something that can hold a secret *and* decide who may spend it, and point the
+provider's Base URL at that. A Supabase Edge Function is the pattern this
+repository already uses for exactly this problem — see `supabase/functions/
+github-proxy`, which checks the caller's session and their role on the project
+before attaching a server-held credential. An endpoint that attaches a key
+without checking who is calling is an open, billable proxy to your account.
+
 ---
 
 ## Supabase setup

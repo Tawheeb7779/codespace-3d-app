@@ -18,7 +18,14 @@ import {
   type ContextSource,
 } from '@/lib/ai/contextControl';
 import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
-import { readApiKey, type ProviderErrorKind, type ProviderKind } from '@/lib/ai/provider';
+import {
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_BASE_URL,
+  modelForKind,
+  readApiKey,
+  type ProviderErrorKind,
+  type ProviderKind,
+} from '@/lib/ai/provider';
 import type { AgentActivity } from '@/lib/ai/agent';
 import { cx } from '@/lib/utils';
 import { useIsTouch } from '@/hooks/useMediaQuery';
@@ -112,10 +119,16 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
         <Select
           label="Provider"
           value={provider.kind}
-          onChange={(event) => setProvider({ kind: event.target.value as ProviderKind })}
+          onChange={(event) => {
+            const kind = event.target.value as ProviderKind;
+            // The model travels with the provider, or choosing Gemini would
+            // leave an Anthropic model name in the field and ask Google for it.
+            setProvider({ kind, model: modelForKind(kind, provider.model) });
+          }}
           options={[
             { value: 'none', label: 'Not connected' },
             { value: 'anthropic', label: 'Anthropic Messages API' },
+            { value: 'gemini', label: 'Google Gemini' },
             { value: 'openai', label: 'OpenAI-compatible endpoint' },
           ]}
         />
@@ -123,7 +136,7 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
           label="Model"
           value={provider.model}
           onChange={(event) => setProvider({ model: event.target.value })}
-          placeholder="claude-sonnet-5"
+          placeholder={provider.kind === 'gemini' ? DEFAULT_GEMINI_MODEL : 'claude-sonnet-5'}
         />
         {provider.kind === 'openai' && (
           <Input
@@ -134,15 +147,38 @@ function ConnectDialog({ open, onClose }: { open: boolean; onClose: () => void }
             hint="Anything exposing POST /chat/completions."
           />
         )}
+        {provider.kind === 'gemini' && (
+          <Input
+            label="Base URL"
+            value={provider.baseUrl}
+            onChange={(event) => setProvider({ baseUrl: event.target.value })}
+            placeholder={GEMINI_BASE_URL}
+            hint="Leave blank for Google. Set this only to route through a proxy of your own."
+          />
+        )}
         {provider.kind !== 'none' && (
           <Input
             label="API key"
             type="password"
             value={key}
             onChange={(event) => setKey(event.target.value)}
-            placeholder={apiKeyPresent ? '•••••••• (stored for this tab)' : 'sk-…'}
+            placeholder={
+              apiKeyPresent
+                ? '•••••••• (stored for this tab)'
+                : provider.kind === 'gemini'
+                  ? 'AIza…'
+                  : 'sk-…'
+            }
             hint="Held in sessionStorage only. It is never written to disk, synced, or sent anywhere except your chosen provider."
           />
+        )}
+        {provider.kind === 'gemini' && (
+          <p className="rounded border border-caution/30 bg-caution/5 p-2.5 text-sm text-ink-muted">
+            <span>
+              Your own key from Google AI Studio, sent straight from this browser to Google. TA CODE
+              is a static site with no server, so it has no key of its own to lend you.
+            </span>
+          </p>
         )}
         {provider.kind === 'anthropic' && (
           <p className="rounded border border-caution/30 bg-caution/5 p-2.5 text-sm text-ink-muted">

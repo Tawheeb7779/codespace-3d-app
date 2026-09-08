@@ -8,15 +8,23 @@ import type { ToolDefinition } from '@/lib/ai/tools';
  * provider is configured the agent refuses to run rather than inventing an
  * answer.
  *
- * Two shapes are supported:
+ * Three shapes are supported:
  *  - `anthropic`: the Messages API, called directly from the browser. This
  *    requires the account to allow direct browser access.
  *  - `openai`: any OpenAI-compatible `/chat/completions` endpoint, including a
  *    self-hosted proxy — the recommended setup, because the key can then stay
  *    on your own server.
+ *  - `gemini`: Google's own OpenAI-compatible surface for the Gemini models. It
+ *    is the `openai` transport with a base URL filled in, not a second client:
+ *    Google speaks `POST /chat/completions` with a bearer token there, which is
+ *    exactly what {@link callOpenAi} already sends.
+ *
+ * There is no fourth shape where TA CODE holds the key. The app is a static
+ * site with no server of its own, so a key it "kept" would be a key it shipped
+ * to every visitor.
  */
 
-export type ProviderKind = 'none' | 'anthropic' | 'openai';
+export type ProviderKind = 'none' | 'anthropic' | 'openai' | 'gemini';
 
 export interface ProviderConfig {
   kind: ProviderKind;
@@ -25,11 +33,62 @@ export interface ProviderConfig {
   baseUrl: string;
 }
 
+/**
+ * Google's OpenAI-compatible endpoint.
+ *
+ * The `/openai` segment is load-bearing. Without it the same host serves the
+ * native Gemini REST API, which authenticates by `x-goog-api-key` or a `key`
+ * query parameter and ignores the `Authorization` header this transport sends —
+ * so the request arrives with no identity at all and Google answers
+ * `403 PERMISSION_DENIED: Method doesn't allow unregistered callers`.
+ */
+export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+
+/**
+ * Prefilled, not pinned: the field stays editable because Google's model names
+ * turn over faster than this file does.
+ */
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+
 export const DEFAULT_PROVIDER: ProviderConfig = {
   kind: 'none',
   model: 'claude-sonnet-5',
   baseUrl: '',
 };
+
+/**
+ * Where a completion is actually sent.
+ *
+ * Gemini falls back to Google's endpoint so that choosing it is enough; a
+ * pasted base URL still wins, which is what a corporate proxy in front of
+ * Gemini needs.
+ */
+export function resolveBaseUrl(config: ProviderConfig): string {
+  const configured = config.baseUrl.trim().replace(/\/+$/, '');
+  if (config.kind === 'gemini') return configured || GEMINI_BASE_URL;
+  return configured;
+}
+
+/** What each provider is prefilled with, and therefore what "untouched" means. */
+const SUGGESTED_MODEL: Record<ProviderKind, string> = {
+  none: DEFAULT_PROVIDER.model,
+  anthropic: DEFAULT_PROVIDER.model,
+  openai: '',
+  gemini: DEFAULT_GEMINI_MODEL,
+};
+
+/**
+ * The model to carry into a newly chosen provider.
+ *
+ * Switching provider used to leave the previous provider's model in the field,
+ * so choosing Gemini and pressing send asked Google for `claude-sonnet-5`. A
+ * model the user typed is theirs and survives the switch; one that is still a
+ * suggestion is replaced by the new provider's.
+ */
+export function modelForKind(kind: ProviderKind, current: string): string {
+  const untouched = Object.values(SUGGESTED_MODEL).includes(current.trim());
+  return untouched ? SUGGESTED_MODEL[kind] : current;
+}
 
 const KEY_STORAGE = 'forge.ai.key';
 
@@ -155,14 +214,58 @@ async function providerFetch(
   }
 }
 
+/**
+ * A rejected key that does not arrive as 401 or 403.
+ *
+ * Google answers a bad or absent bearer token on its OpenAI-compatible surface
+ * with `400 INVALID_ARGUMENT` and a message naming the key — "API key not
+ * valid", "Please pass a valid API key", "Missing or invalid Authorization
+ * header". Reported as a bare 400 that reads as a malformed request, and sends
+ * someone to look at their prompt instead of their key.
+ *
+ * Deliberately narrow: a 400 has to name the credential to be read as one, so
+ * a genuinely malformed request still surfaces as the request error it is.
+ */
+const KEY_REJECTED = /\b(api[ _-]?key|authorization header|credential)\b/i;
+
+/**
+ * The provider's own one-line reason for refusing a key.
+ *
+ * "Rejected the API key" is the same sentence whether the key is mistyped, the
+ * Generative Language API is switched off for the project, or the key is
+ * restricted to referrers this origin is not one of — three different things to
+ * go and fix, and Google names which in the body. The reason is a message, not
+ * a credential: the key is only ever sent in a header, never echoed in these
+ * responses. Capped and stripped of newlines so a provider that answers with a
+ * page cannot fill the panel.
+ */
+function refusalReason(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string; status?: string } };
+    const error = Array.isArray(parsed) ? (parsed[0] as typeof parsed)?.error : parsed?.error;
+    const message = error?.message?.trim();
+    if (!message) return '';
+    const status = error?.status ? ` (${error.status})` : '';
+    return `${message.replace(/\s+/g, ' ').slice(0, 180)}${status}`;
+  } catch {
+    return '';
+  }
+}
+
 /** Turn a non-2xx response into a typed error, without echoing the request. */
 async function providerFailure(response: Response, label: string): Promise<ProviderError> {
   const body = await response.text().catch(() => '');
   const detail = body.slice(0, 400) || response.statusText;
 
-  if (response.status === 401 || response.status === 403) {
+  const rejectedKey =
+    response.status === 401 ||
+    response.status === 403 ||
+    (response.status === 400 && KEY_REJECTED.test(body));
+  if (rejectedKey) {
+    const reason = refusalReason(body);
     return new ProviderError(
-      `${label} rejected the API key (HTTP ${response.status}). Check the key in provider settings.`,
+      `${label} rejected the API key (HTTP ${response.status}). ` +
+        `${reason ? `${reason} — c` : 'C'}heck the key in provider settings.`,
       'unauthorized',
     );
   }
@@ -278,8 +381,9 @@ async function callOpenAi(
   messages: ChatMessage[],
   tools: ToolDefinition[],
   signal: AbortSignal,
+  label = 'The provider',
 ): Promise<CompletionResult> {
-  const base = config.baseUrl.replace(/\/+$/, '');
+  const base = resolveBaseUrl(config);
   if (!base) {
     throw new ProviderError('Set a base URL for the OpenAI-compatible provider.', 'not-configured');
   }
@@ -307,9 +411,9 @@ async function callOpenAi(
     signal,
   );
 
-  if (!response.ok) throw await providerFailure(response, 'The provider');
+  if (!response.ok) throw await providerFailure(response, label);
 
-  const data = (await providerJson(response, 'The provider')) as {
+  const data = (await providerJson(response, label)) as {
     choices?: Array<{
       message?: { content?: string | null; tool_calls?: OpenAiToolCall[] };
       finish_reason?: string;
@@ -317,12 +421,12 @@ async function callOpenAi(
   };
   const choice = data.choices?.[0];
   if (!choice?.message) {
-    throw new ProviderError('The provider returned no message in its response.', 'malformed');
+    throw new ProviderError(`${label} returned no message in its response.`, 'malformed');
   }
 
   const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map((call) => {
     if (!call?.function?.name) {
-      throw new ProviderError('The provider returned a tool call with no name.', 'malformed');
+      throw new ProviderError(`${label} returned a tool call with no name.`, 'malformed');
     }
     let input: Record<string, unknown> = {};
     try {
@@ -365,6 +469,17 @@ export function complete(
   }
   if (config.kind === 'openai') {
     return callOpenAi(config, apiKey, system, messages, tools, signal);
+  }
+  if (config.kind === 'gemini') {
+    if (!apiKey) {
+      // Without this, an empty key reaches Google as a bearer-less request and
+      // comes back as a 400 about the Authorization header — a transport
+      // complaint for what is really "you have not connected anything yet".
+      return Promise.reject(
+        new ProviderError('Add a Gemini API key to use the assistant.', 'not-configured'),
+      );
+    }
+    return callOpenAi(config, apiKey, system, messages, tools, signal, 'Gemini');
   }
   return Promise.reject(
     new ProviderError(

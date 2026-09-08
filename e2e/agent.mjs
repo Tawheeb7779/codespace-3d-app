@@ -281,6 +281,79 @@ try {
       if (!/cannot edit/i.test(text)) throw new Error('read-only mode is not explained');
     }
   });
+
+  /**
+   * Gemini, end to end through the real panel.
+   *
+   * The reported failure was an HTTP 401/403 from "adding a Gemini key", at a
+   * build where the provider list had no Gemini in it — so a Google key went to
+   * Anthropic (401) or to Google's native REST API, which ignores the bearer
+   * token this transport sends (403, "unregistered callers"). What this step
+   * can prove without anyone's Google key is the whole path either side of the
+   * credential: the option exists, choosing it brings its own model and points
+   * at Google's OpenAI-compatible surface by default, and a turn driven through
+   * it reaches the agent loop and comes back.
+   */
+  await step('17. the Gemini provider carries a turn through the agent loop', async () => {
+    await clearConversation();
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Provider settings' }).click();
+    await page.getByRole('dialog').waitFor();
+
+    // From the suggested Anthropic model, which is what someone arriving at
+    // this dialog for the first time sees. A model they typed themselves is
+    // theirs and must survive the switch — that half is covered by the unit
+    // suite, which can set up both states cheaply.
+    await page.getByLabel('Model', { exact: true }).fill('claude-sonnet-5');
+    await page.getByLabel('Provider', { exact: true }).selectOption('gemini');
+    await page.waitForTimeout(300);
+
+    const model = await page.getByLabel('Model', { exact: true }).inputValue();
+    if (!/^gemini-/.test(model)) {
+      throw new Error(`choosing Gemini left another provider's model in the field: ${model}`);
+    }
+    const placeholder = await page.getByLabel('Base URL').getAttribute('placeholder');
+    if (!/generativelanguage\.googleapis\.com\/v1beta\/openai$/.test(placeholder ?? '')) {
+      throw new Error(`the default Gemini endpoint is not Google's OpenAI surface: ${placeholder}`);
+    }
+
+    // Pointed at the local scripted provider, which is what the Base URL field
+    // is for; Google's own endpoint needs a key nobody should put in a test.
+    await page.getByLabel('Base URL').fill(`${PROVIDER}/chat`);
+    await page.getByLabel('Model', { exact: true }).fill('scripted');
+    await page.getByLabel('API key').fill('test');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.waitForTimeout(500);
+
+    await ask('السلام عليكم');
+    const text = await panelText();
+    if (/rejected the API key|No AI provider is connected|Add a Gemini API key/i.test(text)) {
+      throw new Error(`the Gemini turn was refused: ${text.slice(0, 300)}`);
+    }
+    if (!text.includes('السلام عليكم')) {
+      throw new Error('the question never appeared in the transcript');
+    }
+    // The answer, not just the echo: this only appears if the request went out
+    // over the Gemini transport and the response came back through it.
+    if (!text.includes('TA CODE is connected')) {
+      throw new Error(`no answer came back through the Gemini provider: ${text.slice(0, 300)}`);
+    }
+  });
+
+  await step('18. Gemini with no key is refused before any request is made', async () => {
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Provider settings' }).click();
+    await page.getByRole('dialog').waitFor();
+    await page.getByLabel('Provider', { exact: true }).selectOption('gemini');
+    await page.getByLabel('API key').fill('');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.waitForTimeout(500);
+
+    const text = await panelText();
+    if (!/No model provider connected|not connected/i.test(text)) {
+      throw new Error(`an unkeyed Gemini reads as connected: ${text.slice(0, 300)}`);
+    }
+  });
 } finally {
   console.log(`\n${passed} passed, ${failed} failed`);
   console.log('--- console errors ---');

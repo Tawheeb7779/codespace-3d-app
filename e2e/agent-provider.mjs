@@ -42,6 +42,17 @@ const SCENARIOS = {
     { text: 'Changed the label to "Pressed" and the build passes.' },
   ],
 
+  /**
+   * One answer, no tools — the smallest round trip a provider can make.
+   *
+   * Used to separate "can this provider talk at all" from context building and
+   * tool execution, which is the first thing to establish when a provider is
+   * refusing a request. The reply is non-Latin on purpose: an encoding fault
+   * between the transport and the panel would show up here rather than in a
+   * user's own language.
+   */
+  chat: [{ text: 'وعليكم السلام — TA CODE is connected.' }],
+
   /** Reads the same file twice: the second read must be served from cache. */
   cached: [
     { tools: [tool('c1', 'read_file', { path: 'src/main.js' })] },
