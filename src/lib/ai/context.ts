@@ -128,6 +128,22 @@ export class ReadCache {
     return { text: content, cached: false };
   }
 
+  /**
+   * Has this file changed since the agent was shown it?
+   *
+   * A whole-file overwrite carries no anchor, so nothing else can notice that
+   * the user edited the file while the agent was working — it would simply
+   * replace their work. This is the check that notices.
+   *
+   * False for a file the agent has not read: it is not working from a stale
+   * copy if it never had a copy, and refusing there would block legitimate
+   * file creation.
+   */
+  isStale(path: string, content: string): boolean {
+    const seen = this.seen.get(path);
+    return seen !== undefined && seen !== hashContent(content);
+  }
+
   /** Drop a path so the next read resends it — used after the agent edits. */
   invalidate(path: string): void {
     this.seen.delete(path);

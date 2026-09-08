@@ -20,7 +20,8 @@ export type ContextSource =
   | 'projectOutline'
   | 'diagnostics'
   | 'gitDiff'
-  | 'terminal';
+  | 'terminal'
+  | 'projectInstructions';
 
 export interface ContextChoices {
   currentFile: boolean;
@@ -30,6 +31,7 @@ export interface ContextChoices {
   diagnostics: boolean;
   gitDiff: boolean;
   terminal: boolean;
+  projectInstructions: boolean;
 }
 
 /**
@@ -44,6 +46,10 @@ export const DEFAULT_CONTEXT: ContextChoices = {
   diagnostics: true,
   gitDiff: false,
   terminal: false,
+  // On by default. A project that states its own conventions is asking for
+  // them to be followed, and an agent that ignores them produces code the
+  // maintainer has to correct by hand every time.
+  projectInstructions: true,
 };
 
 export const CONTEXT_LABELS: Record<ContextSource, string> = {
@@ -54,6 +60,7 @@ export const CONTEXT_LABELS: Record<ContextSource, string> = {
   diagnostics: 'Problems',
   gitDiff: 'Uncommitted changes',
   terminal: 'Terminal output',
+  projectInstructions: 'Project instructions',
 };
 
 export const CONTEXT_DESCRIPTIONS: Record<ContextSource, string> = {
@@ -64,6 +71,8 @@ export const CONTEXT_DESCRIPTIONS: Record<ContextSource, string> = {
   diagnostics: 'Errors and warnings currently reported by the editor.',
   gitDiff: 'Which files have uncommitted changes, and how large the change is.',
   terminal: 'Recent output from the terminal.',
+  projectInstructions:
+    "This project's own AGENTS.md or CLAUDE.md, so the agent follows the conventions you already wrote down.",
 };
 
 /** Truncation limits, so one source cannot crowd out the actual question. */
@@ -73,7 +82,18 @@ const LIMITS = {
   openFiles: 40,
   diagnostics: 20,
   gitDiff: 40,
+  projectInstructions: 6000,
 } as const;
+
+/**
+ * Where a project states its own conventions, in the order they are preferred.
+ *
+ * Fixed names at the project root, checked in order and the first match wins —
+ * not a search, so a file deeper in the tree cannot volunteer itself as the
+ * project's rules. Both names are established conventions for exactly this, and
+ * a project that has neither simply contributes nothing here.
+ */
+export const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
 
 export interface ContextInputs {
   currentPath: string | null;
@@ -142,6 +162,17 @@ export function buildContextSections(
 
   if (choices.terminal) {
     add('terminal', 'Recent terminal output', clip(inputs.terminalOutput, LIMITS.terminal));
+  }
+
+  if (choices.projectInstructions) {
+    const found = INSTRUCTION_FILES.find((path) => allowed(path) && visible[path]?.trim());
+    if (found) {
+      add(
+        'projectInstructions',
+        `Project instructions (${found})`,
+        clip(visible[found], LIMITS.projectInstructions),
+      );
+    }
   }
 
   return sections;

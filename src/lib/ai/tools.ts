@@ -37,6 +37,14 @@ export interface ToolContext {
    */
   requestApproval?(action: string, affects: string[]): Promise<boolean>;
   /**
+   * Has this file changed since the agent read it in this task?
+   *
+   * Supplied by the store, backed by the same cache that decides whether a
+   * re-read needs resending. Optional so a non-interactive caller — every
+   * test harness — behaves exactly as before.
+   */
+  isStaleRead?(path: string, content: string): boolean;
+  /**
    * Compile the project for real, through the same bundler the preview uses.
    * Absent in contexts with no build available.
    */
@@ -285,6 +293,15 @@ export const TOOLS: ToolDefinition[] = [
       const content = requireContent(input, 'content');
       await checkWideChange(path, 'write_file', ctx);
       const before = ctx.files[path];
+      // A whole-file write has no anchor, so nothing else would notice that the
+      // user edited this file since the agent read it — it would just replace
+      // their work. Refuse and say why; the agent can re-read and try again.
+      if (before !== undefined && ctx.isStaleRead?.(path, before)) {
+        throw new ToolError(
+          `${path} changed after you read it — someone edited it in the editor. ` +
+            'Read it again and rebase your change on the current contents.',
+        );
+      }
       ctx.writeFile(path, content);
       ctx.onChange?.(path, before === undefined ? 'created' : 'modified', before ?? '', content);
       return `Wrote ${path} (${content.split('\n').length} lines)`;

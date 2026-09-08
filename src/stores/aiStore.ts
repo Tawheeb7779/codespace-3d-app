@@ -99,17 +99,32 @@ const MAX_DIFF_CHARS = 40_000;
 /**
  * Build the tool context bound to the currently open project.
  *
- * The context is rebuilt for every turn so the agent always sees the current
- * file map — it is a live view of the workspace, not a snapshot taken when the
- * conversation started.
+ * `files` and `dirs` are getters, not copies, and that is the whole point. The
+ * context was rebuilt per turn, which sounds live but is not: a turn runs up to
+ * a dozen steps over many seconds, the store replaces its `files` object on
+ * every write, and a captured reference stops following it. So an edit computed
+ * against turn-start content was applied to turn-start content — and anything
+ * the user typed in Monaco meanwhile was silently overwritten, with the tool
+ * reporting success.
+ *
+ * Reading through to the store on each access means a tool always sees what is
+ * actually on disk now. It also turns `edit_file`'s "the anchor must appear
+ * exactly once" rule into a genuine conflict check: if the user changed that
+ * region, the anchor no longer matches and the agent is told so instead of
+ * clobbering them.
  */
 function toolContext(): ToolContext {
   const fileStore = useFileStore.getState();
   const agent = useAgentStore.getState();
   return {
-    files: fileStore.files,
-    dirs: fileStore.dirs,
+    get files() {
+      return useFileStore.getState().files;
+    },
+    get dirs() {
+      return useFileStore.getState().dirs;
+    },
     canWrite: fileStore.canWrite(),
+    isStaleRead: (path, content) => readCache.isStale(path, content),
     allowDestructive: useAiStore.getState().allowDestructive,
     writeFile(path, content) {
       const store = useFileStore.getState();
@@ -255,6 +270,27 @@ function contextMessage(): string {
   });
   const chosen = renderContextSections(currentContextSections());
   return chosen ? `${header}\n\n${chosen}` : header;
+}
+
+/**
+ * Fill in context sources the stored choices predate.
+ *
+ * The default merge replaces `context` wholesale with what was persisted, so a
+ * source added after someone's last visit arrives as `undefined` — falsy,
+ * therefore off, forever, for exactly the existing users a new default was
+ * written for. Layering the stored choices over the current defaults keeps
+ * every deliberate answer and supplies one for anything that was not a question
+ * yet.
+ *
+ * Exported so its tests drive the function the store actually uses.
+ */
+export function mergePersisted(persisted: unknown, current: AiState): AiState {
+  const saved = (persisted ?? {}) as Partial<AiState>;
+  return {
+    ...current,
+    ...saved,
+    context: { ...DEFAULT_CONTEXT, ...(saved.context ?? {}) },
+  };
 }
 
 export const useAiStore = create<AiState>()(
@@ -463,6 +499,17 @@ export const useAiStore = create<AiState>()(
       name: 'forge.ai',
       // The API key is deliberately excluded: it lives in sessionStorage only.
       partialize: (state) => ({ provider: state.provider, context: state.context }),
+      /*
+       * Fill in context sources the stored choices predate.
+       *
+       * The default merge replaces `context` wholesale with what was persisted,
+       * so a source added after someone's last visit arrives as `undefined` —
+       * falsy, therefore off, forever, for exactly the existing users a new
+       * default was written for. Layering the stored choices over the current
+       * defaults keeps every deliberate answer and supplies one for anything
+       * that was not a question yet.
+       */
+      merge: mergePersisted,
     },
   ),
 );

@@ -26,6 +26,7 @@ const ALL_ON: ContextChoices = {
   diagnostics: true,
   gitDiff: true,
   terminal: true,
+  projectInstructions: true,
 };
 
 const ALL_OFF: ContextChoices = {
@@ -36,6 +37,7 @@ const ALL_OFF: ContextChoices = {
   diagnostics: false,
   gitDiff: false,
   terminal: false,
+  projectInstructions: false,
 };
 
 const inputs = (overrides: Partial<ContextInputs> = {}): ContextInputs => ({
