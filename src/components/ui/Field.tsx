@@ -1,11 +1,13 @@
 import {
   forwardRef,
   useId,
+  useState,
   type InputHTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { cx } from '@/lib/utils';
 
 const CONTROL =
@@ -55,6 +57,22 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { label, hint, error, leading, className, ...rest },
   ref,
 ) {
+  /*
+   * Password fields get a reveal toggle, here rather than at each call site.
+   *
+   * Typing a password you cannot see is error-prone on a desktop keyboard and
+   * worse on a phone one, where the only feedback is a row of dots and a
+   * failed sign-in. The toggle is the standard answer, and putting it in the
+   * primitive means every password and API-key field in the product has it
+   * without anyone remembering to ask.
+   *
+   * It reports its state through aria-pressed, so a screen reader user knows
+   * whether the characters are currently exposed.
+   */
+  const isPassword = rest.type === 'password';
+  const [revealed, setRevealed] = useState(false);
+  const type = isPassword && revealed ? 'text' : rest.type;
+
   return (
     <Field label={label} hint={hint} error={error}>
       {(id, describedBy) => (
@@ -73,11 +91,28 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
               CONTROL,
               'h-8 text-base',
               Boolean(leading) && 'pl-8',
+              isPassword && 'pr-9',
               error && 'border-danger focus:border-danger focus:ring-danger',
               className,
             )}
             {...rest}
+            type={type}
           />
+          {isPassword && (
+            <button
+              type="button"
+              onClick={() => setRevealed((current) => !current)}
+              aria-label={revealed ? 'Hide password' : 'Show password'}
+              aria-pressed={revealed}
+              aria-controls={id}
+              className={cx(
+                'tap-target absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center',
+                'justify-center rounded text-ink-faint transition-colors hover:text-ink',
+              )}
+            >
+              {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
+          )}
         </div>
       )}
     </Field>
