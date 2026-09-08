@@ -15,11 +15,13 @@
  *   npx vite-node e2e/github-server.ts &
  *   node e2e/github.mjs
  */
+import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const BASE = process.env.FORGE_E2E_BASE ?? 'http://127.0.0.1:5173';
 const API = process.env.FORGE_GITHUB_API ?? 'http://127.0.0.1:8877';
-const OUT = process.env.FORGE_E2E_ARTIFACTS ?? '.';
+const OUT = process.env.FORGE_E2E_ARTIFACTS ?? 'e2e/artifacts';
+mkdirSync(OUT, { recursive: true });
 const CHROMIUM = process.env.FORGE_E2E_CHROMIUM;
 
 const consoleErrors = [];
