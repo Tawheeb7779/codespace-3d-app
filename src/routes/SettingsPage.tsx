@@ -17,6 +17,7 @@ import { GithubConnection } from '@/components/github/GithubConnection';
 import { reloadInto, useAuthStore } from '@/stores/authStore';
 import { toast } from '@/stores/toastStore';
 import { chordFromEvent, formatChord } from '@/hooks/useKeyboardShortcuts';
+import { useIsMobile } from '@/hooks/useMediaQuery';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { persistenceStatus } from '@/lib/idb';
 import { cx, errorMessage } from '@/lib/utils';
@@ -79,6 +80,7 @@ function Group({ title, description, children }: { title: string; description?: 
 }
 
 export default function SettingsPage() {
+  const isMobile = useIsMobile();
   const {
     editor,
     appearance,
@@ -134,8 +136,23 @@ export default function SettingsPage() {
         <h1 className="ml-2 text-base font-medium text-ink">Settings</h1>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <nav aria-label="Settings sections" className="w-44 shrink-0 border-r border-line p-2">
+      {/*
+        A column of sections beside the settings is right on a desktop and
+        wrong on a phone: 176px of a 320px screen is more than half the width
+        spent on navigation, which left the settings themselves in 144px —
+        every label wrapped and the font stack was cut off mid-word.
+        The sections become a scrolling strip above the settings instead, the
+        same shape the bottom panel already uses for its tabs, so the page
+        gains a phone layout without gaining a new pattern.
+      */}
+      <div className={cx('flex min-h-0 flex-1', isMobile && 'flex-col')}>
+        <nav
+          aria-label="Settings sections"
+          className={cx(
+            'shrink-0 border-line',
+            isMobile ? 'border-b p-2' : 'w-44 border-r p-2',
+          )}
+        >
           <input
             type="search"
             aria-label="Search settings"
@@ -147,25 +164,33 @@ export default function SettingsPage() {
           {matching.length === 0 && (
             <p className="px-2.5 py-1.5 text-sm text-ink-faint">No section matches that.</p>
           )}
-          {matching.map((item) => (
-            <button
-              key={item}
-              type="button"
-              aria-current={shown === item}
-              onClick={() => setSection(item)}
-              className={cx(
-                'block w-full rounded px-2.5 py-1.5 text-left text-base transition-colors',
-                shown === item
-                  ? 'bg-surface-raised text-ink'
-                  : 'text-ink-muted hover:bg-surface hover:text-ink',
-              )}
-            >
-              {LABELS[item]}
-            </button>
-          ))}
+          <div className={cx(isMobile && 'scrollbar-thin flex gap-1 overflow-x-auto')}>
+            {matching.map((item) => (
+              <button
+                key={item}
+                type="button"
+                aria-current={shown === item}
+                onClick={() => setSection(item)}
+                className={cx(
+                  'rounded px-2.5 py-1.5 text-base transition-colors',
+                  isMobile ? 'shrink-0 whitespace-nowrap' : 'block w-full text-left',
+                  shown === item
+                    ? 'bg-surface-raised text-ink'
+                    : 'text-ink-muted hover:bg-surface hover:text-ink',
+                )}
+              >
+                {LABELS[item]}
+              </button>
+            ))}
+          </div>
         </nav>
 
-        <div className="scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
+        <div
+          className={cx(
+            'scrollbar-thin min-w-0 flex-1 overflow-y-auto py-5',
+            isMobile ? 'px-4' : 'px-6',
+          )}
+        >
           {shown === 'editor' && (
             <>
               <Group title="Typography" description="Applies to the code editor and terminal.">
