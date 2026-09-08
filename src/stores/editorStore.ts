@@ -18,6 +18,26 @@ export interface EditorSession {
   cursors: Record<string, { line: number; column: number }>;
 }
 
+/**
+ * How many paths each history keeps.
+ *
+ * Small on purpose. These exist to answer "what was I just in", and a list long
+ * enough to need scrolling has stopped answering that. Bounded also means the
+ * persisted blob cannot grow without limit over a long-lived project.
+ */
+export const MAX_RECENT = 20;
+export const MAX_CLOSED = 20;
+
+/** Move a path to the front, without duplicating it. */
+function touch(list: string[], path: string): string[] {
+  return [path, ...list.filter((entry) => entry !== path)].slice(0, MAX_RECENT);
+}
+
+/** Same, for the closed-tab history. */
+function remember(list: string[], path: string): string[] {
+  return [path, ...list.filter((entry) => entry !== path)].slice(0, MAX_CLOSED);
+}
+
 /** Sessions older than this are dropped rather than kept forever. */
 export const MAX_REMEMBERED_PROJECTS = 12;
 
@@ -30,6 +50,21 @@ interface EditorState {
   /** Set when something outside the editor asks it to jump to a location. */
   reveal: PendingReveal | null;
   splitPath: string | null;
+  /**
+   * Paths in the order they were last looked at, newest first.
+   *
+   * Paths only — never content — so this can never carry code or a secret into
+   * storage. Bounded, because its whole job is "the handful you were just in".
+   */
+  recent: string[];
+  /**
+   * Files closed in this session, newest first, for reopening.
+   *
+   * Also paths only. A closed tab is cheap to restore because the file itself
+   * was never the tab: closing has always been a view action here, not a
+   * discard, so reopening cannot resurrect stale content.
+   */
+  closed: string[];
 
   openTab: (path: string) => void;
   closeTab: (path: string) => void;
@@ -37,6 +72,10 @@ interface EditorState {
   closeAll: () => void;
   /** Close every tab whose file has nothing unsaved, keeping pinned ones. */
   closeSaved: (isDirty: (path: string) => boolean) => void;
+  /** Close every tab to the right of this one, keeping pinned ones. */
+  closeToRight: (path: string) => void;
+  /** Reopen the most recently closed file. Returns the path, or null. */
+  reopenClosed: () => string | null;
   setActive: (path: string) => void;
   reorder: (from: number, to: number) => void;
   togglePin: (path: string) => void;
@@ -127,11 +166,14 @@ export const useEditorStore = create<EditorState>()(
   problems: [],
   reveal: null,
   splitPath: null,
+  recent: [],
+  closed: [],
 
   openTab: (path) =>
     set((state) => {
-      if (state.tabs.some((tab) => tab.path === path)) return { activePath: path };
-      return { tabs: [...state.tabs, { path, pinned: false }], activePath: path };
+      const recent = touch(state.recent, path);
+      if (state.tabs.some((tab) => tab.path === path)) return { activePath: path, recent };
+      return { tabs: [...state.tabs, { path, pinned: false }], activePath: path, recent };
     }),
 
   closeTab: (path) =>
@@ -148,8 +190,47 @@ export const useEditorStore = create<EditorState>()(
         tabs,
         activePath,
         splitPath: state.splitPath === path ? null : state.splitPath,
+        closed: remember(state.closed, path),
       };
     }),
+
+  /**
+   * Close everything after this tab.
+   *
+   * The counterpart to "close others" for the common case of having opened a
+   * trail of files chasing something down and wanting the trail gone. Pinned
+   * tabs survive, as they do everywhere else.
+   */
+  closeToRight: (path) =>
+    set((state) => {
+      const index = state.tabs.findIndex((tab) => tab.path === path);
+      if (index === -1) return state;
+      const dropped = state.tabs.slice(index + 1).filter((tab) => !tab.pinned);
+      if (!dropped.length) return state;
+      const tabs = state.tabs.filter((tab, at) => at <= index || tab.pinned);
+      const activePath = tabs.some((tab) => tab.path === state.activePath)
+        ? state.activePath
+        : path;
+      return {
+        tabs,
+        activePath,
+        splitPath: tabs.some((tab) => tab.path === state.splitPath) ? state.splitPath : null,
+        closed: dropped.reduce((list, tab) => remember(list, tab.path), state.closed),
+      };
+    }),
+
+  /**
+   * Put back the file you just closed.
+   *
+   * Returns the path so the caller can react — the workspace has to check the
+   * file still exists before reopening a tab onto nothing, and only it knows.
+   */
+  reopenClosed: () => {
+    const [path, ...rest] = get().closed;
+    if (!path) return null;
+    set({ closed: rest });
+    return path;
+  },
 
   closeOthers: (path) =>
     set((state) => {
@@ -186,7 +267,7 @@ export const useEditorStore = create<EditorState>()(
       };
     }),
 
-  setActive: (path) => set({ activePath: path }),
+  setActive: (path) => set((state) => ({ activePath: path, recent: touch(state.recent, path) })),
 
   reorder: (from, to) =>
     set((state) => {

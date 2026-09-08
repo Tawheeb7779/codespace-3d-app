@@ -318,6 +318,27 @@ export default function WorkspacePage() {
   }, []);
 
   /** Move focus one tab along, wrapping — the usual editor behaviour. */
+  /**
+   * Put back the last closed file.
+   *
+   * Closing a tab has never discarded anything here — the file lives in the
+   * store, the tab is only a view of it — so reopening is safe. What is not
+   * safe is reopening onto a path that has since been deleted or renamed, which
+   * would leave a tab over nothing; that case says so instead.
+   */
+  const reopenClosedTab = useCallback(() => {
+    const path = useEditorStore.getState().reopenClosed();
+    if (!path) {
+      toast.info('Nothing to reopen', 'No editor has been closed in this session.');
+      return;
+    }
+    if (!(path in useFileStore.getState().files)) {
+      toast.info('That file is gone', `${path} no longer exists in this project.`);
+      return;
+    }
+    openTab(path);
+  }, [openTab]);
+
   const cycleTab = useCallback(
     (delta: number) => {
       const open = useEditorStore.getState().tabs;
@@ -382,6 +403,13 @@ export default function WorkspacePage() {
         run: () => setQuickOpenOpen(true),
       },
       { id: 'file.save', group: 'File', label: 'Save all files', binding: 'save', run: () => void save() },
+      {
+        id: 'file.reopen',
+        group: 'File',
+        label: 'Reopen closed editor',
+        binding: 'reopenTab',
+        run: reopenClosedTab,
+      },
       {
         id: 'file.close',
         group: 'File',
@@ -723,6 +751,7 @@ export default function WorkspacePage() {
     return [...base, ...editorCommands, ...taskCommands, ...branchCommands];
   }, [
     activePath,
+    reopenClosedTab,
     appearance.theme,
     canWrite,
     closeAll,
@@ -773,6 +802,7 @@ export default function WorkspacePage() {
         togglePreview: () => togglePreview(),
         search: () => setSidebarPanel('search'),
         closeTab: () => activePath && closeTab(activePath),
+        reopenTab: reopenClosedTab,
         run: () => void previewRun(),
         format: () => void formatDocument(),
         nextTab: () => cycleTab(1),
@@ -786,6 +816,7 @@ export default function WorkspacePage() {
       }),
       [
         activePath,
+        reopenClosedTab,
         closeTab,
         cycleTab,
         previewRun,

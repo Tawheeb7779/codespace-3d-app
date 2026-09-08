@@ -6,6 +6,7 @@ import { rankPaths } from '@/lib/search';
 import { cx } from '@/lib/utils';
 import { formatChord } from '@/hooks/useKeyboardShortcuts';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useEditorStore } from '@/stores/editorStore';
 import { basename, dirname } from '@/lib/vfs';
 
 export interface Command {
@@ -54,6 +55,8 @@ export function CommandPalette({
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
   const keybindings = useSettingsStore((s) => s.keybindings);
+  // Quick open leads with what you were just in; see rankPaths.
+  const recent = useEditorStore((s) => s.recent);
 
   /** What this command's chord is right now, not what it was when it was written. */
   const chordFor = (command: Command) =>
@@ -83,8 +86,8 @@ export function CommandPalette({
         )
         .map((command) => ({ kind: 'command' as const, command }));
     }
-    return rankPaths(files, term, 50).map((path) => ({ kind: 'file' as const, path }));
-  }, [commandMode, term, commands, files]);
+    return rankPaths(files, term, 50, recent).map((path) => ({ kind: 'file' as const, path }));
+  }, [commandMode, term, commands, files, recent]);
 
   useEffect(() => setIndex(0), [query]);
 

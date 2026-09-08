@@ -18,6 +18,7 @@ export function EditorTabs() {
     setActive,
     closeTab,
     closeOthers,
+    closeToRight,
     closeAll,
     closeSaved,
     togglePin,
@@ -61,6 +62,16 @@ export function EditorTabs() {
     ? [
         { id: 'close', label: 'Close', onSelect: () => closeTab(target) },
         { id: 'close-others', label: 'Close others', onSelect: () => closeOthers(target) },
+        {
+          id: 'close-right',
+          label: 'Close to the right',
+          // Nothing to the right but pinned tabs means this would do nothing;
+          // an entry that does nothing is worse than one that is not offered.
+          disabled: !tabs
+            .slice(tabs.findIndex((tab) => tab.path === target) + 1)
+            .some((tab) => !tab.pinned),
+          onSelect: () => closeToRight(target),
+        },
         {
           id: 'close-saved',
           label: 'Close saved',

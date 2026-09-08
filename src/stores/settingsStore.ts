@@ -108,6 +108,7 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { id: 'togglePreview', label: 'Toggle preview', keys: 'mod+alt+p' },
   { id: 'search', label: 'Search across files', keys: 'mod+shift+f' },
   { id: 'closeTab', label: 'Close editor tab', keys: 'mod+w' },
+  { id: 'reopenTab', label: 'Reopen closed editor', keys: 'mod+shift+t' },
   { id: 'run', label: 'Run project', keys: 'mod+enter' },
   { id: 'format', label: 'Format document', keys: 'mod+shift+i' },
   { id: 'nextTab', label: 'Next editor tab', keys: 'mod+alt+arrowright' },

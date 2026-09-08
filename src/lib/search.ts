@@ -142,12 +142,44 @@ export function fuzzyScore(needle: string, haystack: string): number {
   return score / (lowerNeedle.length * 3);
 }
 
-export function rankPaths(paths: string[], query: string, limit = 40): string[] {
-  if (!query.trim()) return paths.slice(0, limit);
+/**
+ * Order files for quick open, newest-used first.
+ *
+ * `recent` is the paths the user has looked at, newest first. It matters most
+ * with no query at all: opening quick open and being shown an arbitrary slice
+ * of the project is the difference between a file switcher and a file list.
+ * With a query, the fuzzy score leads and recency only breaks ties — otherwise
+ * a recently-opened file would outrank a better match, which is more annoying
+ * than no recency at all.
+ *
+ * Paths not in `recent` follow those that are, in their existing order, so a
+ * project someone has only just opened still lists sensibly.
+ */
+export function rankPaths(
+  paths: string[],
+  query: string,
+  limit = 40,
+  recent: string[] = [],
+): string[] {
+  if (!query.trim()) {
+    const known = new Set(paths);
+    const head = recent.filter((path) => known.has(path));
+    const seen = new Set(head);
+    return [...head, ...paths.filter((path) => !seen.has(path))].slice(0, limit);
+  }
+
+  const rank = new Map(recent.map((path, index) => [path, index]));
+  const recency = (path: string) => rank.get(path) ?? Number.MAX_SAFE_INTEGER;
+
   return paths
     .map((path) => ({ path, score: fuzzyScore(query.trim(), path) }))
     .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.path.length - b.path.length)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        recency(a.path) - recency(b.path) ||
+        a.path.length - b.path.length,
+    )
     .slice(0, limit)
     .map((entry) => entry.path);
 }
