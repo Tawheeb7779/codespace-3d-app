@@ -189,6 +189,36 @@
    * The overlay is centred rather than anchored, so a control at the edge of a
    * strip grows in both directions instead of pushing itself off-screen.
    */
+  /*
+   * Form text never below 16px on a touch device.
+   *
+   * Not a readability preference: iOS Safari zooms the whole page when you
+   * focus an input whose font size is under 16px, and it does not zoom back
+   * out. So a 13px field — right for the density everywhere else — meant that
+   * tapping "Project name" threw the viewport into a zoomed state the user had
+   * to pinch their way out of. Raising the size only where the pointer is
+   * coarse removes the trigger and leaves the desktop density alone.
+   *
+   * Monaco and xterm are excluded deliberately. Both position a hidden input
+   * over the text they are editing and do their own measuring from its font,
+   * so imposing a size on those breaks caret placement rather than helping
+   * anyone read.
+   */
+  @media (pointer: coarse) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']),
+    select,
+    textarea {
+      font-size: 16px;
+    }
+
+    .monaco-editor input,
+    .monaco-editor textarea,
+    .xterm input,
+    .xterm textarea {
+      font-size: inherit;
+    }
+  }
+
   @media (pointer: coarse) {
     .tap-target {
       position: relative;

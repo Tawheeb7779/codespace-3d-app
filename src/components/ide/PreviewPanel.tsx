@@ -149,7 +149,13 @@ export function PreviewPanel() {
         <div className="ml-auto flex items-center gap-2 pr-1">
           {device !== 'desktop' && <span className="text-sm text-ink-faint">{size.label}</span>}
           {status === 'building' && <Badge tone="accent">building</Badge>}
-          {status === 'running' && <Badge tone="positive">running · {lastBuildMs}ms</Badge>}
+          {status === 'running' && (
+            // Tabular figures so a rebuild that goes 98ms → 1204ms does not
+            // resize the badge and shove the toolbar around.
+            <Badge tone="positive">
+              running · <span className="tabular-nums">{lastBuildMs}</span>ms
+            </Badge>
+          )}
           {status === 'error' && <Badge tone="danger">{errors.length} errors</Badge>}
         </div>
       </div>

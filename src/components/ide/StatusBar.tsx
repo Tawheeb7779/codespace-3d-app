@@ -168,8 +168,13 @@ export function StatusBar() {
         </Item>
         {activePath && (
           <>
+            {/* Tabular figures: this updates on every keystroke, and with
+                proportional digits the whole right-hand end of the bar shifts
+                sideways as you move between column 9 and column 10. */}
             <Item minor>
-              Ln {cursor.line}, Col {cursor.column}
+              <span className="tabular-nums">
+                Ln {cursor.line}, Col {cursor.column}
+              </span>
             </Item>
             <Item
               onClick={() =>
