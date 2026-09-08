@@ -57,13 +57,24 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
       const handler = handlers[binding.id];
       if (!handler) return;
 
-      const target = event.target as HTMLElement | null;
+      /*
+       * `event.target` is an EventTarget, not an Element.
+       *
+       * It was cast to HTMLElement, which reads fine and is not true: a key
+       * event dispatched at `window` or `document` — which extensions and
+       * automation both do — has a target with no `closest`, so this threw.
+       * The throw escaped a capture-phase listener on window, which is the one
+       * place it does real damage: the keymap stops dispatching for that event
+       * and every later capture listener is skipped too.
+       */
+      const node = event.target;
+      const target = node instanceof Element ? node : null;
       const typing =
         target?.tagName === 'INPUT' ||
         target?.tagName === 'TEXTAREA' ||
-        target?.isContentEditable ||
-        target?.closest('.monaco-editor') !== null ||
-        target?.closest('.xterm') !== null;
+        (target instanceof HTMLElement && target.isContentEditable) ||
+        target?.closest('.monaco-editor') != null ||
+        target?.closest('.xterm') != null;
       // Inside an editor, only modified chords are ours; plain keys belong to it.
       if (typing && !chord.includes('mod') && !chord.includes('alt')) return;
 
