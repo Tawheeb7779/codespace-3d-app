@@ -31,12 +31,22 @@ page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
  * disposed, which this suite triggers on every reload. It is library teardown
  * noise, not an application error — matched narrowly so a real failure with a
  * different message still fails the run.
+ *
+ * Both halves are matched against the stack, and that matters. Monaco's
+ * `message` is the bare word `Canceled`; `Canceled: Canceled` is the stack's
+ * first line. Testing the pattern against `e.message` — as this did — meant
+ * the exemption never applied at all, so a run that happened to tear an editor
+ * down at the wrong moment failed on library noise this comment says to
+ * ignore. The frame check likewise has to name both builds: a dev server
+ * serves `/node_modules/monaco-editor/…`, a production build serves the hashed
+ * chunk `/assets/monaco-<hash>.js`, which carries no `monaco-editor` substring.
  */
 const MONACO_DISPOSE = /^Canceled: Canceled$/m;
+const MONACO_FRAME = /monaco-editor|\/assets\/monaco-[\w-]+\.js/;
 
 page.on('pageerror', (e) => {
   const text = e.stack || e.message;
-  if (MONACO_DISPOSE.test(e.message) && text.includes('monaco-editor')) return;
+  if (MONACO_DISPOSE.test(text) && MONACO_FRAME.test(text)) return;
   pageErrors.push(text);
 });
 

@@ -27,8 +27,17 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
 const page = await context.newPage();
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
 
-/** Monaco rejects its own pending work with `Canceled` when disposed. */
+/**
+ * Monaco rejects its own pending work with `Canceled` when disposed.
+ *
+ * Matched against the stack, not `e.message`: the message is the bare word
+ * `Canceled`, and `Canceled: Canceled` is the stack's first line. The frame
+ * check names both builds — `/node_modules/monaco-editor/…` from the dev
+ * server, and the hashed `/assets/monaco-<hash>.js` chunk from a production
+ * build, which carries no `monaco-editor` substring.
+ */
 const MONACO_DISPOSE = /^Canceled: Canceled$/m;
+const MONACO_FRAME = /monaco-editor|\/assets\/monaco-[\w-]+\.js/;
 
 /**
  * This suite deliberately breaks the user's project to produce a real type
@@ -41,7 +50,7 @@ const FROM_PREVIEW = /about:srcdoc/;
 
 page.on('pageerror', (e) => {
   const text = e.stack || e.message;
-  if (MONACO_DISPOSE.test(e.message) && text.includes('monaco-editor')) return;
+  if (MONACO_DISPOSE.test(text) && MONACO_FRAME.test(text)) return;
   if (FROM_PREVIEW.test(text)) return;
   pageErrors.push(text);
 });

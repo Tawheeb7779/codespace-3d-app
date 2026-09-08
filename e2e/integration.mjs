@@ -31,10 +31,15 @@ const page = await context.newPage();
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
 
 const MONACO_DISPOSE = /^Canceled: Canceled$/m;
+// Matched against the stack, not `e.message`, which is the bare word
+// `Canceled`. Both spellings of the library's own frames are named:
+// `/node_modules/monaco-editor/…` from the dev server, and the hashed
+// `/assets/monaco-<hash>.js` chunk from a production build.
+const MONACO_FRAME = /monaco-editor|\/assets\/monaco-[\w-]+\.js/;
 const FROM_PREVIEW = /about:srcdoc/;
 page.on('pageerror', (e) => {
   const text = e.stack || e.message;
-  if (MONACO_DISPOSE.test(e.message) && text.includes('monaco-editor')) return;
+  if (MONACO_DISPOSE.test(text) && MONACO_FRAME.test(text)) return;
   if (FROM_PREVIEW.test(text)) return;
   pageErrors.push(text);
 });
