@@ -73,7 +73,13 @@ export function WorkspaceTopBar({
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-surface px-2">
-      <Link to="/dashboard" aria-label="Back to dashboard" className="flex items-center gap-1.5 pr-1">
+      {/* The way out of the workspace, and on a phone the only one — its icons
+          are 20px tall, which is a thumb-width smaller than it needs to be. */}
+      <Link
+        to="/dashboard"
+        aria-label="Back to dashboard"
+        className="tap-target flex items-center gap-1.5 pr-1"
+      >
         <ArrowLeft className="h-3.5 w-3.5 text-ink-faint" />
         <span className="flex h-5 w-5 items-center justify-center rounded bg-accent text-accent-ink">
           <Mark className="h-3.5 w-3.5" />

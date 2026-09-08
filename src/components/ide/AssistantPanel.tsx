@@ -21,6 +21,7 @@ import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
 import { readApiKey, type ProviderErrorKind, type ProviderKind } from '@/lib/ai/provider';
 import type { AgentActivity } from '@/lib/ai/agent';
 import { cx } from '@/lib/utils';
+import { useIsTouch } from '@/hooks/useMediaQuery';
 
 /**
  * What to do about each kind of provider failure.
@@ -233,6 +234,7 @@ function WorkflowBar({ disabled }: { disabled: boolean }) {
 }
 
 export function AssistantPanel() {
+  const touch = useIsTouch();
   const {
     messages,
     running,
@@ -422,7 +424,10 @@ export function AssistantPanel() {
           <Badge tone={connected ? 'positive' : 'neutral'}>
             {connected ? provider.model : 'not connected'}
           </Badge>
-          <span className="text-sm text-ink-faint">Shift + Enter for a new line</span>
+          {/* There is no Shift key to press on a phone. */}
+          {!touch && (
+            <span className="text-sm text-ink-faint">Shift + Enter for a new line</span>
+          )}
         </div>
       </div>
 

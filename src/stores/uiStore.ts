@@ -190,11 +190,23 @@ export const useUIStore = create<UIState>()(
       layout: null,
       beforeFocus: null,
 
+      /*
+       * "Show me this panel" — expressed in whichever layout is on screen.
+       *
+       * The mobile workspace shows one pane at a time and reads `mobilePane`,
+       * so setting only `sidebarPanel` there changed a pane nobody was looking
+       * at: the status bar's "Open source control", and every palette command
+       * that shows a panel, appeared to do nothing on a phone. Bringing the
+       * matching pane forward here fixes all of those callers at once, rather
+       * than asking each one to remember there are two layouts.
+       */
       setSidebarPanel: (panel) =>
         set((state) => ({
           sidebarPanel: panel,
           // Clicking the active icon collapses the panel, as in VS Code.
           sidebarOpen: state.sidebarPanel === panel ? !state.sidebarOpen : true,
+          // The assistant is its own pane on a phone; the rest live in Files.
+          mobilePane: panel === 'assistant' ? 'assistant' : 'files',
         })),
       toggleSidebar: (open) => set((state) => ({ sidebarOpen: open ?? !state.sidebarOpen })),
       setSidebarWidth: (width) => set({ sidebarWidth: clamp(width, 200, 520) }),
@@ -202,7 +214,9 @@ export const useUIStore = create<UIState>()(
       setPreviewWidth: (width) => set({ previewWidth: clamp(width, 280, 900) }),
       toggleBottom: (open) => set((state) => ({ bottomOpen: open ?? !state.bottomOpen })),
       setBottomHeight: (height) => set({ bottomHeight: clamp(height, 120, 640) }),
-      setBottomTab: (tab) => set({ bottomTab: tab, bottomOpen: true }),
+      // Same reasoning as setSidebarPanel: the bottom panel is the Terminal
+      // pane on a phone, so "show me the problems" has to go there too.
+      setBottomTab: (tab) => set({ bottomTab: tab, bottomOpen: true, mobilePane: 'terminal' }),
       requestCreate: (kind) => set({ sidebarPanel: 'explorer', sidebarOpen: true, pendingCreate: kind }),
       consumeCreate: () => set({ pendingCreate: null }),
       requestReplace: () =>

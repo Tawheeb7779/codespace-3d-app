@@ -163,7 +163,7 @@ export function EditorTabs() {
                   closeTab(tab.path);
                 }}
                 className={cx(
-                  'ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm',
+                  'tap-target ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm',
                   'hover:bg-line-strong',
                   isDirty && 'text-accent',
                 )}

@@ -34,6 +34,7 @@ import type { ProjectMeta } from '@/types';
 import { cx, errorMessage, formatTimeAgo } from '@/lib/utils';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { Wordmark } from '@/components/ui/Wordmark';
+import { useIsTouch } from '@/hooks/useMediaQuery';
 
 type Filter = 'all' | 'starred' | 'archived';
 type Sort = 'updated' | 'created' | 'name';
@@ -100,6 +101,8 @@ function ProjectCard({
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  // No point advertising a chord to a device with no keyboard.
+  const touch = useIsTouch();
   const { projects, loading, error, load, rename, remove, duplicate, toggleStar, setStatus } =
     useProjectStore();
   const { user, signOut, localMode } = useAuthStore();
@@ -297,7 +300,7 @@ export default function DashboardPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-canvas">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-3 sm:px-4">
-        <Link to="/" className="flex items-center gap-2 text-ink">
+        <Link to="/" className="tap-target flex items-center gap-2 text-ink">
           <Wordmark size="sm" />
         </Link>
 
@@ -358,7 +361,7 @@ export default function DashboardPage() {
               <Input
                 ref={searchRef}
                 aria-label="Search projects"
-                placeholder="Search projects…  (Ctrl K)"
+                placeholder={touch ? 'Search projects…' : 'Search projects…  (Ctrl K)'}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 leading={<Search className="h-3.5 w-3.5" />}

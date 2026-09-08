@@ -104,7 +104,7 @@ export default function LandingPage() {
     <div className="h-full overflow-y-auto overflow-x-hidden bg-canvas">
       <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 backdrop-blur">
         <nav className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <Link to="/" className="flex items-center gap-2 text-ink" aria-label="TA CODE home">
+          <Link to="/" className="tap-target flex items-center gap-2 text-ink" aria-label="TA CODE home">
             <Wordmark />
             <Badge tone="neutral" className="hidden sm:inline-flex">
               IDE
@@ -439,14 +439,14 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-5 text-sm text-ink-faint">
             <a
-              className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
+              className="tap-target inline-flex items-center gap-1.5 transition-colors hover:text-ink"
               href="https://github.com"
               target="_blank"
               rel="noreferrer noopener"
             >
               <Github className="h-3.5 w-3.5" /> Source
             </a>
-            <Link className="transition-colors hover:text-ink" to="/signin">
+            <Link className="tap-target transition-colors hover:text-ink" to="/signin">
               Sign in
             </Link>
           </div>

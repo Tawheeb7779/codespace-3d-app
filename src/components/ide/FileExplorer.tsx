@@ -21,6 +21,7 @@ import { OutlinePanel } from '@/components/ide/OutlinePanel';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useIsTouch } from '@/hooks/useMediaQuery';
 import { useUIStore } from '@/stores/uiStore';
 import { toast } from '@/stores/toastStore';
 import {
@@ -44,11 +45,24 @@ interface Pending {
   initial: string;
 }
 
-const ROW_HEIGHT = 22;
+/*
+ * Row pitch, which is also the virtualiser's unit.
+ *
+ * 22px is right for a mouse and is what makes a deep tree readable without
+ * scrolling. It is too tight for a thumb: on a phone the tree is the primary
+ * way around a project, and 22px rows put four files inside one fingertip.
+ *
+ * The value has to stay one number — the spacer height, the index maths and
+ * each row's own height are all derived from it, and any disagreement between
+ * them shows up as rows that drift out of place as you scroll.
+ */
+const ROW_HEIGHT_FINE = 22;
+const ROW_HEIGHT_COARSE = 32;
 /** Above this many entries the tree windows its rows instead of mounting all. */
 const VIRTUALIZE_AFTER = 400;
 
 export function FileExplorer() {
+  const ROW_HEIGHT = useIsTouch() ? ROW_HEIGHT_COARSE : ROW_HEIGHT_FINE;
   const files = useFileStore((s) => s.files);
   const dirs = useFileStore((s) => s.dirs);
   const dirty = useFileStore((s) => s.dirty);

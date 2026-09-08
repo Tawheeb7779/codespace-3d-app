@@ -31,7 +31,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       aria-pressed={active !== undefined ? active : undefined}
       className={cx(
-        'inline-flex shrink-0 items-center justify-center rounded transition-colors duration-100',
+        'tap-target inline-flex shrink-0 items-center justify-center rounded transition-colors duration-100',
         'disabled:cursor-not-allowed disabled:opacity-40',
         SIZES[size],
         tone === 'danger'
@@ -51,7 +51,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
 });
 
 const ICON_CONTROL =
-  'inline-flex shrink-0 items-center justify-center rounded transition-colors duration-100 text-ink-muted hover:bg-surface-raised hover:text-ink';
+  'tap-target inline-flex shrink-0 items-center justify-center rounded transition-colors duration-100 text-ink-muted hover:bg-surface-raised hover:text-ink';
 
 /**
  * The navigation counterpart of `IconButton`.

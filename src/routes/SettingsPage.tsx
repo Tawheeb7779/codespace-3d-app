@@ -124,7 +124,10 @@ export default function SettingsPage() {
   return (
     <div className="ta-ground flex h-full flex-col overflow-hidden">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4">
-        <Link to="/dashboard" className="flex items-center gap-1.5 text-ink-muted hover:text-ink">
+        <Link
+          to="/dashboard"
+          className="tap-target flex items-center gap-1.5 text-ink-muted hover:text-ink"
+        >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span className="text-base">Dashboard</span>
         </Link>

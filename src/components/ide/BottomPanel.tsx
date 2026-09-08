@@ -473,6 +473,7 @@ export function BottomPanel() {
                 ) : (
                   <button
                     type="button"
+                    className="tap-target"
                     onClick={() => setActive(session.id)}
                     onDoubleClick={() => setRenaming(session.id)}
                     title="Double-click to rename"
