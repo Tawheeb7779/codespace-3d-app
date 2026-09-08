@@ -18,6 +18,15 @@ are right and this file is stale.**
 - **Never write a raw colour** (`#1a1a1a`, `rgb(...)`, `text-gray-400`) in a
   component. Every colour is a token. A raw value cannot follow the theme and
   will not be seen by the contrast audit.
+
+  Two files legitimately cannot obey this, and both are the whole list:
+  `TerminalView.tsx`, because xterm.js takes a JavaScript theme object and
+  cannot read CSS variables, and `LandingEditor.tsx`, because it writes CSS
+  into an isolated frame that has no access to this document's variables. Where
+  a literal there stands for a token it must equal it exactly — that pairing is
+  unenforced, so it drifts silently. The rest of xterm's palette is the ANSI
+  sixteen, which has no token equivalents and is meant to be its own thing.
+  Adding a third exception needs a reason as good as those two.
 - **Never add a colour token without running `npm run audit:contrast`.** It
   fails the build on a WCAG miss and on an accent that drifts too close in hue
   to a status colour.

@@ -31,7 +31,10 @@ import { commandNames } from '@/lib/shell';
  */
 const COLORS = {
   dark: {
-    background: '#070909',
+    // Exactly --c-surface-sunken (7 9 11). It had drifted to #070909, which is
+    // invisible but is the drift this whole block is exposed to: xterm needs
+    // literals, so nothing checks these against the tokens they stand for.
+    background: '#07090b',
     foreground: '#e3e7ed',
     cursor: '#38b0d6',
     selectionBackground: '#12384a',
