@@ -233,6 +233,11 @@ export default function WorkspacePage() {
     if (!ready || !projectId || greeted.current === projectId) return;
     if (activePath || !Object.keys(files).length) return;
     greeted.current = projectId;
+    // Both histories are about *this* project, and this line runs once per
+    // project. Restoring a session seeds them again immediately below; without
+    // the reset, quick open would offer paths from whichever project was open
+    // before, and Ctrl+Shift+T would reopen a file from it.
+    useEditorStore.setState({ recent: [], closed: [] });
 
     if (
       useSettingsStore.getState().workspace.restoreSession &&

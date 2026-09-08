@@ -368,6 +368,21 @@ export const useEditorStore = create<EditorState>()(
       splitPath: null,
       cursor: caret ?? { line: 1, column: 1 },
       reveal: caret ? { path: activePath, line: caret.line, column: caret.column, token: Date.now() } : null,
+      /*
+       * Seed the recent list from the session being restored.
+       *
+       * Coming back to a project is exactly when "the file I was just in" is
+       * most useful, and it is also when nothing has been opened yet — so
+       * without this, quick open would offer an arbitrary slice of the project
+       * to someone whose tabs had just been put back in front of them. The
+       * active file leads because it is the one they left off in.
+       *
+       * `closed` is deliberately not restored: a tab closed before a reload is
+       * not something Ctrl+Shift+T should resurrect a day later.
+       */
+      recent: [activePath, ...tabs.map((tab) => tab.path).filter((path) => path !== activePath)]
+        .slice(0, MAX_RECENT),
+      closed: [],
     });
     return true;
   },

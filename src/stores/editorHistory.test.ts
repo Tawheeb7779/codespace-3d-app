@@ -188,3 +188,52 @@ describe('closing to the right', () => {
     expect(editor().splitPath).toBeNull();
   });
 });
+
+describe('coming back to a project', () => {
+  const savedSession = () => {
+    useEditorStore.setState({
+      sessions: {
+        p1: {
+          tabs: [{ path: 'a.ts', pinned: false }, { path: 'b.ts', pinned: false }],
+          activePath: 'b.ts',
+          cursors: {},
+        },
+      },
+    });
+  };
+
+  it('seeds the recent list from the restored tabs, active file first', () => {
+    savedSession();
+
+    useEditorStore.getState().restoreSession('p1', () => true);
+
+    // Returning is exactly when "the file I was just in" matters most, and it
+    // is also when nothing has been opened yet.
+    expect(useEditorStore.getState().recent).toEqual(['b.ts', 'a.ts']);
+  });
+
+  it('does not resurrect tabs closed before the reload', () => {
+    useEditorStore.setState({ closed: ['old.ts'] });
+    savedSession();
+
+    useEditorStore.getState().restoreSession('p1', () => true);
+
+    expect(useEditorStore.getState().closed).toEqual([]);
+    expect(useEditorStore.getState().reopenClosed()).toBeNull();
+  });
+
+  it('leaves the histories alone when there is nothing to restore', () => {
+    useEditorStore.setState({ sessions: {}, recent: ['kept.ts'] });
+
+    expect(useEditorStore.getState().restoreSession('missing', () => true)).toBe(false);
+    expect(useEditorStore.getState().recent).toEqual(['kept.ts']);
+  });
+
+  it('seeds only files the project still has', () => {
+    savedSession();
+
+    useEditorStore.getState().restoreSession('p1', (path) => path === 'b.ts');
+
+    expect(useEditorStore.getState().recent).toEqual(['b.ts']);
+  });
+});
