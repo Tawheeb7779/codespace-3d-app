@@ -66,6 +66,7 @@ function stubRuntime(): ContainerRuntime & { created: string[]; destroyed: strin
     spawnShell: async () => fakePty(),
     endpointFor: async () => null,
     listeningPorts: async () => [],
+    runCommand: async () => ({ stdout: '', stderr: '', code: 0 }),
   };
 }
 

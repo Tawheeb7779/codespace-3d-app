@@ -26,10 +26,31 @@ import type { SessionRegistry } from './session.ts';
  * attach.
  */
 
+/**
+ * What a workspace *is*, and it is not a label.
+ *
+ * A `project` workspace holds one project's files and is authorised by that
+ * project's membership. A `linux` workspace belongs to a person rather than to
+ * a project: it has its own filesystem, nothing is mounted into it, and
+ * membership of a project grants no access to it at all.
+ *
+ * The kind is part of the container's identity, so the two can never name the
+ * same directory — see {@link containerIdFor}.
+ */
+export type WorkspaceKind = 'project' | 'linux';
+
 export interface ContainerRecord {
   id: string;
   userId: string;
-  projectId: string;
+  kind: WorkspaceKind;
+  /**
+   * The project this workspace serves, or null for a Linux workspace.
+   *
+   * Null rather than a placeholder string: a Linux workspace has no project,
+   * and code that needs one should fail to compile rather than compare against
+   * a sentinel somebody later reuses as a real id.
+   */
+  projectId: string | null;
   tier: ResourceTier;
   status: ContainerStatus;
   workspaceDir: string;
@@ -41,9 +62,19 @@ export interface ContainerRecord {
   openPorts: Set<number>;
 }
 
-/** One container per (user, project). A second tab joins the first. */
-export function containerKey(userId: string, projectId: string): string {
-  return `${userId}:${projectId}`;
+/**
+ * One container per (user, kind, project). A second tab joins the first.
+ *
+ * The kind is in the key, so a person's Linux workspace and their workspace for
+ * a project called `linux` are two different containers rather than a
+ * collision waiting to be found.
+ */
+export function containerKey(
+  userId: string,
+  projectId: string | null,
+  kind: WorkspaceKind = 'project',
+): string {
+  return `${userId}:${kind}:${projectId ?? ''}`;
 }
 
 /**
@@ -75,8 +106,12 @@ export function containerKey(userId: string, projectId: string): string {
  * matches on ownership, so knowing an id grants nothing. Collision was the
  * vulnerability; a keyed HMAC would hide ids without making them safer.
  */
-export function containerIdFor(userId: string, projectId: string): string {
-  const digest = createHash('sha256').update(containerKey(userId, projectId)).digest('hex');
+export function containerIdFor(
+  userId: string,
+  projectId: string | null,
+  kind: WorkspaceKind = 'project',
+): string {
+  const digest = createHash('sha256').update(containerKey(userId, projectId, kind)).digest('hex');
   return `tacode-${digest.slice(0, 32)}`;
 }
 
@@ -118,10 +153,11 @@ export class ContainerManager {
    */
   async ensure(
     userId: string,
-    projectId: string,
+    projectId: string | null,
     tierName = this.config.defaultTier,
+    kind: WorkspaceKind = 'project',
   ): Promise<ContainerRecord> {
-    const key = containerKey(userId, projectId);
+    const key = containerKey(userId, projectId, kind);
     const existing = this.containers.get(key);
     if (existing) {
       if (await this.runtime.exists(existing.id)) {
@@ -151,12 +187,13 @@ export class ContainerManager {
     }
 
     const tier = this.config.tiers[tierName];
-    const id = containerIdFor(userId, projectId);
+    const id = containerIdFor(userId, projectId, kind);
     const workspaceDir = workspaceDirFor(this.config.workspaceRoot, id);
 
     const record: ContainerRecord = {
       id,
       userId,
+      kind,
       projectId,
       tier,
       status: 'creating',
@@ -201,8 +238,12 @@ export class ContainerManager {
   }
 
   /** An existing container this user owns, or null. Never creates. */
-  get(userId: string, projectId: string): ContainerRecord | null {
-    return this.containers.get(containerKey(userId, projectId)) ?? null;
+  get(
+    userId: string,
+    projectId: string | null,
+    kind: WorkspaceKind = 'project',
+  ): ContainerRecord | null {
+    return this.containers.get(containerKey(userId, projectId, kind)) ?? null;
   }
 
   byId(containerId: string, userId: string): ContainerRecord | null {
@@ -223,7 +264,7 @@ export class ContainerManager {
     await this.runtime.stop(record.id).catch(() => undefined);
     await this.runtime.destroy(record.id).catch(() => undefined);
     record.status = reason;
-    this.forget(containerKey(record.userId, record.projectId));
+    this.forget(containerKey(record.userId, record.projectId, record.kind));
     this.onStopped(record.id);
     this.logger.event(reason === 'expired' ? 'container_expired' : 'container_stopped', {
       containerId: record.id,

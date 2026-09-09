@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import { mkdir, rm } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import type { ContainerRuntime, CreateOptions, PtyHandle, SpawnOptions } from './types.ts';
 import { loadPty, spawnPty } from './pty.ts';
 
@@ -19,8 +21,14 @@ import { loadPty, spawnPty } from './pty.ts';
  * would be worse than useless, because it would invite someone to trust it.
  */
 
+const run = promisify(execFile);
+
 export function createLocalRuntime(): ContainerRuntime {
   const known = new Map<string, { workspaceDir: string; running: boolean }>();
+
+  /** The directory this container was created with, and nothing else. */
+  const workspaceFor = (containerId: string): string | undefined =>
+    known.get(containerId)?.workspaceDir;
 
   return {
     name: 'local',
@@ -96,6 +104,34 @@ export function createLocalRuntime(): ContainerRuntime {
      */
     async listeningPorts() {
       return [];
+    },
+
+    /**
+     * The same contract as the Docker runtime, on the host's own filesystem.
+     *
+     * `execFile` and never a shell, so the argument vector stays a vector.
+     * `cwd` is the workspace directory the caller was given, which is derived
+     * from the container id rather than from anything a client sent.
+     */
+    async runCommand(containerId, argv, runOptions = {}) {
+      const [command, ...rest] = argv;
+      if (!command) return { stdout: '', stderr: 'no command', code: 1 };
+      try {
+        const { stdout, stderr } = await run(command, rest, {
+          cwd: runOptions.cwd ?? workspaceFor(containerId),
+          maxBuffer: runOptions.maxBuffer ?? 4 * 1024 * 1024,
+          timeout: runOptions.timeoutMs ?? 30_000,
+          killSignal: 'SIGKILL',
+        });
+        return { stdout, stderr, code: 0 };
+      } catch (error) {
+        const failure = error as { stdout?: string; stderr?: string; code?: number };
+        return {
+          stdout: failure.stdout ?? '',
+          stderr: failure.stderr ?? '',
+          code: typeof failure.code === 'number' ? failure.code : 1,
+        };
+      }
     },
   };
 }

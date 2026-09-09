@@ -453,9 +453,14 @@ export function BottomPanel() {
               *
               * Shown only where there is a choice: a deployment with no
               * container gateway has one terminal, and a control offering an
-              * option that cannot work is worse than no control. The label is
-              * the environment rather than an on/off, because "Virtual" and
-              * "Linux" are the two things a user is actually choosing between.
+              * option that cannot work is worse than no control.
+              *
+              * Three labels, because there are three things and the last two
+              * are not the same thing. "Project" is the in-browser shell over
+              * the project's files. "Project (Linux)" is the same project in a
+              * real container. "Linux workspace" is not a project at all — it
+              * belongs to the person, starts empty, and mounts nothing. Naming
+              * the last two alike is how the boundary gets forgotten.
               */}
             {containerTerminalAvailable() && (
               <select
@@ -464,8 +469,9 @@ export function BottomPanel() {
                 onChange={(event) => setMode(event.target.value as TerminalMode)}
                 className="tap-target mr-1 h-6 shrink-0 rounded border border-line bg-surface-sunken px-1.5 text-sm text-ink focus:border-accent focus:outline-none"
               >
-                <option value="virtual">Virtual</option>
-                <option value="container">Linux</option>
+                <option value="virtual">Project</option>
+                <option value="container">Project (Linux)</option>
+                <option value="linux">Linux workspace</option>
               </select>
             )}
             {sessions.map((session) => (

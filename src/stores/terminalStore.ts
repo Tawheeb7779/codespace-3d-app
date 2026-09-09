@@ -16,16 +16,28 @@ export interface TerminalSession extends ShellSession {
 /**
  * Where a terminal's commands actually run.
  *
- * `virtual` is the in-browser shell that has always been here: instant, offline,
- * and limited to what a browser can do. `container` is a real Linux shell in an
- * isolated workspace, which can install packages and run servers but needs
- * infrastructure to exist.
+ * Three modes, and the distinction between the last two is the architectural
+ * one rather than a preference:
+ *
+ * `virtual` is the **Project Terminal** that has always been here: an
+ * in-browser shell over the project's virtual filesystem. Instant, offline,
+ * limited to what a browser can do, and the default — a deployment with no
+ * container gateway has exactly this and nothing changes for it.
+ *
+ * `container` is the same *project*, in a real Linux container: the project's
+ * files are synchronised into it, real git runs against them, and it is
+ * authorised by project membership. Still project-scoped.
+ *
+ * `linux` is the **Linux Workspace**, which is not a project at all. It belongs
+ * to the person, mounts no project, starts empty, and is authorised by identity
+ * alone. Files reach it only through an explicit transfer. Conflating it with
+ * the two above is exactly the mistake the architecture exists to prevent.
  *
  * Deliberately one setting for the panel rather than per session: a user thinks
- * "am I in the browser or on a machine", and two tabs in different worlds
- * sharing one prompt style is a trap.
+ * "am I in the browser, in my project, or on my own machine", and two tabs in
+ * different worlds sharing one prompt style is a trap.
  */
-export type TerminalMode = 'virtual' | 'container';
+export type TerminalMode = 'virtual' | 'container' | 'linux';
 
 interface TerminalState {
   sessions: TerminalSession[];

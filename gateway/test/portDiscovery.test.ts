@@ -95,6 +95,7 @@ function record(overrides: Partial<ContainerRecord> = {}): ContainerRecord {
   return {
     id: 'tacode-abc123',
     userId: 'user-amina',
+    kind: 'project' as const,
     projectId: 'proj-alpha',
     tier: loadConfig({}).tiers.free,
     status: 'ready',

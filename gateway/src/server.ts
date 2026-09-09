@@ -21,6 +21,8 @@ import { WORKSPACE_MOUNT } from './runtime/docker.ts';
 import { parseProxyPath, proxyHttp, proxyUpgrade } from './ports.ts';
 import { SyncService, type SyncSubscriber } from './syncService.ts';
 import { PortWatcher, proxyPathFor } from './portDiscovery.ts';
+import * as gitOps from './git.ts';
+import { transferFiles } from './transfer.ts';
 
 /**
  * The gateway: one HTTP server, three jobs.
@@ -54,6 +56,10 @@ interface Connection {
   correlation: string;
   userId: string | null;
   projectId: string | null;
+  /** The authenticated address, used as the git author and nothing else. */
+  email: string;
+  /** Which workspace concept this socket opened. Decides how it is revalidated. */
+  kind: 'project' | 'linux';
   session: TerminalSession | null;
   /** Sliding budget, refilled once a second, that bounds frame rate per socket. */
   frameBudget: number;
@@ -144,6 +150,10 @@ export function createGateway(deps: GatewayDeps): {
   async function revalidate(): Promise<void> {
     for (const connection of [...connections]) {
       const { userId, projectId } = connection;
+      // A Linux workspace has no project membership to lose. It belongs to the
+      // person, and the person is still the person; revalidating it against a
+      // project role would close it for a reason that does not apply.
+      if (connection.kind === 'linux') continue;
       if (!userId || !projectId) continue;
 
       // A lookup that fails is not a revocation. Supabase being briefly
@@ -315,6 +325,8 @@ export function createGateway(deps: GatewayDeps): {
       correlation: correlationId(),
       userId: null,
       projectId: null,
+      email: '',
+      kind: 'project',
       session: null,
       frameBudget: LIMITS.maxFramesPerSecond,
       budgetResetAt: Date.now() + 1000,
@@ -401,6 +413,14 @@ export function createGateway(deps: GatewayDeps): {
       // Sync frames are addressed by container rather than by session: a
       // workspace's files outlive any one shell, and two terminals on the same
       // project must not each carry their own view of the tree.
+      if (frame.type === 'git') {
+        await onGit(connection, frame);
+        return;
+      }
+      if (frame.type === 'transfer') {
+        await onTransfer(connection, frame);
+        return;
+      }
       if (
         frame.type === 'sync-manifest' ||
         frame.type === 'sync-push' ||
@@ -486,6 +506,151 @@ export function createGateway(deps: GatewayDeps): {
     containers.touch(record.id);
   }
 
+  /**
+   * Real git, against the workspace the caller owns.
+   *
+   * The container is resolved by id *and* owner, exactly as sync is, so a git
+   * request naming somebody else's workspace is refused before any command is
+   * built. Nothing from the frame reaches a command line: `git.ts` builds every
+   * argv from the typed operation.
+   *
+   * A destructive refusal is answered as `needsConfirmation` rather than as a
+   * failure, because it is not one — the operation declined to discard work,
+   * and the client's job is to say what would be lost and ask.
+   */
+  async function onGit(
+    connection: Connection,
+    frame: Extract<ClientFrame, { type: 'git' }>,
+  ): Promise<void> {
+    const record = containers.byId(frame.containerId, connection.userId!);
+    if (!record) throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+
+    const runner = { runtime, record };
+    const answer = (
+      body: Partial<Extract<ServerFrame, { type: 'git-result' }>>,
+    ): void =>
+      send(connection, {
+        type: 'git-result',
+        requestId: frame.requestId,
+        containerId: record.id,
+        ok: false,
+        ...body,
+      } as ServerFrame);
+
+    try {
+      const request = frame.request;
+      let data: unknown;
+
+      switch (request.op) {
+        case 'status':
+          data = await gitOps.status(runner);
+          break;
+        case 'log':
+          data = await gitOps.log(runner, request.limit ?? 50);
+          break;
+        case 'diff':
+          data = await gitOps.diff(runner, { staged: request.staged, path: request.path });
+          break;
+        case 'branches':
+          data = await gitOps.branches(runner);
+          break;
+        case 'show':
+          data = await gitOps.show(runner, request.ref);
+          break;
+        case 'rev-parse':
+          data = await gitOps.revParse(runner, request.ref);
+          break;
+        case 'remotes':
+          data = await gitOps.remotes(runner);
+          break;
+        case 'init':
+          data = await gitOps.init(runner);
+          break;
+        case 'add':
+          await gitOps.add(runner, request.paths);
+          data = await gitOps.status(runner);
+          break;
+        case 'unstage':
+          await gitOps.unstage(runner, request.paths);
+          data = await gitOps.status(runner);
+          break;
+        case 'commit':
+          // The author is the authenticated identity, never anything the client
+          // sent: a commit attributed to somebody else is a forged record.
+          data = await gitOps.commit(runner, request.message, {
+            name: connection.email || 'TA CODE user',
+            email: connection.email || 'user@ta.code',
+          });
+          break;
+        case 'create-branch':
+          await gitOps.createBranch(runner, request.name);
+          data = await gitOps.branches(runner);
+          break;
+        case 'checkout':
+          await gitOps.checkout(runner, request.ref, { confirm: request.confirm });
+          data = await gitOps.status(runner);
+          break;
+        case 'discard':
+          await gitOps.discard(runner, request.paths, { confirm: request.confirm });
+          data = await gitOps.status(runner);
+          break;
+        case 'delete-branch':
+          await gitOps.deleteBranch(runner, request.name, { confirm: request.confirm });
+          data = await gitOps.branches(runner);
+          break;
+      }
+
+      containers.touch(record.id);
+      answer({ ok: true, data });
+    } catch (error) {
+      const failure = toGatewayError(error);
+      const refusal = failure.detail === 'refused: unconfirmed destructive operation';
+      const plan = refusal ? await gitOps.destructivePlan({ runtime, record }).catch(() => null) : null;
+      logger.event('git_refused', {
+        containerId: record.id,
+        userId: record.userId,
+        reason: refusal ? 'destructive operation not confirmed' : failure.code,
+      });
+      answer({
+        ok: false,
+        message: failure.message,
+        needsConfirmation: refusal,
+        atRisk: plan?.paths,
+      });
+    }
+  }
+
+  /**
+   * An explicit copy between two workspaces the same person owns.
+   *
+   * Both endpoints are resolved by id and by owner, independently. That is what
+   * makes this a transfer rather than a way to read somebody else's workspace by
+   * naming it as a source.
+   */
+  async function onTransfer(
+    connection: Connection,
+    frame: Extract<ClientFrame, { type: 'transfer' }>,
+  ): Promise<void> {
+    const from = containers.byId(frame.fromContainerId, connection.userId!);
+    const to = containers.byId(frame.toContainerId, connection.userId!);
+    if (!from || !to) {
+      throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+    }
+
+    const outcome = await transferFiles(from, to, frame.paths, { overwrite: frame.overwrite });
+
+    // Counts, never paths: a file's name is the user's content.
+    logger.event('transfer_completed', {
+      userId: connection.userId ?? undefined,
+      containerId: to.id,
+      files: outcome.copied.length,
+    });
+
+    containers.touch(from.id);
+    containers.touch(to.id);
+    send(connection, { type: 'transfer-result', requestId: frame.requestId, ...outcome });
+  }
+
   async function onHello(connection: Connection, frame: Extract<ClientFrame, { type: 'hello' }>): Promise<void> {
     if (frame.protocol !== PROTOCOL_VERSION) {
       throw new GatewayError(
@@ -495,7 +660,28 @@ export function createGateway(deps: GatewayDeps): {
     }
     if (connection.userId) throw protocolError('duplicate hello');
 
-    const { identity } = await authorizeTerminal(authorizer, frame.token, frame.projectId);
+    /**
+     * Two workspace concepts, two authorisation paths.
+     *
+     * A project workspace needs edit access to that project — a viewer may read
+     * a project in the editor and must not get a shell in it. A Linux workspace
+     * has no project: it belongs to the person, so identity is the whole check,
+     * and membership of any project grants nothing here.
+     *
+     * `identify` is the same verified-token path in both cases. What differs is
+     * only whether a project role is additionally required.
+     */
+    const kind = frame.kind === 'linux' ? 'linux' : 'project';
+    let identity;
+    if (kind === 'linux') {
+      if (frame.projectId) {
+        throw protocolError('a Linux workspace does not belong to a project');
+      }
+      identity = await authorizer.identify(frame.token);
+    } else {
+      if (!frame.projectId) throw protocolError('a project terminal needs a project');
+      ({ identity } = await authorizeTerminal(authorizer, frame.token, frame.projectId));
+    }
 
     // Counted after authentication, because before it there is no user to
     // count against — which is also why the total cap above exists separately.
@@ -506,9 +692,16 @@ export function createGateway(deps: GatewayDeps): {
     }
 
     connection.userId = identity.userId;
-    connection.projectId = frame.projectId;
+    connection.projectId = kind === 'linux' ? null : frame.projectId;
+    connection.email = identity.email;
+    connection.kind = kind;
 
-    const container = await containers.ensure(identity.userId, frame.projectId);
+    const container = await containers.ensure(
+      identity.userId,
+      kind === 'linux' ? null : frame.projectId,
+      config.defaultTier,
+      kind,
+    );
 
     // Resume, when the client named a session it owns and it is still alive.
     let session = frame.sessionId ? sessions.find(frame.sessionId, identity.userId) : null;

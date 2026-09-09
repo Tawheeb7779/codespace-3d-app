@@ -366,6 +366,39 @@ export function createDockerRuntime(options: DockerRuntimeOptions = {}): Contain
       return ip ? { host: ip, port } : null;
     },
 
+    async runCommand(containerId, argv, runOptions = {}) {
+      // `--user` and `--workdir` are set here rather than trusted from the
+      // caller: a command that could choose its own uid or working directory
+      // would be a way around both the container's identity and its workspace.
+      const args = [
+        'exec',
+        '--user',
+        CONTAINER_USER,
+        '--workdir',
+        runOptions.cwd ?? WORKSPACE_MOUNT,
+        containerId,
+        ...argv,
+      ];
+      try {
+        const { stdout, stderr } = await run('docker', args, {
+          maxBuffer: runOptions.maxBuffer ?? 4 * 1024 * 1024,
+          timeout: runOptions.timeoutMs ?? 30_000,
+          killSignal: 'SIGKILL',
+        });
+        return { stdout, stderr, code: 0 };
+      } catch (error) {
+        // A non-zero exit is an ordinary result here — `git diff --quiet`
+        // reports "there are changes" that way — so it is returned rather than
+        // thrown, and only the caller decides whether it is a failure.
+        const failure = error as { stdout?: string; stderr?: string; code?: number };
+        return {
+          stdout: failure.stdout ?? '',
+          stderr: failure.stderr ?? '',
+          code: typeof failure.code === 'number' ? failure.code : 1,
+        };
+      }
+    },
+
     async listeningPorts(containerId) {
       // Read from inside, where `/proc/net/tcp` describes this container's
       // network namespace and nothing else. `cat` rather than `ss` or

@@ -102,7 +102,21 @@ const STATE_LABEL: Record<ConnectionState, string> = {
   unavailable: 'Unavailable',
 };
 
-export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
+export function ContainerTerminalView({
+  sessionId,
+  kind = 'project',
+}: {
+  sessionId: string;
+  /**
+   * Which workspace this terminal opens.
+   *
+   * `project` is the open project in a container: its files are synchronised
+   * in, and it is authorised by project membership. `linux` is the person's own
+   * workspace — no project, no sync, nothing mounted — and it is authorised by
+   * identity alone. They are separate containers with separate directories.
+   */
+  kind?: 'project' | 'linux';
+}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const fontSize = useSettingsStore((s) => s.terminal.fontSize);
   const fontFamily = useSettingsStore((s) => s.editor.fontFamily);
@@ -116,9 +130,17 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     const mount = mountRef.current;
     const url = gatewayUrl();
-    if (!mount || !projectId || !url) return;
+    // A Linux workspace does not need a project open, and must not be keyed by
+    // one: it is the same workspace whichever project the editor is showing,
+    // and keying it by project would start a second container per project —
+    // which is exactly the coupling this feature exists to avoid.
+    const scope = kind === 'linux' ? 'linux' : projectId;
+    if (!mount || !scope || !url) return;
 
-    const key = `${projectId}:${sessionId}`;
+    // The kind is in the key: a project terminal and a Linux terminal are two
+    // different workspaces, and sharing one live entry would show one's output
+    // in the other.
+    const key = `${kind}:${scope}:${sessionId}`;
     let entry = live.get(key);
 
     if (!entry) {
@@ -141,21 +163,32 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
       term.open(host);
 
       const decoder = new TextDecoder();
-      // One sync engine per project, created before the client so the frame
-      // handlers below can hand it the gateway's answers. Attaching is
-      // idempotent: a second tab on this project joins the same engine.
-      const sync = attachWorkspaceSync(projectId, {
-        sendManifest: (files) => client.sendManifest(files),
-        pushFiles: (files) => client.pushFiles(files),
-        deleteFiles: (paths) => client.deleteFiles(paths),
-        get containerId() {
-          return client.containerId;
-        },
-      });
+      /**
+       * File sync belongs to a project terminal and to nothing else.
+       *
+       * A Linux workspace deliberately holds no project: syncing the editor's
+       * files into it would be the automatic mount the architecture forbids.
+       * Files reach it only through an explicit transfer, so this is null for
+       * `linux` and every sync handler below is a no-op.
+       */
+      const sync =
+        kind === 'linux' || !projectId
+          ? null
+          : attachWorkspaceSync(projectId, {
+              sendManifest: (files) => client.sendManifest(files),
+              pushFiles: (files) => client.pushFiles(files),
+              deleteFiles: (paths) => client.deleteFiles(paths),
+              get containerId() {
+                return client.containerId;
+              },
+            });
 
       const client: ContainerTerminalClient = new ContainerTerminalClient({
         gatewayUrl: url,
-        projectId,
+        // A Linux workspace has no project id, and sending one is refused by
+        // the gateway rather than ignored.
+        projectId: kind === 'linux' ? '' : (projectId ?? ''),
+        kind,
         token: currentToken,
         cols: term.cols,
         rows: term.rows,
@@ -167,14 +200,14 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
           // manifest is what establishes what is already on it. Sent here
           // rather than on mount because a reconnect needs it again: the
           // container may have been rebuilt while the tab was away.
-          if (next === 'ready') void sync.start();
+          if (next === 'ready') void sync?.start();
         },
         onExit: (code) => term.writeln(`\r\n\x1b[2m[process exited with code ${code ?? 0}]\x1b[0m`),
         onError: (_code, message) => term.writeln(`\r\n\x1b[31m${message}\x1b[0m`),
-        onSyncPlan: (plan) => void sync.onPlan(plan),
-        onSyncAck: (results) => sync.onAck(results),
-        onSyncChanged: (files, deleted) => sync.onChanged(files, deleted),
-        onSyncStorm: () => sync.onStorm(),
+        onSyncPlan: (plan) => void sync?.onPlan(plan),
+        onSyncAck: (results) => sync?.onAck(results),
+        onSyncChanged: (files, deleted) => sync?.onChanged(files, deleted),
+        onSyncStorm: () => sync?.onStorm(),
         onPorts: (next) => {
           const current = live.get(key);
           if (!current) return;
@@ -216,16 +249,16 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
       entry?.host.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, projectId]);
+  }, [sessionId, projectId, kind]);
 
   useEffect(() => {
-    const entry = live.get(`${projectId}:${sessionId}`);
+    const entry = live.get(`${kind}:${kind === 'linux' ? 'linux' : projectId}:${sessionId}`);
     if (!entry) return;
     entry.term.options.theme = theme === 'forge-light' ? TERMINAL_COLORS.light : TERMINAL_COLORS.dark;
     entry.term.options.fontSize = Math.max(9, fontSize);
     entry.term.options.fontFamily = fontFamily;
     safeFit(entry);
-  }, [sessionId, projectId, theme, fontSize, fontFamily]);
+  }, [sessionId, projectId, kind, theme, fontSize, fontFamily]);
 
   if (!gatewayUrl()) {
     return (
@@ -238,10 +271,11 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
     );
   }
 
-  if (!projectId) {
+  // A Linux workspace needs no project; a project terminal does.
+  if (!projectId && kind === 'project') {
     return (
       <div className="flex h-full items-center justify-center p-4 text-sm text-ink-muted">
-        <span>Open a project to start a Linux terminal.</span>
+        <span>Open a project to start a project terminal.</span>
       </div>
     );
   }
@@ -280,7 +314,7 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
       <div
         ref={mountRef}
         onMouseUp={() => {
-          const entry = live.get(`${projectId}:${sessionId}`);
+          const entry = live.get(`${kind}:${kind === 'linux' ? 'linux' : projectId}:${sessionId}`);
           if (entry && !window.getSelection()?.toString()) entry.term.focus();
         }}
         className="min-h-0 flex-1 px-2"
@@ -298,7 +332,11 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
 export function disposeContainerTerminals(projectId?: string): void {
   detachWorkspaceSync(projectId);
   for (const [key, entry] of live) {
-    if (projectId && !key.startsWith(`${projectId}:`)) continue;
+    // Only this project's terminals. A Linux workspace does not belong to the
+    // project being closed and must survive switching between projects — that
+    // independence is the point of it.
+    if (projectId && !key.startsWith(`project:${projectId}:`)) continue;
+    if (!projectId && key.startsWith('linux:')) continue;
     entry.client.disconnect();
     entry.term.dispose();
     live.delete(key);

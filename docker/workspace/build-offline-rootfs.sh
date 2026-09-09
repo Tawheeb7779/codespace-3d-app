@@ -14,8 +14,9 @@
 # and contains a real shell, real coreutils and the handful of tools the
 # security tests use to probe their own confinement.
 #
-# What it is NOT: the production image. It has no Node, no Python, no Git, and
-# its provenance is "whatever this host had". Never ship it. The security
+# What it is NOT: the production image. It has no Node and no Python, and its
+# provenance is "whatever this host had". It does carry a real git, because
+# Phase 2's git service is only meaningfully tested against a real repository. Never ship it. The security
 # properties under test — user, capabilities, namespaces, cgroup limits,
 # read-only root, mounts, network — are properties of the *container*, not of
 # the image inside it, which is what makes this substitution sound for that
@@ -48,6 +49,9 @@ BINARIES=(
   # genuinely serving something rather than against a fixture of what one
   # would look like.
   nc
+  # Real git, so Phase 2's git service can be tested against a real repository
+  # in a real container rather than against a fake of one.
+  git
 )
 
 mkdir -p "$ROOT"/{usr/bin,usr/sbin,usr/lib,usr/lib64,etc,tmp,proc,sys,dev,workspace,home/dev,var/tmp}
@@ -74,7 +78,7 @@ copy_with_libs() {
   # Shared objects, as the loader would resolve them. A binary copied without
   # its libraries is a binary that fails with a message about the loader, which
   # looks exactly like a sandbox denial and would make every test ambiguous.
-  ldd "$resolved" 2>/dev/null | while read -r line; do
+  ldd "$resolved" 2>/dev/null | while read -r line || [ -n "$line" ]; do
     local lib
     lib="$(printf '%s' "$line" | grep -oE '/[^ ]+\.so[^ ]*' | head -1 || true)"
     [ -n "$lib" ] && [ -e "$lib" ] || continue
@@ -84,10 +88,43 @@ copy_with_libs() {
 
 for binary in "${BINARIES[@]}"; do copy_with_libs "$binary"; done
 
+# Git is not one binary. `git` dispatches to helpers in its exec path, and a
+# rootfs with only `/usr/bin/git` reports "is not a git command" for everything
+# — which looks exactly like a broken git service and is a missing directory.
+GIT_CORE="$(git --exec-path 2>/dev/null || echo /usr/lib/git-core)"
+if [ -d "$GIT_CORE" ]; then
+  mkdir -p "$ROOT$GIT_CORE"
+  # The helpers that are real programs rather than hardlinks to `git` itself.
+  # Copying the whole directory is ~11MB and keeps `git` self-consistent, which
+  # matters more here than image size: this image exists to test behaviour.
+  cp -a "$GIT_CORE/." "$ROOT$GIT_CORE/"
+  for helper in "$GIT_CORE"/*; do
+    [ -f "$helper" ] || continue
+    # `|| continue` rather than an `&&` chain: under `set -e`, a chain whose
+    # last test is false makes the loop's exit status non-zero and kills the
+    # script — which is how this silently produced an image with no git.
+    # `|| true` on the whole pipeline. Several git helpers are shell scripts,
+    # `ldd` exits non-zero on those, and under `set -e` that killed the build —
+    # silently producing an image with no git at all.
+    ldd "$helper" 2>/dev/null | grep -oE '/[^ ]+\.so[^ ]*' | while read -r lib; do
+      [ -n "$lib" ] && [ -e "$lib" ] || continue
+      [ -e "$ROOT$lib" ] || install -D "$lib" "$ROOT$lib"
+    done || true
+  done
+fi
+
+# Git templates, so `git init` produces a repository rather than complaining.
+for share in /usr/share/git-core; do
+  [ -d "$share" ] || continue
+  mkdir -p "$ROOT$share"
+  cp -a "$share/." "$ROOT$share/"
+done
+
 # The dynamic loader itself, which `ldd` names but does not always list. It is
 # installed under its real path so the symlinks above resolve to it.
 for loader in /usr/lib64/ld-linux-x86-64.so.2 /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2; do
-  [ -e "$loader" ] && [ ! -e "$ROOT$loader" ] && install -D "$loader" "$ROOT$loader"
+  [ -e "$loader" ] || continue
+  [ -e "$ROOT$loader" ] || install -D "$loader" "$ROOT$loader"
 done
 # Some hosts only have it at the pre-merge path; follow it to its real file.
 for loader in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do

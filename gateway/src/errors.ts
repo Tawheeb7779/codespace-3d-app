@@ -10,6 +10,7 @@ import { FATAL_ERRORS } from '../../src/lib/terminal/protocol.ts';
  * prevents — a stack trace, an internal hostname or a quoted request reaching a
  * browser — happens when someone reaches for the nearest string under pressure.
  */
+/** Added in Phase 2: a git operation that failed or was refused. */
 export class GatewayError extends Error {
   readonly code: ErrorCode;
   readonly detail: string;

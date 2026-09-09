@@ -5,6 +5,7 @@ import {
   parseServerFrame,
   type ContainerStatus,
   type ErrorCode,
+  type GitOperation,
   type ManifestEntryFrame,
   type ServerFrame,
   type SyncAckFrame,
@@ -36,7 +37,17 @@ export type ConnectionState =
 export interface ContainerTerminalOptions {
   /** Base URL of the gateway, e.g. `wss://containers.example`. */
   gatewayUrl: string;
+  /**
+   * The project this terminal serves, or an empty string for a Linux workspace.
+   *
+   * The two are different features rather than two settings of one. A project
+   * terminal is authorised by project membership and syncs the project's files;
+   * a Linux workspace belongs to the person, mounts no project, and is reached
+   * without a project id at all.
+   */
   projectId: string;
+  /** Which of the two this client opens. Defaults to `project`. */
+  kind?: 'project' | 'linux';
   /** Fetched fresh per attempt: an access token expires, and reconnects retry. */
   token: () => Promise<string | null>;
   cols: number;
@@ -62,6 +73,28 @@ export interface ContainerTerminalOptions {
   ) => void;
   /** Too much changed to enumerate; the editor should send a fresh manifest. */
   onSyncStorm?: (count: number) => void;
+  /**
+   * The answer to a git request.
+   *
+   * `needsConfirmation` is not a failure: the operation declined to discard
+   * uncommitted work, and `atRisk` names what would have been lost so the UI
+   * can say what rather than that.
+   */
+  onGitResult?: (result: {
+    requestId: string;
+    ok: boolean;
+    data?: unknown;
+    message?: string;
+    needsConfirmation?: boolean;
+    atRisk?: string[];
+  }) => void;
+  /** The outcome of an explicit transfer between two of the user's workspaces. */
+  onTransferResult?: (result: {
+    requestId: string;
+    copied: string[];
+    conflicts: string[];
+    skipped: Array<{ path: string; reason: string }>;
+  }) => void;
   /**
    * Ports the container is serving, whenever the set changes.
    *
@@ -98,6 +131,8 @@ export class ContainerTerminal {
   runtime: string | null = null;
   /** The last output sequence rendered, so a reconnect can ask for the gap. */
   private lastSeq = 0;
+  /** Correlates git and transfer answers with the requests that caused them. */
+  private nextRequest = 0;
 
   constructor(private readonly options: ContainerTerminalOptions) {}
 
@@ -141,6 +176,7 @@ export class ContainerTerminal {
         protocol: PROTOCOL_VERSION,
         token,
         projectId: this.options.projectId,
+        kind: this.options.kind ?? 'project',
         ...(this.sessionId ? { sessionId: this.sessionId, lastSeq: this.lastSeq } : {}),
         cols: this.options.cols,
         rows: this.options.rows,
@@ -234,6 +270,26 @@ export class ContainerTerminal {
         this.options.onSyncStorm?.(frame.count);
         break;
 
+      case 'git-result':
+        this.options.onGitResult?.({
+          requestId: frame.requestId,
+          ok: frame.ok,
+          data: frame.data,
+          message: frame.message,
+          needsConfirmation: frame.needsConfirmation,
+          atRisk: frame.atRisk,
+        });
+        break;
+
+      case 'transfer-result':
+        this.options.onTransferResult?.({
+          requestId: frame.requestId,
+          copied: frame.copied,
+          conflicts: frame.conflicts,
+          skipped: frame.skipped,
+        });
+        break;
+
       case 'ports':
         this.options.onPorts?.(frame.ports.map(({ port, url }) => ({ port, url })));
         break;
@@ -321,6 +377,45 @@ export class ContainerTerminal {
         files: files.slice(offset, offset + LIMITS.maxSyncBatchFiles),
       });
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Real Git
+  //
+  // A typed operation, never a command line. The gateway builds every git argv
+  // itself, so there is no path from anything typed here to a git flag.
+  // -------------------------------------------------------------------------
+
+  /** Send a git operation. Resolves with the request id the answer will carry. */
+  git(request: GitOperation): string | null {
+    if (!this.containerId) return null;
+    const requestId = `git-${(this.nextRequest += 1)}`;
+    this.send({ type: 'git', requestId, containerId: this.containerId, request });
+    return requestId;
+  }
+
+  /**
+   * Copy named files into another workspace this person owns.
+   *
+   * Both endpoints are authorised by the gateway independently; naming a
+   * workspace here is a request, not a claim.
+   */
+  transfer(
+    toContainerId: string,
+    paths: string[],
+    options: { overwrite?: boolean } = {},
+  ): string | null {
+    if (!this.containerId || !paths.length) return null;
+    const requestId = `xfer-${(this.nextRequest += 1)}`;
+    this.send({
+      type: 'transfer',
+      requestId,
+      fromContainerId: this.containerId,
+      toContainerId,
+      paths: paths.slice(0, LIMITS.maxTransferFiles),
+      overwrite: options.overwrite === true,
+    });
+    return requestId;
   }
 
   deleteFiles(paths: string[]): void {

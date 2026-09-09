@@ -20,7 +20,7 @@
  * the connection with a message naming both versions, rather than accepting a
  * frame it will misinterpret.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -62,6 +62,10 @@ export const LIMITS = {
   maxManifestFiles: 5000,
   /** Path length on the wire, before either side normalises it. */
   maxPathLength: 1024,
+  /** Files one explicit transfer may carry between workspaces. */
+  maxTransferFiles: 200,
+  /** Bytes of git output a single result frame may carry. */
+  maxGitOutputBytes: 128 * 1024,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -75,6 +79,8 @@ export type ErrorCode =
   | 'PTY_ERROR'
   | 'SYNC_ERROR'
   | 'PORT_ERROR'
+  /** A git operation that failed, or was refused because it would lose work. */
+  | 'GIT_ERROR'
   | 'RESOURCE_LIMIT'
   | 'TIMEOUT'
   | 'PROTOCOL_ERROR'
@@ -119,7 +125,18 @@ export interface HelloFrame {
    * client-side to decide anything.
    */
   token: string;
+  /**
+   * The project this terminal belongs to, or an empty string for a Linux
+   * workspace.
+   *
+   * Two terminals, two authorisation paths. A `project` workspace is authorised
+   * by membership of that project. A `linux` workspace belongs to the person
+   * and is authorised by identity alone — project membership grants no access
+   * to it, and it has no project id to check.
+   */
   projectId: string;
+  /** Which of TA CODE's two workspace concepts this is. Defaults to `project`. */
+  kind?: 'project' | 'linux';
   /** Resume an existing session instead of starting a shell. */
   sessionId?: string;
   /** Last sequence the client saw, so the gateway can replay the gap. */
@@ -165,6 +182,98 @@ export interface DetachFrame {
 export interface PingFrame {
   type: 'ping';
   at: number;
+}
+
+// ---------------------------------------------------------------------------
+// Real Git
+//
+// A typed request, never an argument vector. The gateway builds every git
+// command line itself, because git's *options* are what turn a subcommand
+// allowlist into an illusion: `-c core.sshCommand=` runs a program,
+// `--git-dir=` chooses any path, `-C` leaves the workspace. None of those can
+// be expressed in the shapes below.
+// ---------------------------------------------------------------------------
+
+export type GitOperation =
+  | { op: 'status' }
+  | { op: 'log'; limit?: number }
+  | { op: 'diff'; staged?: boolean; path?: string }
+  | { op: 'branches' }
+  | { op: 'show'; ref: string }
+  | { op: 'rev-parse'; ref: string }
+  | { op: 'remotes' }
+  | { op: 'init' }
+  | { op: 'add'; paths: string[] }
+  | { op: 'unstage'; paths: string[] }
+  | { op: 'commit'; message: string }
+  | { op: 'create-branch'; name: string }
+  /** Destructive. Refused unless `confirm` is true and nothing would be lost. */
+  | { op: 'checkout'; ref: string; confirm?: boolean }
+  | { op: 'discard'; paths: string[]; confirm?: boolean }
+  | { op: 'delete-branch'; name: string; confirm?: boolean };
+
+export interface GitFrame {
+  type: 'git';
+  /** Correlates the answer, because several may be in flight. */
+  requestId: string;
+  containerId: string;
+  request: GitOperation;
+}
+
+export interface GitResultFrame {
+  type: 'git-result';
+  requestId: string;
+  containerId: string;
+  /** The operation's result, shaped by its `op`. Opaque to the protocol. */
+  ok: boolean;
+  /** Present when ok; JSON-serialisable and bounded by `maxGitOutputBytes`. */
+  data?: unknown;
+  /** Present when not ok. Safe for a person to read. */
+  message?: string;
+  /**
+   * Set when the refusal was a safety refusal rather than a failure.
+   *
+   * The client uses it to offer a confirmation rather than an error: the
+   * operation did not fail, it declined to destroy something.
+   */
+  needsConfirmation?: boolean;
+  /** Paths that would be lost, so a person is told what and not merely that. */
+  atRisk?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Explicit transfer between a project and a Linux workspace
+//
+// Never a mount, never automatic, never a whole tree by default. A person names
+// files and a direction; both endpoints are authorised independently.
+// ---------------------------------------------------------------------------
+
+export interface TransferFrame {
+  type: 'transfer';
+  requestId: string;
+  /** The workspace the files come from. */
+  fromContainerId: string;
+  /** The workspace they go to. */
+  toContainerId: string;
+  paths: string[];
+  /**
+   * Whether an existing file at the destination may be replaced.
+   *
+   * Default false, and a conflict is reported rather than resolved: the two
+   * workspaces are independent, so the gateway has no basis for deciding which
+   * copy somebody wanted.
+   */
+  overwrite?: boolean;
+}
+
+export interface TransferResultFrame {
+  type: 'transfer-result';
+  requestId: string;
+  copied: string[];
+  /** Paths that already existed at the destination and were left alone. */
+  conflicts: string[];
+  /** Paths refused, with the reason — protected, too large, or invalid. */
+  skipped: Array<{ path: string; reason: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +343,9 @@ export type ClientFrame =
   | PingFrame
   | SyncManifestFrame
   | SyncPushFrame
-  | SyncDeleteFrame;
+  | SyncDeleteFrame
+  | GitFrame
+  | TransferFrame;
 
 // ---------------------------------------------------------------------------
 // Gateway -> client
@@ -366,7 +477,9 @@ export type ServerFrame =
   | SyncPlanFrame
   | SyncAckFrame
   | SyncChangedFrame
-  | SyncStormFrame;
+  | SyncStormFrame
+  | GitResultFrame
+  | TransferResultFrame;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -466,6 +579,62 @@ function array(value: unknown, field: string, max: number): unknown[] {
   return value;
 }
 
+/**
+ * One git operation, validated into a shape the gateway can act on.
+ *
+ * Every field is checked here rather than in the gateway, so a malformed or
+ * hostile request is refused before it reaches code that builds a command line.
+ * Paths use `relativePath`, which is the same syntactic screen the sync frames
+ * use — the real boundary is `normalizePath` on the gateway, which this sits in
+ * front of rather than replaces.
+ */
+function gitOperation(value: unknown): GitOperation {
+  if (!isRecord(value)) throw new ProtocolError('git request is invalid');
+  const paths = (): string[] =>
+    array(value.paths, 'paths', LIMITS.maxSyncBatchFiles).map((path) =>
+      relativePath(path, 'path'),
+    );
+  // Bounded, and not pattern-checked: what a valid ref looks like is git's
+  // business, and the gateway asks `check-ref-format` rather than guessing.
+  const ref = (field: string): string => str(value, field, 255);
+
+  switch (value.op) {
+    case 'status':
+    case 'branches':
+    case 'remotes':
+    case 'init':
+      return { op: value.op };
+    case 'log':
+      return { op: 'log', limit: value.limit === undefined ? undefined : int(value, 'limit', 1, 500) };
+    case 'diff':
+      return {
+        op: 'diff',
+        staged: value.staged === true,
+        path: value.path === undefined ? undefined : relativePath(value.path, 'path'),
+      };
+    case 'show':
+      return { op: 'show', ref: ref('ref') };
+    case 'rev-parse':
+      return { op: 'rev-parse', ref: ref('ref') };
+    case 'add':
+      return { op: 'add', paths: paths() };
+    case 'unstage':
+      return { op: 'unstage', paths: paths() };
+    case 'commit':
+      return { op: 'commit', message: str(value, 'message', 4000) };
+    case 'create-branch':
+      return { op: 'create-branch', name: ref('name') };
+    case 'checkout':
+      return { op: 'checkout', ref: ref('ref'), confirm: value.confirm === true };
+    case 'discard':
+      return { op: 'discard', paths: paths(), confirm: value.confirm === true };
+    case 'delete-branch':
+      return { op: 'delete-branch', name: ref('name'), confirm: value.confirm === true };
+    default:
+      throw new ProtocolError('unknown git operation');
+  }
+}
+
 /** Base64 with no whitespace, bounded before it is decoded. */
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
@@ -503,7 +672,10 @@ export function parseClientFrame(raw: string): ClientFrame {
         // Bounded but not pattern-checked: a JWT's shape is Supabase's business,
         // and this must not become a second, weaker token validator.
         token: str(parsed, 'token', 8192),
-        projectId: id(parsed, 'projectId'),
+        // A Linux workspace has no project, and sends an empty string rather
+        // than a placeholder id that could later collide with a real one.
+        projectId: parsed.projectId === '' ? '' : id(parsed, 'projectId'),
+        kind: parsed.kind === 'linux' ? 'linux' : 'project',
         sessionId: parsed.sessionId === undefined ? undefined : id(parsed, 'sessionId'),
         lastSeq: parsed.lastSeq === undefined ? undefined : int(parsed, 'lastSeq', 0, 2 ** 48),
         cols: parsed.cols === undefined ? undefined : int(parsed, 'cols', 1, LIMITS.maxCols),
@@ -578,6 +750,26 @@ export function parseClientFrame(raw: string): ClientFrame {
         paths: array(parsed.paths, 'paths', LIMITS.maxSyncBatchFiles).map((path) =>
           relativePath(path, 'path'),
         ),
+      };
+
+    case 'git':
+      return {
+        type: 'git',
+        requestId: id(parsed, 'requestId'),
+        containerId: id(parsed, 'containerId'),
+        request: gitOperation(parsed.request),
+      };
+
+    case 'transfer':
+      return {
+        type: 'transfer',
+        requestId: id(parsed, 'requestId'),
+        fromContainerId: id(parsed, 'fromContainerId'),
+        toContainerId: id(parsed, 'toContainerId'),
+        paths: array(parsed.paths, 'paths', LIMITS.maxTransferFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+        overwrite: parsed.overwrite === true,
       };
 
     default:
@@ -739,6 +931,39 @@ export function parseServerFrame(raw: string): ServerFrame {
         count: int(parsed, 'count', 0, 2 ** 32),
       };
 
+    case 'git-result':
+      return {
+        type: 'git-result',
+        requestId: id(parsed, 'requestId'),
+        containerId: id(parsed, 'containerId'),
+        ok: parsed.ok === true,
+        data: parsed.data,
+        message: optionalStr(parsed, 'message', 400),
+        needsConfirmation: parsed.needsConfirmation === true,
+        atRisk:
+          parsed.atRisk === undefined
+            ? undefined
+            : array(parsed.atRisk, 'atRisk', LIMITS.maxTransferFiles).map((path) =>
+                relativePath(path, 'path'),
+              ),
+      };
+
+    case 'transfer-result':
+      return {
+        type: 'transfer-result',
+        requestId: id(parsed, 'requestId'),
+        copied: array(parsed.copied, 'copied', LIMITS.maxTransferFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+        conflicts: array(parsed.conflicts, 'conflicts', LIMITS.maxTransferFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+        skipped: array(parsed.skipped, 'skipped', LIMITS.maxTransferFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('skipped entry is invalid');
+          return { path: relativePath(entry.path, 'path'), reason: str(entry, 'reason', 200) };
+        }),
+      };
+
     default:
       throw new ProtocolError('unknown frame type');
   }
@@ -768,6 +993,7 @@ const CODES: readonly string[] = [
   'PTY_ERROR',
   'SYNC_ERROR',
   'PORT_ERROR',
+  'GIT_ERROR',
   'RESOURCE_LIMIT',
   'TIMEOUT',
   'PROTOCOL_ERROR',

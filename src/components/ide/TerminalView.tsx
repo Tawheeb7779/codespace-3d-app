@@ -197,7 +197,10 @@ useTerminalStore.subscribe((state) => {
  */
 export function TerminalView({ sessionId }: { sessionId: string }) {
   const mode = useTerminalStore((s) => s.mode);
-  if (mode === 'container') return <ContainerTerminalView sessionId={sessionId} />;
+  // Both container modes render the same terminal; `kind` is what decides
+  // which workspace it opens, and the gateway authorises them differently.
+  if (mode === 'container') return <ContainerTerminalView sessionId={sessionId} kind="project" />;
+  if (mode === 'linux') return <ContainerTerminalView sessionId={sessionId} kind="linux" />;
   return <VirtualTerminalView sessionId={sessionId} />;
 }
 

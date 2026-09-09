@@ -29,6 +29,10 @@ export type EventName =
   | 'sync_completed'
   | 'sync_failed'
   | 'sync_conflict'
+  /** A git operation that failed, or declined to discard uncommitted work. */
+  | 'git_refused'
+  /** An explicit file transfer between two of one person's workspaces. */
+  | 'transfer_completed'
   /** The watcher gave up enumerating a burst; the client must resynchronise. */
   | 'sync_storm'
   | 'port_opened'
@@ -41,7 +45,7 @@ export interface EventFields {
   /** Ties every line of one connection together. */
   correlationId?: string;
   userId?: string;
-  projectId?: string;
+  projectId?: string | null;
   containerId?: string;
   sessionId?: string;
   code?: ErrorCode;

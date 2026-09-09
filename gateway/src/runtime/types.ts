@@ -76,4 +76,21 @@ export interface ContainerRuntime {
    * machine".
    */
   listeningPorts(containerId: string): Promise<number[]>;
+
+  /**
+   * Run one command in the workspace and collect its output.
+   *
+   * Separate from `spawnShell` because the two have different jobs. A shell is
+   * interactive, unbounded and belongs to a person; this is a single program
+   * whose output is parsed, so it is bounded, non-interactive, and gets no TTY.
+   *
+   * `argv` is an argument vector, never a command line. Nothing is passed
+   * through a shell, so a filename containing a space, a quote or a semicolon is
+   * an argument rather than an injection.
+   */
+  runCommand(
+    containerId: string,
+    argv: string[],
+    options?: { cwd?: string; timeoutMs?: number; maxBuffer?: number },
+  ): Promise<{ stdout: string; stderr: string; code: number }>;
 }
