@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:net';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { createArgs, createDockerRuntime, execArgs, probeDiskQuota } from '../src/runtime/docker.ts';
@@ -468,4 +469,61 @@ describe.skipIf(!ENABLED)('a real container, on a real daemon', () => {
       expect(out, target).toMatch(/rc=[1-9]/);
     }
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// Port discovery
+//
+// Reading `/proc/net/tcp` inside the container is only correct if that file
+// really is namespaced, which is a property of the kernel this runs on and not
+// something a fixture can establish.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!ENABLED)('discovering what a container is serving', () => {
+  test('sec24 — reports a port the container is actually listening on', async () => {
+    await withProbe('ports', {}, async (probe) => {
+      const runtime = createDockerRuntime({ diskQuota: false });
+
+      // Nothing is listening yet, and the answer must be that rather than a
+      // list of the host's ports.
+      expect(await runtime.listeningPorts(probe)).toEqual([]);
+
+      // A real listener, in the container's own network namespace.
+      await run('docker', [
+        'exec',
+        '-d',
+        '--user',
+        '10001:10001',
+        probe,
+        '/bin/sh',
+        '-c',
+        'nc -l -p 5173 -s 0.0.0.0 >/dev/null 2>&1',
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      expect(await runtime.listeningPorts(probe)).toContain(5173);
+    });
+  }, 120_000);
+
+  /**
+   * The property the whole feature rests on. If `/proc/net/tcp` were the
+   * host's, every container would report the gateway's own listeners — and
+   * offer them as preview links.
+   */
+  test('sec25 — cannot see the host’s listening ports', async () => {
+    const listener = createServer(() => undefined);
+    await new Promise<void>((resolve) => listener.listen(0, '0.0.0.0', resolve));
+    const hostPort = (listener.address() as { port: number }).port;
+
+    try {
+      await withProbe('ports-isolation', {}, async (probe) => {
+        const seen = await createDockerRuntime({ diskQuota: false }).listeningPorts(probe);
+
+        expect(seen).not.toContain(hostPort);
+        expect(seen).toEqual([]);
+      });
+    } finally {
+      await new Promise<void>((resolve) => listener.close(() => resolve()));
+    }
+  }, 120_000);
 });

@@ -64,4 +64,16 @@ export interface ContainerRuntime {
    * internals, so the port proxy never learns anything runtime-specific.
    */
   endpointFor(containerId: string, port: number): Promise<{ host: string; port: number } | null>;
+
+  /**
+   * TCP ports the container is listening on.
+   *
+   * Asked of the runtime rather than derived from the terminal's output,
+   * because a process can print whatever it likes and the kernel cannot. What
+   * a runtime can honestly answer differs — a namespaced container knows
+   * exactly, a runtime sharing the host's network can only probe — so the
+   * contract is "ports this container is serving", never "ports on this
+   * machine".
+   */
+  listeningPorts(containerId: string): Promise<number[]>;
 }

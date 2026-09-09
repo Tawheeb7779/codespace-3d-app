@@ -44,6 +44,10 @@ BINARIES=(
   tar gzip
   capsh setpriv
   ip
+  # A listener, so port discovery can be tested against a container that is
+  # genuinely serving something rather than against a fixture of what one
+  # would look like.
+  nc
 )
 
 mkdir -p "$ROOT"/{usr/bin,usr/sbin,usr/lib,usr/lib64,etc,tmp,proc,sys,dev,workspace,home/dev,var/tmp}

@@ -20,6 +20,7 @@ import type { ContainerRuntime } from './runtime/types.ts';
 import { WORKSPACE_MOUNT } from './runtime/docker.ts';
 import { parseProxyPath, proxyHttp, proxyUpgrade } from './ports.ts';
 import { SyncService, type SyncSubscriber } from './syncService.ts';
+import { PortWatcher, proxyPathFor } from './portDiscovery.ts';
 
 /**
  * The gateway: one HTTP server, three jobs.
@@ -81,6 +82,31 @@ export function createGateway(deps: GatewayDeps): {
   );
   containers.startReaper();
 
+  /**
+   * Port discovery, and where its results go.
+   *
+   * The frame is addressed to every socket authenticated as the container's
+   * owner, because a preview belongs to the workspace rather than to the
+   * terminal tab that happened to start the server. Ownership is the filter,
+   * so a port is never announced to a connection that could not use it.
+   */
+  const ports = new PortWatcher({
+    config,
+    runtime,
+    logger,
+    onPorts: (record, open) => {
+      for (const connection of connections) {
+        if (connection.userId !== record.userId) continue;
+        send(connection, {
+          type: 'ports',
+          containerId: record.id,
+          ports: open.map((port) => ({ port, url: proxyPathFor(record.id, port), protocol: 'http' as const })),
+        });
+      }
+    },
+  });
+  ports.start(() => containers.list());
+
   const server = createServer((request, response) => {
     void handleHttp(request, response);
   });
@@ -94,6 +120,9 @@ export function createGateway(deps: GatewayDeps): {
    * finish shutting down is a gateway that leaves containers running with
    * nothing tracking them. Found by a test whose `afterAll` timed out.
    */
+  /** Authenticated connections, for frames nobody asked for — ports, mainly. */
+  const connections = new Set<Connection>();
+
   const sockets = new Set<import('node:net').Socket>();
   server.on('connection', (socket) => {
     sockets.add(socket);
@@ -187,6 +216,7 @@ export function createGateway(deps: GatewayDeps): {
       budgetResetAt: Date.now() + 1000,
       syncOf: null,
     };
+    connections.add(connection);
     logger.event('terminal_connected', { correlationId: connection.correlation });
 
     const deadline = setTimeout(() => {
@@ -214,6 +244,7 @@ export function createGateway(deps: GatewayDeps): {
 
     socket.on('close', () => {
       clearTimeout(deadline);
+      connections.delete(connection);
       // Detach, do not kill. A closed tab must leave `npm run dev` running.
       connection.session?.detach();
       if (connection.syncOf) {
@@ -497,6 +528,7 @@ export function createGateway(deps: GatewayDeps): {
     containers,
     sessions,
     close: async () => {
+      ports.stop();
       // Watchers first: they hold inotify handles and can still fire during a
       // shutdown, and a change frame delivered while containers are being
       // destroyed is work with nobody left to receive it.

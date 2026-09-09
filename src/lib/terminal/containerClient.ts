@@ -62,6 +62,13 @@ export interface ContainerTerminalOptions {
   ) => void;
   /** Too much changed to enumerate; the editor should send a fresh manifest. */
   onSyncStorm?: (count: number) => void;
+  /**
+   * Ports the container is serving, whenever the set changes.
+   *
+   * A list to offer, not a capability: the proxy authorises every request on
+   * its own, so a port appearing here never grants access to it.
+   */
+  onPorts?: (ports: Array<{ port: number; url: string }>) => void;
   /** Injected in tests; defaults to the platform's WebSocket. */
   createSocket?: (url: string) => WebSocket;
 }
@@ -228,6 +235,9 @@ export class ContainerTerminal {
         break;
 
       case 'ports':
+        this.options.onPorts?.(frame.ports.map(({ port, url }) => ({ port, url })));
+        break;
+
       case 'pong':
         break;
     }

@@ -65,6 +65,7 @@ function stubRuntime(): ContainerRuntime & { created: string[]; destroyed: strin
     exists: async (id) => live.has(id) && !missing.has(id),
     spawnShell: async () => fakePty(),
     endpointFor: async () => null,
+    listeningPorts: async () => [],
   };
 }
 

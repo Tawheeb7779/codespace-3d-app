@@ -270,5 +270,31 @@ export function createDockerRuntime(options: DockerRuntimeOptions = {}): Contain
       ]);
       return ip ? { host: ip, port } : null;
     },
+
+    async listeningPorts(containerId) {
+      // Read from inside, where `/proc/net/tcp` describes this container's
+      // network namespace and nothing else. `cat` rather than `ss` or
+      // `netstat`: those are packages the image may not carry, and a discovery
+      // feature that depends on the user's toolchain stops working the moment
+      // somebody slims the image.
+      const out = await exec([
+        'exec',
+        '--user',
+        CONTAINER_USER,
+        containerId,
+        '/bin/sh',
+        '-c',
+        // Read separately, and never fail. `/proc/net/tcp6` is absent on a
+        // host built without IPv6, and `cat a b` exits non-zero when either is
+        // missing — which discarded the IPv4 listeners that had been read
+        // perfectly well, so discovery reported nothing at all. The trailing
+        // `exit 0` is what makes a missing file a missing file rather than a
+        // missing feature.
+        'cat /proc/net/tcp 2>/dev/null; cat /proc/net/tcp6 2>/dev/null; exit 0',
+      ]).catch(() => null);
+      if (!out) return [];
+      const { parseListeningPorts } = await import('../portDiscovery.ts');
+      return parseListeningPorts(out.stdout);
+    },
   };
 }

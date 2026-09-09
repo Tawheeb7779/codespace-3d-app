@@ -80,5 +80,22 @@ export function createLocalRuntime(): ContainerRuntime {
     async endpointFor(_containerId, port) {
       return { host: '127.0.0.1', port };
     },
+
+    /**
+     * Nothing, deliberately.
+     *
+     * This runtime shares the host's network namespace, so `/proc/net/tcp`
+     * here lists every listener on the developer's machine — their database,
+     * their other projects, whatever else is running. Reporting those as the
+     * workspace's ports would be false, and offering them as preview links
+     * would proxy a developer's unrelated services through the gateway.
+     *
+     * So port discovery is a property this runtime does not have, and says so.
+     * The proxy still works for a port typed by hand, which is the behaviour
+     * local development had before discovery existed.
+     */
+    async listeningPorts() {
+      return [];
+    },
   };
 }

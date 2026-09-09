@@ -37,6 +37,17 @@ interface Live {
   fit: FitAddon;
   host: HTMLDivElement;
   client: ContainerTerminalClient;
+  /** Kept here, not only in React state, so a remount can show them at once. */
+  ports: Array<{ port: number; url: string }>;
+  /**
+   * Where port updates go, reassigned on each mount.
+   *
+   * The client outlives the component — that is the point of the `live` map —
+   * so a `setState` captured when the client was created belongs to an
+   * instance that may be gone. Routing through the entry means the currently
+   * mounted panel is always the one that hears.
+   */
+  onPorts: (ports: Array<{ port: number; url: string }>) => void;
 }
 
 const live = new Map<string, Live>();
@@ -57,6 +68,31 @@ async function currentToken(): Promise<string | null> {
   return data.session?.access_token ?? null;
 }
 
+/**
+ * Open a discovered port in a new tab.
+ *
+ * The token is fetched at click time and never stored in the DOM: a link whose
+ * `href` carries a session token puts it in the page source, in the middle-click
+ * menu, and in anything that scrapes the document. The proxy accepts it as a
+ * query parameter because a browser cannot set a header on a top-level
+ * navigation — that much is unavoidable — but a token that exists only for the
+ * duration of one `window.open` is a much smaller thing than one that sits in
+ * the markup for as long as the panel is open.
+ *
+ * `noopener` because the container's development server is a different origin
+ * and must not be handed a reference back to the IDE.
+ */
+async function openPort(path: string): Promise<void> {
+  const gateway = gatewayUrl();
+  if (!gateway) return;
+  const token = await currentToken();
+  if (!token) return;
+  const base = gateway.replace(/^ws/, 'http').replace(/\/+$/, '');
+  const url = new URL(`${base}${path}`);
+  url.searchParams.set('access_token', token);
+  window.open(url.toString(), '_blank', 'noopener,noreferrer');
+}
+
 const STATE_LABEL: Record<ConnectionState, string> = {
   idle: 'Not connected',
   connecting: 'Starting the workspace…',
@@ -75,6 +111,7 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
 
   const [state, setState] = useState<ConnectionState>('idle');
   const [detail, setDetail] = useState<string>('');
+  const [ports, setPorts] = useState<Array<{ port: number; url: string }>>([]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -138,13 +175,19 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
         onSyncAck: (results) => sync.onAck(results),
         onSyncChanged: (files, deleted) => sync.onChanged(files, deleted),
         onSyncStorm: () => sync.onStorm(),
+        onPorts: (next) => {
+          const current = live.get(key);
+          if (!current) return;
+          current.ports = next;
+          current.onPorts(next);
+        },
       });
 
       // Every keystroke, as typed. No line buffering: the PTY owns editing.
       term.onData((data) => client.write(data));
       term.onResize(({ cols, rows }) => client.resize(cols, rows));
 
-      entry = { term, fit, host, client };
+      entry = { term, fit, host, client, ports: [], onPorts: () => undefined };
       live.set(key, entry);
       void client.connect();
     }
@@ -153,6 +196,11 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
     requestAnimationFrame(() => safeFit(entry!));
     entry.term.focus();
     setState(entry.client.connectionState);
+    // A panel reopened onto a running container has ports already; they arrive
+    // again on the next sweep, but not instantly, and an empty strip in the
+    // meantime reads as "the server stopped".
+    setPorts(entry.ports);
+    entry.onPorts = setPorts;
 
     const onResize = () => safeFit(entry!);
     window.addEventListener('resize', onResize);
@@ -162,6 +210,7 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
     return () => {
       window.removeEventListener('resize', onResize);
       observer?.disconnect();
+      if (entry) entry.onPorts = () => undefined;
       // Detach the DOM node, not the session: the shell and anything it is
       // running stay alive on the gateway.
       entry?.host.remove();
@@ -208,6 +257,24 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
           )}
         >
           <span>{detail || STATE_LABEL[state]}</span>
+        </div>
+      )}
+      {ports.length > 0 && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-2 py-1">
+          {/* Wrapped, because a bare text node beside the mapped list below is
+              the reconciliation crash the audit scans for. */}
+          <span className="text-xs text-ink-faint">Serving</span>
+          {ports.map((entry) => (
+            <button
+              key={entry.port}
+              type="button"
+              onClick={() => void openPort(entry.url)}
+              aria-label={`Open port ${entry.port} in a new tab`}
+              className="tap-target rounded-[4px] bg-surface-sunken px-1.5 py-0.5 font-mono text-xs tabular-nums text-accent outline-none hover:bg-surface-raised focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <span>{`:${entry.port}`}</span>
+            </button>
+          ))}
         </div>
       )}
       <div
