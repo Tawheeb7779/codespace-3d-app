@@ -23,6 +23,7 @@ import { SyncService, type SyncSubscriber } from './syncService.ts';
 import { PortWatcher, proxyPathFor } from './portDiscovery.ts';
 import * as gitOps from './git.ts';
 import { transferFiles } from './transfer.ts';
+import { availableChecks, runCheck } from './checks.ts';
 
 /**
  * The gateway: one HTTP server, three jobs.
@@ -417,6 +418,10 @@ export function createGateway(deps: GatewayDeps): {
         await onGit(connection, frame);
         return;
       }
+      if (frame.type === 'check') {
+        await onCheck(connection, frame);
+        return;
+      }
       if (frame.type === 'transfer') {
         await onTransfer(connection, frame);
         return;
@@ -616,6 +621,62 @@ export function createGateway(deps: GatewayDeps): {
         message: failure.message,
         needsConfirmation: refusal,
         atRisk: plan?.paths,
+      });
+    }
+  }
+
+  /**
+   * Run one of the project's own checks, for the agent to verify itself with.
+   *
+   * The container is resolved by id and owner, exactly as git and sync are. The
+   * request names a script; the gateway confirms it is one of five allowed
+   * names *and* that the project defines it, then runs `npm run` on it. There
+   * is no path from this frame to a command line.
+   *
+   * A failing check is a successful request: `ok` is true and the result
+   * carries the exit code, because the agent needs to read a failure rather
+   * than be told the request failed.
+   */
+  async function onCheck(
+    connection: Connection,
+    frame: Extract<ClientFrame, { type: 'check' }>,
+  ): Promise<void> {
+    const record = containers.byId(frame.containerId, connection.userId!);
+    if (!record) throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+
+    try {
+      if (frame.request.op === 'list') {
+        send(connection, {
+          type: 'check-result',
+          requestId: frame.requestId,
+          containerId: record.id,
+          ok: true,
+          available: await availableChecks(record),
+        });
+      } else {
+        const result = await runCheck({ runtime, record }, frame.request.script);
+        logger.event('check_completed', {
+          containerId: record.id,
+          userId: record.userId,
+          reason: `${result.script} exited ${result.exitCode}`,
+        });
+        send(connection, {
+          type: 'check-result',
+          requestId: frame.requestId,
+          containerId: record.id,
+          ok: true,
+          result,
+        });
+      }
+      containers.touch(record.id);
+    } catch (error) {
+      const failure = toGatewayError(error);
+      send(connection, {
+        type: 'check-result',
+        requestId: frame.requestId,
+        containerId: record.id,
+        ok: false,
+        message: failure.message,
       });
     }
   }

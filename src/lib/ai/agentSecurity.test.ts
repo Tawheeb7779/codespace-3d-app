@@ -112,9 +112,18 @@ describe('the agent cannot reach a credential', () => {
   const source = (file: string) =>
     readFileSync(join(process.cwd(), 'src/lib/ai', file), 'utf8');
 
+  /**
+   * `get_git_status` reads `git` inside the project's container. That container
+   * has `--network none` and no credential, and the gateway's git surface has
+   * no fetch, pull, push or clone operation to reach for — so a name matching
+   * this pattern is allowed only when it is that read, and the test below
+   * proves it cannot become anything else.
+   */
   it('has no GitHub tool and no GitHub import', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names.filter((n) => /git|github|push|pull|fetch|remote/i.test(n))).toEqual([]);
+    expect(names.filter((n) => /git|github|push|pull|fetch|remote/i.test(n))).toEqual([
+      'get_git_status',
+    ]);
     for (const file of ['tools.ts', 'agent.ts', 'approval.ts', 'context.ts', 'task.ts']) {
       expect(source(file), file).not.toMatch(/from '@\/lib\/github/);
       expect(source(file), file).not.toMatch(/githubClient|readLocalToken|github_tokens/);

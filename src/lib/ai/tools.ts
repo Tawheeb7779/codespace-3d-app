@@ -52,6 +52,28 @@ export interface ToolContext {
   /** Current editor diagnostics, newest analysis. */
   diagnostics?(): string;
   /**
+   * The project's real environment, when a container workspace is connected.
+   *
+   * Optional, and its absence is reported rather than hidden: without a
+   * gateway the agent is told there is no workspace instead of being handed a
+   * tool that pretends to have run something.
+   */
+  workspace?: {
+    connected(): boolean;
+    /** Which of the project's checks exist, or a reason none can be listed. */
+    listChecks(): Promise<{ ok: boolean; available?: string[]; message?: string }>;
+    /** Run one named check. A failing check is a result, not an error. */
+    runCheck(script: string): Promise<{
+      ok: boolean;
+      result?: { script: string; ok: boolean; exitCode: number; output: string; truncated: boolean };
+      message?: string;
+    }>;
+    /** Real `git status` from the container. */
+    gitStatus(): Promise<{ ok: boolean; data?: unknown; message?: string }>;
+    /** Real `git diff` from the container. */
+    gitDiff(staged: boolean): Promise<{ ok: boolean; data?: unknown; message?: string }>;
+  };
+  /**
    * The project's uncommitted changes as a unified diff.
    *
    * Absent when there is no repository. A review workflow that cannot read
@@ -418,6 +440,121 @@ export const TOOLS: ToolDefinition[] = [
     run: (_input, ctx) => {
       if (!ctx.gitDiff) return 'No repository is available in this context.';
       return ctx.gitDiff() || 'The working tree is clean — there are no uncommitted changes.';
+    },
+  },
+  {
+    name: 'list_project_checks',
+    /*
+     * The honest first step of verification. The agent asks what this project
+     * can actually run before claiming it ran anything, and a project with no
+     * test script is told so rather than being given a confusing npm error.
+     */
+    description:
+      'List the project checks that can be run in the real container workspace (test, lint, ' +
+      'typecheck, build, verify). Call this before run_project_check.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: async (_input, ctx) => {
+      if (!ctx.workspace) return 'No container workspace is available in this context.';
+      const answer = await ctx.workspace.listChecks();
+      if (!answer.ok) return answer.message ?? 'The workspace could not be reached.';
+      if (!answer.available?.length) {
+        return 'This project defines none of the runnable checks (test, lint, typecheck, build, verify).';
+      }
+      return `Runnable checks: ${answer.available.join(', ')}`;
+    },
+  },
+  {
+    name: 'run_project_check',
+    /*
+     * Real verification in the project's real environment — `npm test` in a
+     * container with the project's dependencies, not the in-browser bundler.
+     *
+     * The agent names a script, never a command line. The gateway holds a
+     * five-name allowlist and confirms `package.json` defines the script, so
+     * there is no path from a model's output to a shell. A failing check comes
+     * back as output to read rather than as an error to retry.
+     */
+    description:
+      'Run one of the project\'s own checks in the real container workspace and return its real ' +
+      'output and exit code. Allowed: test, lint, typecheck, build, verify. Use this to verify a ' +
+      'change actually works, not just that it compiles.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        script: {
+          type: 'string',
+          description: 'One of: test, lint, typecheck, build, verify',
+        },
+      },
+      required: ['script'],
+    },
+    mutates: false,
+    run: async (input, ctx) => {
+      if (!ctx.workspace) return 'No container workspace is available in this context.';
+      const script = requireString(input, 'script').trim();
+      const answer = await ctx.workspace.runCheck(script);
+      if (!answer.ok || !answer.result) {
+        return answer.message ?? 'The check could not be run.';
+      }
+      const { result } = answer;
+      const heading = result.ok
+        ? `${result.script} passed (exit ${result.exitCode}).`
+        : `${result.script} FAILED (exit ${result.exitCode}).`;
+      const body = result.output.trim();
+      return body ? `${heading}\n\n${body}` : heading;
+    },
+  },
+  {
+    name: 'get_git_status',
+    /*
+     * Real git, from Phase 2, rather than the in-browser version control. The
+     * two can disagree, and when they do the container's answer is the one that
+     * matters — it is what a commit will actually record.
+     */
+    description:
+      'Read the real git status of the container workspace: branch, and which files are staged, ' +
+      'modified or untracked.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: async (_input, ctx) => {
+      if (!ctx.workspace) return 'No container workspace is available in this context.';
+      const answer = await ctx.workspace.gitStatus();
+      if (!answer.ok) return answer.message ?? 'Git status could not be read.';
+      const state = answer.data as {
+        repository?: boolean;
+        branch?: string | null;
+        dirty?: boolean;
+        files?: Array<{ path: string; code: string; staged: boolean; untracked: boolean }>;
+      };
+      if (!state?.repository) return 'This workspace has no git repository yet.';
+      if (!state.dirty) return `On branch ${state.branch ?? '(detached)'} — working tree clean.`;
+      const lines = (state.files ?? [])
+        .slice(0, 100)
+        .map((file) => `  ${file.code} ${file.path}${file.staged ? ' (staged)' : ''}`);
+      return [`On branch ${state.branch ?? '(detached)'}:`, ...lines].join('\n');
+    },
+  },
+  {
+    name: 'get_workspace_diff',
+    description:
+      'Read the real unified diff from the container workspace. Pass staged=true for the staged ' +
+      'changes instead of the working tree.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        staged: { type: 'string', description: '"true" to diff the staged changes' },
+      },
+      required: [],
+    },
+    mutates: false,
+    run: async (input, ctx) => {
+      if (!ctx.workspace) return 'No container workspace is available in this context.';
+      const staged = String((input as { staged?: unknown }).staged ?? '') === 'true';
+      const answer = await ctx.workspace.gitDiff(staged);
+      if (!answer.ok) return answer.message ?? 'The diff could not be read.';
+      const patch = String(answer.data ?? '');
+      return patch.trim() || 'No changes.';
     },
   },
   {

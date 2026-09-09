@@ -20,7 +20,7 @@
  * the connection with a message naming both versions, rather than accepting a
  * frame it will misinterpret.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -81,6 +81,8 @@ export type ErrorCode =
   | 'PORT_ERROR'
   /** A git operation that failed, or was refused because it would lose work. */
   | 'GIT_ERROR'
+  /** A project check that could not be run. A *failing* check is not this. */
+  | 'CHECK_ERROR'
   | 'RESOURCE_LIMIT'
   | 'TIMEOUT'
   | 'PROTOCOL_ERROR'
@@ -248,6 +250,42 @@ export interface GitResultFrame {
 // files and a direction; both endpoints are authorised independently.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Project checks
+//
+// What the agent verifies itself with. A script *name*, never a command line:
+// the gateway holds a five-entry allowlist and confirms the project defines the
+// script before running `npm run` on it.
+// ---------------------------------------------------------------------------
+
+export interface CheckFrame {
+  type: 'check';
+  requestId: string;
+  containerId: string;
+  /** `list` reports which checks this project defines; `run` runs one. */
+  request: { op: 'list' } | { op: 'run'; script: string };
+}
+
+export interface CheckResultFrame {
+  type: 'check-result';
+  requestId: string;
+  containerId: string;
+  /** Whether the request could be served. A failing test suite is `true` here. */
+  ok: boolean;
+  /** Present for `list`. */
+  available?: string[];
+  /** Present for a `run` that executed, whatever its exit code. */
+  result?: {
+    script: string;
+    ok: boolean;
+    exitCode: number;
+    output: string;
+    truncated: boolean;
+  };
+  /** Present when the request could not be served at all. */
+  message?: string;
+}
+
 export interface TransferFrame {
   type: 'transfer';
   requestId: string;
@@ -345,6 +383,7 @@ export type ClientFrame =
   | SyncPushFrame
   | SyncDeleteFrame
   | GitFrame
+  | CheckFrame
   | TransferFrame;
 
 // ---------------------------------------------------------------------------
@@ -479,6 +518,7 @@ export type ServerFrame =
   | SyncChangedFrame
   | SyncStormFrame
   | GitResultFrame
+  | CheckResultFrame
   | TransferResultFrame;
 
 // ---------------------------------------------------------------------------
@@ -635,6 +675,36 @@ function gitOperation(value: unknown): GitOperation {
   }
 }
 
+/**
+ * An npm script name.
+ *
+ * Deliberately narrow: lowercase, digits, and the three separators npm scripts
+ * conventionally use. Nothing here can be a flag, a path, a shell metacharacter
+ * or a traversal, so the name stays a name however it is later interpolated.
+ */
+function scriptName(value: unknown): string {
+  if (typeof value !== 'string') throw new ProtocolError('script must be a string');
+  if (!/^[a-z][a-z0-9:_-]{0,63}$/.test(value)) throw new ProtocolError('script name is invalid');
+  return value;
+}
+
+function checkOutcome(value: unknown): {
+  script: string;
+  ok: boolean;
+  exitCode: number;
+  output: string;
+  truncated: boolean;
+} {
+  if (!isRecord(value)) throw new ProtocolError('check result is invalid');
+  return {
+    script: scriptName(value.script),
+    ok: value.ok === true,
+    exitCode: int(value, 'exitCode', -1, 255),
+    output: str(value, 'output', LIMITS.maxGitOutputBytes),
+    truncated: value.truncated === true,
+  };
+}
+
 /** Base64 with no whitespace, bounded before it is decoded. */
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
@@ -759,6 +829,26 @@ export function parseClientFrame(raw: string): ClientFrame {
         containerId: id(parsed, 'containerId'),
         request: gitOperation(parsed.request),
       };
+
+    case 'check': {
+      const request = parsed.request;
+      if (!isRecord(request)) throw new ProtocolError('check request is invalid');
+      if (request.op !== 'list' && request.op !== 'run') {
+        throw new ProtocolError('unknown check operation');
+      }
+      return {
+        type: 'check',
+        requestId: id(parsed, 'requestId'),
+        containerId: id(parsed, 'containerId'),
+        request:
+          request.op === 'list'
+            ? { op: 'list' }
+            : // A script name, not a command. Narrow enough that nothing in it
+              // could be read as a flag or a path even if the gateway's
+              // allowlist were ever widened.
+              { op: 'run', script: scriptName(request.script) },
+      };
+    }
 
     case 'transfer':
       return {
@@ -948,6 +1038,23 @@ export function parseServerFrame(raw: string): ServerFrame {
               ),
       };
 
+    case 'check-result':
+      return {
+        type: 'check-result',
+        requestId: id(parsed, 'requestId'),
+        containerId: id(parsed, 'containerId'),
+        ok: parsed.ok === true,
+        available:
+          parsed.available === undefined
+            ? undefined
+            : array(parsed.available, 'available', 32).map((entry) => {
+                if (typeof entry !== 'string') throw new ProtocolError('script name is invalid');
+                return entry.slice(0, 64);
+              }),
+        result: parsed.result === undefined ? undefined : checkOutcome(parsed.result),
+        message: optionalStr(parsed, 'message', 400),
+      };
+
     case 'transfer-result':
       return {
         type: 'transfer-result',
@@ -994,6 +1101,7 @@ const CODES: readonly string[] = [
   'SYNC_ERROR',
   'PORT_ERROR',
   'GIT_ERROR',
+  'CHECK_ERROR',
   'RESOURCE_LIMIT',
   'TIMEOUT',
   'PROTOCOL_ERROR',

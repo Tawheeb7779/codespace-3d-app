@@ -15,6 +15,7 @@ import {
 import { IconButton } from '@/components/ui/IconButton';
 import { EmptyState, Badge } from '@/components/ui/Primitives';
 import { TerminalView } from '@/components/ide/TerminalView';
+import { ChecksPanel } from '@/components/ide/ChecksPanel';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { useUIStore, type BottomTab } from '@/stores/uiStore';
 import { useTerminalStore, type TerminalMode } from '@/stores/terminalStore';
@@ -409,6 +410,11 @@ export function BottomPanel() {
     { id: 'ports', label: 'Runtime' },
   ];
 
+  // The container's own checks, and only where a container can exist. With no
+  // gateway configured the tab would open onto a permanent "not attached", so
+  // it is not offered rather than offered and empty.
+  if (containerTerminalAvailable()) tabs.splice(2, 0, { id: 'checks', label: 'Checks' });
+
   return (
     <section aria-label="Panel" className="flex h-full flex-col border-t border-line bg-surface">
       {/* The strip carries the four tabs and, on the terminal tab, the session
@@ -590,6 +596,7 @@ export function BottomPanel() {
             <EmptyState title="No terminal" />
           ))}
         {bottomTab === 'problems' && <ProblemsList />}
+        {bottomTab === 'checks' && <ChecksPanel />}
         {bottomTab === 'output' && <OutputList />}
         {bottomTab === 'ports' && <PortsPanel />}
       </div>

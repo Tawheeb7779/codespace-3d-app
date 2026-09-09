@@ -27,6 +27,11 @@ import { hostedResolverFor } from '@/lib/ai/hosted';
 import { useAgentStore, projectContextHeader, readCache } from '@/stores/agentStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { recordActivity } from '@/stores/activityStore';
+import {
+  workspaceCheck,
+  workspaceConnected,
+  workspaceGit,
+} from '@/lib/ai/workspaceBridge';
 import { WIDE_CHANGE_THRESHOLD } from '@/lib/ai/approval';
 import {
   buildContextSections,
@@ -177,6 +182,52 @@ function toolContext(): ToolContext {
       // Keep the preview panel honest about the build the agent just ran.
       if (usePreviewStore.getState().status !== 'idle') void usePreviewStore.getState().run();
       return { ok, report };
+    },
+
+    /**
+     * The project's real environment, when a container is connected.
+     *
+     * Every method reports absence rather than substituting the in-browser
+     * equivalent: "no workspace is connected" is a true and useful answer, and
+     * quietly running the bundler instead when the agent asked for `npm test`
+     * would be the agent claiming a verification it did not perform.
+     */
+    workspace: {
+      connected: () => workspaceConnected(),
+      async listChecks() {
+        const answer = await workspaceCheck({ op: 'list' }).catch((error: Error) => ({
+          ok: false as const,
+          message: error.message,
+        }));
+        return answer;
+      },
+      async runCheck(script: string) {
+        const answer = await workspaceCheck({ op: 'run', script }).catch((error: Error) => ({
+          ok: false as const,
+          message: error.message,
+        }));
+        // Recorded as a verification the agent actually ran, so the UI's
+        // summary reflects what happened rather than what was attempted.
+        if ('result' in answer && answer.result) {
+          useAgentStore.getState().noteVerification({
+            name: `npm run ${answer.result.script}`,
+            ok: answer.result.ok,
+            ran: true,
+            detail: `exit ${answer.result.exitCode}`,
+          });
+        }
+        return answer;
+      },
+      gitStatus: () =>
+        workspaceGit({ op: 'status' }).catch((error: Error) => ({
+          ok: false as const,
+          message: error.message,
+        })),
+      gitDiff: (staged: boolean) =>
+        workspaceGit({ op: 'diff', staged }).catch((error: Error) => ({
+          ok: false as const,
+          message: error.message,
+        })),
     },
 
     diagnostics() {

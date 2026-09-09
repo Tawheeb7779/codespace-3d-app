@@ -17,13 +17,16 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Field';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { DiffViewer } from '@/components/ide/DiffViewer';
+import { WorkspaceGitPanel } from '@/components/ide/WorkspaceGitPanel';
 import { RemoteBar } from '@/components/github/RemoteBar';
+import { containerTerminalAvailable } from '@/lib/terminal/containerClient';
 import { useGitStore } from '@/stores/gitStore';
 import { useFileStore } from '@/stores/fileStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { toast } from '@/stores/toastStore';
 import * as vcs from '@/lib/vcs';
 import type { FileChange } from '@/lib/vcs';
+import { useIsTouch } from '@/hooks/useMediaQuery';
 import { basename } from '@/lib/vfs';
 import { cx, errorMessage, formatTimeAgo } from '@/lib/utils';
 
@@ -43,6 +46,7 @@ function ChangeRow({
   selected,
   staged,
   canWrite,
+  touch,
 }: {
   change: FileChange;
   onSelect: () => void;
@@ -52,6 +56,14 @@ function ChangeRow({
   selected: boolean;
   staged: boolean;
   canWrite: boolean;
+  /**
+   * Whether the pointer is a finger.
+   *
+   * A hover-revealed action is the right idiom for a cursor and does not exist
+   * at all on a touch screen: without this, staging and discarding a file are
+   * unreachable on a phone.
+   */
+  touch: boolean;
 }) {
   const mark = STATUS_MARK[change.status];
   return (
@@ -66,7 +78,12 @@ function ChangeRow({
         <span className="truncate">{basename(change.path)}</span>
         <span className="truncate text-sm text-ink-faint">{change.path}</span>
       </button>
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <div
+        className={cx(
+          'flex shrink-0 items-center gap-0.5 transition-opacity',
+          touch ? 'opacity-100' : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100',
+        )}
+      >
         {!staged && onDiscard && (
           <IconButton
             label={`Discard changes to ${change.path}`}
@@ -97,7 +114,16 @@ function ChangeRow({
   );
 }
 
-export function GitPanel() {
+/**
+ * The in-browser repository: TA CODE's own implementation of git's model over
+ * the virtual filesystem, and the default everywhere.
+ *
+ * It is not a mock. Commits, trees, branches, merges and diffs are real and are
+ * stored with the project. What it is not is `git` — the program — and where a
+ * container workspace exists, the panel offers that as a second, clearly named
+ * source rather than blending the two.
+ */
+function BrowserGitPanel() {
   const {
     repo,
     status,
@@ -121,6 +147,7 @@ export function GitPanel() {
   const files = useFileStore((s) => s.files);
   const canWrite = useFileStore((s) => s.canWrite());
   const stageAllOnCommit = useSettingsStore((s) => s.git.stageAllOnCommit);
+  const touch = useIsTouch();
 
   const [message, setMessage] = useState('');
   const [branchOpen, setBranchOpen] = useState(false);
@@ -361,6 +388,7 @@ export function GitPanel() {
                         change={change}
                         staged
                         canWrite={canWrite}
+                        touch={touch}
                         selected={selectedPath === change.path}
                         onSelect={() => select(change.path)}
                         onUnstage={() =>
@@ -379,6 +407,7 @@ export function GitPanel() {
                         change={change}
                         staged={false}
                         canWrite={canWrite}
+                        touch={touch}
                         selected={selectedPath === change.path}
                         onSelect={() => select(change.path)}
                         onStage={() => void guard('Could not stage', () => stage([change.path]))}
@@ -770,6 +799,57 @@ export function GitPanel() {
           from it will no longer appear in history.
         </p>
       </Modal>
+    </div>
+  );
+}
+
+/**
+ * Source control, over whichever repository the person means.
+ *
+ * Two repositories genuinely exist when a container gateway is configured, and
+ * they are not the same thing: the browser's is TA CODE's own version control
+ * over the virtual filesystem, and the container's is `git` itself over the
+ * synchronised working tree. Showing one and labelling it "git" would be a
+ * claim about the other, so the panel names which is which and switches
+ * between them.
+ *
+ * With no gateway configured there is only ever one, and no switch is offered:
+ * a control with a single destination is chrome, not a choice.
+ */
+export function GitPanel() {
+  const [source, setSource] = useState<'browser' | 'workspace'>('browser');
+
+  if (!containerTerminalAvailable()) return <BrowserGitPanel />;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div role="tablist" aria-label="Repository" className="flex shrink-0 border-b border-line">
+        {(
+          [
+            ['browser', 'Browser'],
+            ['workspace', 'Container'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            role="tab"
+            type="button"
+            aria-selected={source === value}
+            onClick={() => setSource(value)}
+            className={cx(
+              'tap-target flex-1 px-3 py-1.5 text-sm transition-colors',
+              source === value
+                ? 'border-b-2 border-accent text-ink'
+                : 'border-b-2 border-transparent text-ink-muted hover:text-ink',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1">
+        {source === 'browser' ? <BrowserGitPanel /> : <WorkspaceGitPanel />}
+      </div>
     </div>
   );
 }

@@ -11,6 +11,10 @@ import {
   type ConnectionState,
 } from '@/lib/terminal/containerClient';
 import { attachWorkspaceSync, detachWorkspaceSync } from '@/lib/terminal/fileStoreSync';
+import {
+  registerProjectWorkspace,
+  resolveWorkspaceRequest,
+} from '@/lib/ai/workspaceBridge';
 import { TERMINAL_COLORS } from '@/components/ide/terminalColors';
 import { cx } from '@/lib/utils';
 
@@ -200,7 +204,16 @@ export function ContainerTerminalView({
           // manifest is what establishes what is already on it. Sent here
           // rather than on mount because a reconnect needs it again: the
           // container may have been rebuilt while the tab was away.
-          if (next === 'ready') void sync?.start();
+          if (next === 'ready') {
+            void sync?.start();
+            /**
+             * The agent works on the project, so only a project workspace is
+             * registered. Registering a Linux workspace here would quietly give
+             * the agent a shell environment that holds none of the project's
+             * files and is not what any of its tools mean.
+             */
+            if (kind === 'project') registerProjectWorkspace(client);
+          }
         },
         onExit: (code) => term.writeln(`\r\n\x1b[2m[process exited with code ${code ?? 0}]\x1b[0m`),
         onError: (_code, message) => term.writeln(`\r\n\x1b[31m${message}\x1b[0m`),
@@ -208,6 +221,10 @@ export function ContainerTerminalView({
         onSyncAck: (results) => sync?.onAck(results),
         onSyncChanged: (files, deleted) => sync?.onChanged(files, deleted),
         onSyncStorm: () => sync?.onStorm(),
+        // Answers to the agent's git and check requests. Routed by request id
+        // rather than by order, because several can be in flight.
+        onGitResult: (result) => resolveWorkspaceRequest(result.requestId, result),
+        onCheckResult: (result) => resolveWorkspaceRequest(result.requestId, result),
         onPorts: (next) => {
           const current = live.get(key);
           if (!current) return;
@@ -244,6 +261,9 @@ export function ContainerTerminalView({
       window.removeEventListener('resize', onResize);
       observer?.disconnect();
       if (entry) entry.onPorts = () => undefined;
+      // The agent must not hold a client for a panel that is gone: its next
+      // request would wait for an answer nobody is going to send.
+      if (kind === 'project') registerProjectWorkspace(null);
       // Detach the DOM node, not the session: the shell and anything it is
       // running stay alive on the gateway.
       entry?.host.remove();

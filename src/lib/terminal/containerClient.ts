@@ -88,6 +88,20 @@ export interface ContainerTerminalOptions {
     needsConfirmation?: boolean;
     atRisk?: string[];
   }) => void;
+  /**
+   * The answer to a project-check request.
+   *
+   * `ok` says whether the request could be served, not whether the check
+   * passed — a failing test suite arrives with `ok: true` and a non-zero exit
+   * code, because that is a result the agent must read rather than an error.
+   */
+  onCheckResult?: (result: {
+    requestId: string;
+    ok: boolean;
+    available?: string[];
+    result?: { script: string; ok: boolean; exitCode: number; output: string; truncated: boolean };
+    message?: string;
+  }) => void;
   /** The outcome of an explicit transfer between two of the user's workspaces. */
   onTransferResult?: (result: {
     requestId: string;
@@ -281,6 +295,16 @@ export class ContainerTerminal {
         });
         break;
 
+      case 'check-result':
+        this.options.onCheckResult?.({
+          requestId: frame.requestId,
+          ok: frame.ok,
+          available: frame.available,
+          result: frame.result,
+          message: frame.message,
+        });
+        break;
+
       case 'transfer-result':
         this.options.onTransferResult?.({
           requestId: frame.requestId,
@@ -391,6 +415,19 @@ export class ContainerTerminal {
     if (!this.containerId) return null;
     const requestId = `git-${(this.nextRequest += 1)}`;
     this.send({ type: 'git', requestId, containerId: this.containerId, request });
+    return requestId;
+  }
+
+  /**
+   * Ask which of the project's checks can be run, or run one.
+   *
+   * A script name, never a command. The gateway holds the allowlist and
+   * confirms the project defines the script before running anything.
+   */
+  check(request: { op: 'list' } | { op: 'run'; script: string }): string | null {
+    if (!this.containerId) return null;
+    const requestId = `check-${(this.nextRequest += 1)}`;
+    this.send({ type: 'check', requestId, containerId: this.containerId, request });
     return requestId;
   }
 

@@ -33,6 +33,8 @@ export type EventName =
   | 'git_refused'
   /** An explicit file transfer between two of one person's workspaces. */
   | 'transfer_completed'
+  /** A project check the agent ran to verify its own work. */
+  | 'check_completed'
   /** The watcher gave up enumerating a burst; the client must resynchronise. */
   | 'sync_storm'
   | 'port_opened'

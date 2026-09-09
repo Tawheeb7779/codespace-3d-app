@@ -11,7 +11,7 @@ export type SidebarPanel =
   | 'packages'
   | 'assistant'
   | 'members';
-export type BottomTab = 'terminal' | 'problems' | 'output' | 'ports';
+export type BottomTab = 'terminal' | 'problems' | 'checks' | 'output' | 'ports';
 export type MobilePane = 'files' | 'editor' | 'preview' | 'terminal' | 'assistant';
 
 /**
