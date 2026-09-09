@@ -1456,6 +1456,128 @@ begin
   end;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- Account creation must survive its own profile mirror
+--
+-- `on_auth_user_created` is an AFTER INSERT trigger on `auth.users`, so it runs
+-- inside the transaction that creates the account. A trigger that raises does
+-- not merely skip the profile — it rolls the account back, and Supabase reports
+-- "Database error saving new user" to the browser. The person who already has a
+-- row is unaffected forever after, which is why this presents as "the owner can
+-- sign in and nobody else can" rather than as a database error.
+--
+-- Each input below made the original trigger raise. They are here as inputs an
+-- identity provider genuinely sends, not as invented edge cases.
+-- ---------------------------------------------------------------------------
+
+select pg_temp.act_as_admin();
+
+do $$
+declare
+  created uuid;
+  name    text;
+begin
+  -- An OAuth provider that returns an empty display name. `coalesce` skips
+  -- NULL and not the empty string, so this used to reach the length constraint
+  -- with zero characters.
+  insert into auth.users (email, raw_user_meta_data)
+    values ('empty-name@example.test', '{"full_name":""}')
+    returning id into created;
+  select display_name into name from public.profiles where id = created;
+  if name is null or char_length(name) = 0 then
+    raise exception 'FAIL  an empty display name did not fall back to anything';
+  end if;
+  raise notice 'ok    an account with an empty provider name is still created';
+end $$;
+
+do $$
+declare
+  created uuid;
+  name    text;
+begin
+  -- A real display name longer than the eighty the constraint allows. Clamped
+  -- rather than rejected: a long name is not a reason to refuse an account.
+  insert into auth.users (email, raw_user_meta_data)
+    values ('long-name@example.test', jsonb_build_object('full_name', repeat('A', 200)))
+    returning id into created;
+  select display_name into name from public.profiles where id = created;
+  if char_length(name) <> 80 then
+    raise exception 'FAIL  a long display name was not clamped to the limit';
+  end if;
+  raise notice 'ok    an account with an over-long provider name is still created';
+end $$;
+
+do $$
+declare
+  created uuid;
+begin
+  -- Whitespace only, which is neither NULL nor usable.
+  insert into auth.users (email, raw_user_meta_data)
+    values ('blank-name@example.test', '{"full_name":"   "}')
+    returning id into created;
+  if not exists (select 1 from public.profiles where id = created) then
+    raise exception 'FAIL  a whitespace display name left the account without a profile';
+  end if;
+  raise notice 'ok    an account with a whitespace provider name is still created';
+end $$;
+
+do $$
+declare
+  created uuid;
+begin
+  -- No metadata at all, and no email either. Unusual, not impossible.
+  insert into auth.users (id, email, raw_user_meta_data)
+    values (gen_random_uuid(), null, '{}')
+    returning id into created;
+  if not exists (select 1 from public.profiles where id = created and display_name = 'Developer') then
+    raise exception 'FAIL  an account with no name and no email was not created';
+  end if;
+  raise notice 'ok    an account with neither a name nor an email is still created';
+end $$;
+
+do $$
+declare
+  created uuid;
+begin
+  -- GitHub sends the login here when the account has no display name set.
+  insert into auth.users (email, raw_user_meta_data)
+    values ('gh@example.test', '{"user_name":"octocat"}')
+    returning id into created;
+  if not exists (select 1 from public.profiles where id = created and display_name = 'octocat') then
+    raise exception 'FAIL  a GitHub login was not used as a display name';
+  end if;
+  raise notice 'ok    a GitHub login is used when no display name is set';
+end $$;
+
+do $$
+declare
+  orphan uuid := gen_random_uuid();
+  repaired integer;
+begin
+  -- An account created while the trigger was failing has no profile, and every
+  -- table here has a foreign key to profiles — so it can authenticate and do
+  -- nothing. The backfill in migration 0010 repairs exactly this.
+  alter table auth.users disable trigger on_auth_user_created;
+  insert into auth.users (id, email, raw_user_meta_data)
+    values (orphan, 'orphan@example.test', '{"full_name":""}');
+  alter table auth.users enable trigger on_auth_user_created;
+
+  insert into public.profiles (id, email, display_name)
+  select u.id, coalesce(u.email, ''),
+         left(coalesce(nullif(btrim(coalesce(u.raw_user_meta_data ->> 'full_name', '')), ''),
+                       nullif(btrim(split_part(coalesce(u.email, ''), '@', 1)), ''),
+                       'Developer'), 80)
+  from auth.users u
+  where not exists (select 1 from public.profiles p where p.id = u.id)
+  on conflict (id) do nothing;
+
+  get diagnostics repaired = row_count;
+  if repaired < 1 then
+    raise exception 'FAIL  the backfill did not repair an account with no profile';
+  end if;
+  raise notice 'ok    an account left without a profile is repaired by the backfill';
+end $$;
+
 select pg_temp.act_as_admin();
 select pg_temp.assert(true, 'all authorization assertions passed');
 

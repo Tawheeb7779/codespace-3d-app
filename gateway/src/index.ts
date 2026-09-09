@@ -5,6 +5,7 @@ import { createLogger } from './observability.ts';
 import { createGateway } from './server.ts';
 import { createDockerRuntime } from './runtime/docker.ts';
 import { createLocalRuntime } from './runtime/local.ts';
+import { censusWarning, censusWorkspaces } from './migration.ts';
 import type { ContainerRuntime } from './runtime/types.ts';
 
 /**
@@ -79,6 +80,14 @@ if (!runtime.isolates && process.env.NODE_ENV === 'production') {
 }
 
 await mkdir(config.workspaceRoot, { recursive: true });
+
+// Workspaces stranded by the container-id change. Reported at boot and never
+// touched: their contents are somebody's work, and nothing on disk or in the
+// database can say whose, so an automatic migration would be a guess with a
+// cross-tenant failure mode. `npm run migrate:workspaces -- --list` says more.
+const census = await censusWorkspaces(config.workspaceRoot);
+const stranded = censusWarning(census);
+if (stranded) logger.problem('container_error', { reason: stranded });
 
 const gateway = createGateway({
   config,

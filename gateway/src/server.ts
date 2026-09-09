@@ -522,8 +522,47 @@ export function createGateway(deps: GatewayDeps): {
 
     if (!session) {
       if (sessions.countFor(container.id) >= container.tier.maxSessions) {
-        throw resourceLimit('This workspace already has the maximum number of terminals open.');
+        /**
+         * At the cap, but perhaps not actually in use.
+         *
+         * Closing a tab detaches a session rather than killing it, because
+         * `npm run dev` has to survive a closed laptop. The consequence, found
+         * by opening and closing terminals under concurrency: a user who opens
+         * three and closes them holds all three slots until the idle reaper
+         * runs a quarter of an hour later, and every attempt in between is
+         * refused. They are locked out of their own workspace by their own
+         * finished terminals.
+         *
+         * A detached session is exactly what a reopened panel wants, so the
+         * oldest one is adopted instead of refused. Nothing is killed, the cap
+         * still bounds how many terminals can be *attached* at once, and the
+         * client is told `resumed` so it knows the scrollback is not new.
+         *
+         * Same user, same container — ownership is already established above,
+         * so adopting one cannot reach anybody else's shell.
+         */
+        const reusable = sessions
+          .forContainer(container.id)
+          .filter((candidate) => !candidate.attached && candidate.state === 'running')
+          .sort((a, b) => a.lastActivity - b.lastActivity)[0];
+
+        if (reusable) {
+          session = reusable;
+          resumed = true;
+          logger.event('session_attached', {
+            correlationId: connection.correlation,
+            sessionId: session.id,
+            containerId: container.id,
+            userId: identity.userId,
+            reason: 'adopted a detached session at the terminal cap',
+          });
+        } else {
+          throw resourceLimit('This workspace already has the maximum number of terminals open.');
+        }
       }
+    }
+
+    if (!session) {
       const cwd = runtime.name === 'docker' ? WORKSPACE_MOUNT : container.workspaceDir;
       const pty = await runtime.spawnShell(container.id, {
         cwd,

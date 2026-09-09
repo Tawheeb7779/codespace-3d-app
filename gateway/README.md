@@ -90,6 +90,45 @@ the thing to preserve when it is built is the mount rule above: a workspace that
 could see every project the user owns would turn one compromised dependency into
 access to all of their work.
 
+## Workspace migration
+
+The container id changed from a 32-bit FNV-1a to a 128-bit SHA-256, because the
+old one could be collided deliberately: project ids are chosen in the browser,
+so an attacker ground out a project id whose key hashed to a victim's and their
+container mounted the victim's workspace. The id names the workspace directory,
+so fixing it renamed every future workspace and stranded every existing one.
+
+**Stranded workspaces are never migrated automatically, and that is deliberate.**
+Migration needs to know who owns a directory, and nothing can say:
+
+- the name is a one-way hash, so `tacode-10847e1b` cannot be reversed;
+- `container_workspaces` would be the record tying an id to a user, and the
+  gateway has never written a row to it — the table exists and is empty;
+- the old hash collided by construction, so a directory does not necessarily
+  correspond to one `(user, project)` pair at all.
+
+Migrating on a guess would hand one user a directory that may be another's,
+which is the exposure the id change closed. So the gateway detects and reports,
+and a person migrates one project at a time.
+
+```
+# What is stranded. Also logged at boot.
+npm run migrate:workspaces -- --list
+
+# Migrate one, having established who it belongs to.
+npm run migrate:workspaces -- --user <uuid> --project <id> --dry-run
+npm run migrate:workspaces -- --user <uuid> --project <id>
+```
+
+The dry run prints both ids; check the legacy one against the directory before
+running for real. Nothing is ever deleted, the move is a `rename` so there is no
+window where the files are in neither place, and re-running is a no-op. It
+refuses if a non-empty workspace already exists under the new id, because that
+would merge two projects' files.
+
+A workspace nobody migrates is not lost — it is simply not found by any user,
+and stays on disk until an operator removes it.
+
 ## What is enforced, and where
 
 Application code enforces *authorisation*: who you are, which project you may
@@ -151,7 +190,9 @@ correct in both cases.
 | pids, memory and CPU limits enforced by the kernel | Verified, read from the container's own cgroup (sec19–sec21) |
 | `--network none` leaves nothing reachable | Verified, including cloud metadata (sec22, sec23) |
 | Port discovery is namespaced to the container | Verified (sec24, sec25) |
-| gVisor (`--runtime runsc`) | **Unverified.** Implemented and gated; no host this has run on has `runsc` installed. It raises the cost of a kernel exploit and is not an escape guarantee — do not describe it as one. |
+| Seccomp filter loaded in the container | Verified — `Seccomp: 2` read from the container's own `/proc/self/status` (sec27) |
+| gVisor (`--runtime runsc`) | **Unverified.** Implemented and gated; `runsc` is not installed on any host this has run on, and `docker info` reports only `runc`. It raises the cost of a kernel exploit and is not an escape guarantee — do not describe it as one. |
+| AppArmor / SELinux confinement | **Not available on the hosts tested.** `docker info` reports `SecurityOptions: [name=seccomp,profile=builtin]` and `AppArmorProfile` is empty, so seccomp is the only kernel-level syscall filter in play. A host with AppArmor would add one; nothing here depends on it. |
 | Behaviour under production-like load | **Unverified.** The limits are tested by reaching them on one host; they have not been observed under real concurrent use. |
 
 `docker/workspace/build-offline-rootfs.sh` builds a stand-in image from host

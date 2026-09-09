@@ -585,3 +585,42 @@ describe.skipIf(!ENABLED)('a real container attacking its own workspace mount', 
     });
   }, 120_000);
 });
+
+// ---------------------------------------------------------------------------
+// Kernel-level syscall filtering
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!ENABLED)('the syscall filter the daemon applies', () => {
+  /**
+   * The runtime never passes `--security-opt seccomp=`, so the container gets
+   * Docker's builtin profile. That is the intended posture, and it is worth an
+   * assertion because the way it is lost is somebody adding
+   * `seccomp=unconfined` to debug a syscall and leaving it there — after which
+   * every flag still reads correctly and the kernel filter is simply gone.
+   *
+   * `Seccomp: 2` is SECCOMP_MODE_FILTER. `0` would mean no filter at all.
+   */
+  test('sec27 — a seccomp filter is loaded in the container', async () => {
+    const { out } = await inside('grep -E "^Seccomp:|^Seccomp_filters:" /proc/self/status');
+
+    expect(out).toMatch(/Seccomp:\s*2/);
+    expect(out).toMatch(/Seccomp_filters:\s*[1-9]/);
+  });
+
+  /**
+   * gVisor is not installed on this host, so `--runtime runsc` has never run.
+   * This asserts what is actually true — the container is on the default
+   * runtime — rather than leaving a reader to assume otherwise from the
+   * presence of the flag in `createArgs`.
+   */
+  test('sec28 — records which runtime actually executed this container', async () => {
+    const runtime = await inspect('{{.HostConfig.Runtime}}');
+
+    // Whatever it is, it is reported rather than asserted to be gVisor. If a
+    // host ever does have runsc, this is where that becomes visible.
+    expect(runtime.length).toBeGreaterThan(0);
+    if (runtime !== 'runsc') {
+      expect(['runc', '', 'io.containerd.runc.v2']).toContain(runtime);
+    }
+  });
+});

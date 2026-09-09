@@ -190,9 +190,52 @@ Apply migration `0009` for the workspace metadata table before enabling this.
 
 ## Diagnosing "the owner can sign in and nobody else can"
 
-This exact report — the person who set the project up signs in fine, someone
-they send the URL to cannot — is almost never a code fault, and the asymmetry is
-the clue. Both people load the same bundle, against the same Supabase project,
+**Start here: apply migration `0010`.** A defect in this repository produced
+exactly this symptom, and it is fixed by that migration.
+
+`on_auth_user_created` mirrors new accounts into `profiles`. It is an AFTER
+INSERT trigger on `auth.users`, so it runs inside the transaction that creates
+the account: when it raised, the account was rolled back and never created at
+all. Supabase reports that to the browser as **"Database error saving new
+user"**. Anyone who already had a row — the person who set the project up — was
+unaffected forever after, because their account was not being created again.
+
+Two inputs made it raise, both confirmed by running them against this schema on
+a real PostgreSQL:
+
+| Input | Why it failed |
+| --- | --- |
+| `full_name: ""` | `coalesce` skips NULL, not the empty string, so an empty display name from an OAuth provider reached the length constraint with zero characters. |
+| a name longer than 80 characters | Nothing clamped it, so a real Google display name over the limit violated the same constraint. |
+
+Migration `0010` makes the derivation total, clamps the length, wraps the whole
+trigger so no future constraint can block account creation, and backfills
+profiles for any account created while it was failing. Apply it before
+investigating anything else:
+
+```
+supabase db push        # or: psql "$DATABASE_URL" -f supabase/migrations/0010_profile_bootstrap.sql
+```
+
+### Verifying it, which needs a second person
+
+The repository cannot prove this from here. The check is:
+
+1. Apply migration `0010` to the production database.
+2. On a **different device**, in a **private window**, open the production URL.
+3. Sign up with an email address that has never been used on this deployment.
+4. Confirm the account is created — no "Database error saving new user".
+5. Sign in, and confirm a project can be created (which proves the `profiles`
+   row exists, since every table has a foreign key to it).
+6. Repeat with Google sign-in if it is enabled, because a first OAuth sign-in is
+   also an INSERT into `auth.users` and took the same path.
+
+If step 3 still fails, the cause is remote configuration rather than the schema,
+and the rest of this section separates the possibilities.
+
+### If it is not the schema
+
+The asymmetry is still the clue. Both people load the same bundle, against the same Supabase project,
 over the same origin. What differs is the *state of the second account*, so the
 cause is in the Supabase dashboard rather than in this repository.
 
@@ -200,6 +243,8 @@ Work through it in this order. Each step distinguishes causes rather than
 guessing at them, and the second person's error message is the input to all of
 them — take it verbatim, since the app passes Supabase's own wording through
 untouched precisely so this is possible.
+
+0. **"Database error saving new user"** — the schema fault above. Apply `0010`.
 
 1. **"Email not confirmed"** — Authentication → Providers → Email has "Confirm
    email" on, and the confirmation never arrived. Supabase's built-in SMTP is
