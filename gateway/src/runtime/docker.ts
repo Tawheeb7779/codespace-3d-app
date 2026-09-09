@@ -11,10 +11,15 @@ const run = promisify(execFile);
  *
  * The argument list below is the security model, so it is built by a pure
  * exported function and tested as data. That is deliberate: these flags are the
- * difference between an isolated workspace and a root shell on the host, they
- * are easy to weaken by accident while debugging, and a test that reads the
- * arguments catches that where a test that runs a container cannot — this
- * repository's CI has no Docker daemon.
+ * difference between an isolated workspace and a root shell on the host, and
+ * they are easy to weaken by accident while debugging. `test/isolation.test.ts`
+ * reads them and runs anywhere; `test/dockerSecurity.test.ts` creates a real
+ * container from them and tries to get out of it.
+ *
+ * Both, because neither is enough. Reading the arguments cannot tell you a flag
+ * does what its name says — `--storage-opt size=` and the workspace's ownership
+ * were both wrong while every argument was right — and running a container
+ * needs a daemon, which not every machine that edits this file has.
  *
  * What each one is for, since a list of flags ages badly without reasons:
  *

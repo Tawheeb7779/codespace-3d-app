@@ -152,16 +152,31 @@ SUPABASE_URL=https://your-project.supabase.co \
 SUPABASE_SERVICE_ROLE_KEY=... \
 TACODE_WORKSPACE_ROOT=/var/lib/ta-code/workspaces \
 TACODE_ALLOWED_ORIGINS=https://your-deployment.example \
-TACODE_NETWORK=full \
 npm start
 ```
+
+Note what is *not* in that command. `TACODE_NETWORK` is left unset, so
+containers start with no outbound access at all — see below before changing it.
 
 Then rebuild the frontend with `VITE_CONTAINER_GATEWAY_URL=wss://gateway.example`
 — a URL, not a credential, and the only thing the browser needs to know.
 
-Two settings deserve a decision rather than a default. `TACODE_NETWORK` is
-`none` unless you set it: containers have no outbound access at all, which is
-the safe posture and also the one where `npm install` does not work. And
+Two settings deserve a decision rather than a default.
+
+`TACODE_NETWORK` is `none` unless you set it, and it is left out of the command
+above on purpose. `none` means a container has no outbound access at all: it
+cannot reach the internet, the host, the gateway, your database, or the cloud
+metadata endpoint that anything hostile in a container reaches for first. It is
+also the setting where `npm install` does not work, so the pressure to set
+`full` is constant and it should be a decision somebody made rather than a line
+copied from a README.
+
+`full` gives the container a bridge network, which means outbound access to
+everything the host can reach — including services on your private network that
+have no authentication because they were never meant to be reachable. If you
+set it, put the gateway host somewhere that egress is filtered, and treat
+everything running in a workspace as code you did not write, because it is.
+
 `TACODE_ALLOWED_ORIGINS` should always be set in production — a WebSocket is
 not subject to the same-origin policy, so without it any page a signed-in user
 visits can open a terminal in their workspace.
