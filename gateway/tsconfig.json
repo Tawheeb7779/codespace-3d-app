@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node", "vite/client"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": false,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "outDir": "dist",
+    // The end-to-end suite imports the browser's own client, which uses the
+    // application's alias. Declared here so the gateway typechecks the same
+    // file the browser ships rather than a copy of it.
+    "baseUrl": ".",
+    "paths": { "@/*": ["../src/*"] }
+  },
+  "include": ["src", "test", "../src/lib/terminal/protocol.ts", "../src/lib/terminal/containerClient.ts"]
+}

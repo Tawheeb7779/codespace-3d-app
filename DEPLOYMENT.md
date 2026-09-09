@@ -127,6 +127,52 @@ Changing a secret takes effect on the next `functions deploy`.
 Without `GEMINI_API_KEY` the function answers 503 and says the deployment is
 not configured; nothing else breaks, and the other providers are unaffected.
 
+## 3b. The container gateway (optional)
+
+The **Linux Container** terminal needs a service that a static host cannot
+provide: long-lived WebSockets, a container runtime and a writable disk. It is
+a separate deployment, and TA CODE works without it — with no gateway
+configured the terminal is the virtual one and nothing else changes.
+
+```
+Frontend            Vercel (static)
+Auth + database     Supabase
+Edge Functions      Supabase (github-oauth, github-proxy, ai-proxy)
+Container gateway   a Linux host you control, with Docker
+Containers          ta-code/workspace:1, one per user per project
+```
+
+On the gateway host:
+
+```
+docker build -t ta-code/workspace:1 docker/workspace
+cd gateway && npm ci
+
+SUPABASE_URL=https://your-project.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY=... \
+TACODE_WORKSPACE_ROOT=/var/lib/ta-code/workspaces \
+TACODE_ALLOWED_ORIGINS=https://your-deployment.example \
+TACODE_NETWORK=full \
+npm start
+```
+
+Then rebuild the frontend with `VITE_CONTAINER_GATEWAY_URL=wss://gateway.example`
+— a URL, not a credential, and the only thing the browser needs to know.
+
+Two settings deserve a decision rather than a default. `TACODE_NETWORK` is
+`none` unless you set it: containers have no outbound access at all, which is
+the safe posture and also the one where `npm install` does not work. And
+`TACODE_ALLOWED_ORIGINS` should always be set in production — a WebSocket is
+not subject to the same-origin policy, so without it any page a signed-in user
+visits can open a terminal in their workspace.
+
+The gateway must run as a service that can be restarted; it stops its
+containers on `SIGTERM`, and containers that outlive their gateway are the
+orphans the lifecycle design exists to prevent. `gateway/README.md` has the
+full configuration table.
+
+Apply migration `0009` for the workspace metadata table before enabling this.
+
 ## 4. Database
 
 Apply migrations in order — they are idempotent, so re-running is safe:

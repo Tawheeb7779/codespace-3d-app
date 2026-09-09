@@ -17,7 +17,8 @@ import { EmptyState, Badge } from '@/components/ui/Primitives';
 import { TerminalView } from '@/components/ide/TerminalView';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { useUIStore, type BottomTab } from '@/stores/uiStore';
-import { useTerminalStore } from '@/stores/terminalStore';
+import { useTerminalStore, type TerminalMode } from '@/stores/terminalStore';
+import { containerTerminalAvailable } from '@/lib/terminal/containerClient';
 import { useEditorStore } from '@/stores/editorStore';
 import { useConsoleStore, ALL_LEVELS } from '@/stores/consoleStore';
 import { usePreviewStore } from '@/stores/previewStore';
@@ -386,6 +387,8 @@ export function BottomPanel() {
     setActive,
     renameSession,
     transcript,
+    mode,
+    setMode,
   } = useTerminalStore();
   const problemCount = useEditorStore((s) => s.problems.filter((p) => p.severity === 'error').length);
   const warningCount = useEditorStore((s) => s.problems.filter((p) => p.severity === 'warning').length);
@@ -445,6 +448,26 @@ export function BottomPanel() {
 
         {bottomTab === 'terminal' && (
           <div className="ml-3 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {/*
+              * Which environment the commands run in.
+              *
+              * Shown only where there is a choice: a deployment with no
+              * container gateway has one terminal, and a control offering an
+              * option that cannot work is worse than no control. The label is
+              * the environment rather than an on/off, because "Virtual" and
+              * "Linux" are the two things a user is actually choosing between.
+              */}
+            {containerTerminalAvailable() && (
+              <select
+                aria-label="Terminal environment"
+                value={mode}
+                onChange={(event) => setMode(event.target.value as TerminalMode)}
+                className="tap-target mr-1 h-6 shrink-0 rounded border border-line bg-surface-sunken px-1.5 text-sm text-ink focus:border-accent focus:outline-none"
+              >
+                <option value="virtual">Virtual</option>
+                <option value="container">Linux</option>
+              </select>
+            )}
             {sessions.map((session) => (
               <div
                 key={session.id}

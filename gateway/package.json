@@ -1,0 +1,25 @@
+{
+  "name": "ta-code-gateway",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "TA CODE container gateway: authenticated terminals, file sync and port proxying for Linux container workspaces.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "dev": "node --import tsx src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.3",
+    "vitest": "^3.2.7"
+  }
+}

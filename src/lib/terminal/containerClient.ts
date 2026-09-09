@@ -1,0 +1,302 @@
+import {
+  LIMITS,
+  PROTOCOL_VERSION,
+  encodeFrame,
+  parseServerFrame,
+  type ContainerStatus,
+  type ErrorCode,
+  type ServerFrame,
+} from '@/lib/terminal/protocol';
+
+/**
+ * The browser end of the container terminal.
+ *
+ * A thin, testable object with no React and no xterm in it: it owns a socket
+ * and turns frames into callbacks. That separation is what lets the reconnect
+ * logic — the part with the interesting failure modes — be tested without a
+ * DOM or a live gateway.
+ *
+ * Reconnect is the reason this is not just `new WebSocket`. A terminal that
+ * loses its socket has not lost its shell: the session lives on the gateway,
+ * so reconnecting means saying which session and how much of its output we
+ * already have, and getting the rest replayed. Backoff is bounded and jittered
+ * so that a gateway coming back up is not met by every browser at once.
+ */
+
+export type ConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'ready'
+  | 'reconnecting'
+  | 'closed'
+  | 'unavailable';
+
+export interface ContainerTerminalOptions {
+  /** Base URL of the gateway, e.g. `wss://containers.example`. */
+  gatewayUrl: string;
+  projectId: string;
+  /** Fetched fresh per attempt: an access token expires, and reconnects retry. */
+  token: () => Promise<string | null>;
+  cols: number;
+  rows: number;
+  onOutput: (bytes: Uint8Array) => void;
+  onState: (state: ConnectionState, detail?: string) => void;
+  onStatus?: (status: ContainerStatus, detail?: string) => void;
+  onExit?: (exitCode: number | null, signal: string | null) => void;
+  onError?: (code: ErrorCode, message: string, fatal: boolean) => void;
+  /** Injected in tests; defaults to the platform's WebSocket. */
+  createSocket?: (url: string) => WebSocket;
+}
+
+const MAX_RECONNECT_DELAY_MS = 15_000;
+const BASE_RECONNECT_DELAY_MS = 400;
+
+export class ContainerTerminal {
+  private socket: WebSocket | null = null;
+  private state: ConnectionState = 'idle';
+  private attempt = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private closedByUs = false;
+  /**
+   * Set when the gateway refused us for a reason retrying cannot fix.
+   *
+   * It keeps the socket's own `close` from replacing "you need edit access to
+   * this project" with "Disconnected" — the generic state arrives last and
+   * would otherwise be the one the user reads, which is the one that does not
+   * say what to do.
+   */
+  private terminal = false;
+
+  /** Set once the gateway has answered; used to resume the same shell. */
+  sessionId: string | null = null;
+  containerId: string | null = null;
+  runtime: string | null = null;
+  /** The last output sequence rendered, so a reconnect can ask for the gap. */
+  private lastSeq = 0;
+
+  constructor(private readonly options: ContainerTerminalOptions) {}
+
+  get connectionState(): ConnectionState {
+    return this.state;
+  }
+
+  private setState(state: ConnectionState, detail?: string): void {
+    this.state = state;
+    this.options.onState(state, detail);
+  }
+
+  async connect(): Promise<void> {
+    if (this.state === 'connecting' || this.state === 'ready') return;
+    // An explicit reconnect clears a previous fatal state: the user asking
+    // again is a new decision, and access may have been granted since.
+    this.terminal = false;
+    this.closedByUs = false;
+    this.setState(this.attempt === 0 ? 'connecting' : 'reconnecting');
+
+    const token = await this.options.token();
+    if (!token) {
+      // Not an error to retry: without a session there is nobody to be.
+      this.setState('unavailable', 'Sign in to use the container terminal.');
+      return;
+    }
+
+    const url = `${this.options.gatewayUrl.replace(/\/+$/, '')}/terminal`;
+    let socket: WebSocket;
+    try {
+      socket = this.options.createSocket ? this.options.createSocket(url) : new WebSocket(url);
+    } catch {
+      this.scheduleReconnect();
+      return;
+    }
+    this.socket = socket;
+
+    socket.onopen = () => {
+      this.send({
+        type: 'hello',
+        protocol: PROTOCOL_VERSION,
+        token,
+        projectId: this.options.projectId,
+        ...(this.sessionId ? { sessionId: this.sessionId, lastSeq: this.lastSeq } : {}),
+        cols: this.options.cols,
+        rows: this.options.rows,
+      });
+    };
+
+    socket.onmessage = (event) => this.onFrame(String(event.data));
+
+    socket.onclose = () => {
+      this.socket = null;
+      if (this.terminal) return;
+      if (this.closedByUs) {
+        this.setState('closed');
+        return;
+      }
+      this.scheduleReconnect();
+    };
+
+    socket.onerror = () => {
+      // `onclose` always follows, and it is the one that decides what to do.
+    };
+  }
+
+  private onFrame(raw: string): void {
+    let frame: ServerFrame;
+    try {
+      frame = parseServerFrame(raw);
+    } catch {
+      // A frame the gateway should not have sent. Dropped rather than
+      // half-applied: these drive an editor.
+      return;
+    }
+
+    switch (frame.type) {
+      case 'ready':
+        this.attempt = 0;
+        this.sessionId = frame.sessionId;
+        this.containerId = frame.containerId;
+        this.runtime = frame.runtime;
+        if (!frame.resumed) this.lastSeq = 0;
+        this.setState('ready');
+        this.options.onStatus?.(frame.status);
+        break;
+
+      case 'output':
+        this.lastSeq = frame.seq;
+        this.options.onOutput(base64ToBytes(frame.data));
+        break;
+
+      case 'exit':
+        // The shell is gone; the next connection starts a new one rather than
+        // asking to resume something that has exited.
+        this.sessionId = null;
+        this.lastSeq = 0;
+        this.options.onExit?.(frame.exitCode, frame.signal);
+        break;
+
+      case 'status':
+        this.options.onStatus?.(frame.status, frame.detail);
+        break;
+
+      case 'error':
+        this.options.onError?.(frame.code, frame.message, frame.fatal);
+        if (frame.fatal) {
+          // Retrying an authentication or protocol failure just repeats it.
+          this.closedByUs = true;
+          this.terminal = true;
+          this.setState('unavailable', frame.message);
+          this.socket?.close();
+        }
+        break;
+
+      case 'ports':
+      case 'pong':
+        break;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.timer) return;
+    this.attempt += 1;
+    // Exponential with jitter: a gateway restarting must not be hit by every
+    // browser on the same schedule.
+    const backoff = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** (this.attempt - 1), MAX_RECONNECT_DELAY_MS);
+    const delay = backoff / 2 + Math.random() * (backoff / 2);
+    this.setState('reconnecting');
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.connect();
+    }, delay);
+  }
+
+  private send(frame: object): void {
+    if (!this.socket || this.socket.readyState !== 1) return;
+    try {
+      this.socket.send(encodeFrame(frame as Parameters<typeof encodeFrame>[0]));
+    } catch {
+      // An unencodable frame is a bug here, not a reason to drop the terminal.
+    }
+  }
+
+  /**
+   * Send typed input.
+   *
+   * Chunked, because a paste is one `onData` call in xterm and can be far
+   * larger than a frame is allowed to be.
+   */
+  write(data: string): void {
+    const bytes = new TextEncoder().encode(data);
+    for (let offset = 0; offset < bytes.length; offset += LIMITS.maxInputBytes) {
+      const slice = bytes.subarray(offset, offset + LIMITS.maxInputBytes);
+      this.send({ type: 'input', sessionId: this.sessionId, data: bytesToBase64(slice) });
+    }
+  }
+
+  resize(cols: number, rows: number): void {
+    if (!this.sessionId) return;
+    this.send({ type: 'resize', sessionId: this.sessionId, cols, rows });
+  }
+
+  interrupt(): void {
+    if (!this.sessionId) return;
+    this.send({ type: 'signal', sessionId: this.sessionId, signal: 'SIGINT' });
+  }
+
+  /**
+   * Stop talking to the gateway.
+   *
+   * `kill` decides whether the shell dies with the connection. The default is
+   * false, which is the point of the feature: closing the panel or the tab
+   * leaves `npm run dev` running, and reopening reattaches to it.
+   */
+  disconnect(kill = false): void {
+    this.closedByUs = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (this.sessionId) this.send({ type: 'detach', sessionId: this.sessionId, kill });
+    if (kill) {
+      this.sessionId = null;
+      this.lastSeq = 0;
+    }
+    this.socket?.close();
+    this.socket = null;
+    this.setState('closed');
+  }
+}
+
+/**
+ * Base64 without `Buffer`.
+ *
+ * Terminal traffic is bytes — escape sequences and whatever a process prints —
+ * and is not valid UTF-8 in general, so it cannot travel as a JSON string.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export function base64ToBytes(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Where the gateway is, if there is one.
+ *
+ * Public by design — it is a URL, not a credential — and absent by default, so
+ * a deployment with no container infrastructure simply has no container
+ * terminal and keeps the virtual one. That is the fallback the whole feature is
+ * expected to degrade to.
+ */
+export function gatewayUrl(): string | null {
+  const configured = import.meta.env.VITE_CONTAINER_GATEWAY_URL;
+  if (typeof configured !== 'string' || !configured.trim()) return null;
+  const url = configured.trim();
+  return /^wss?:\/\//.test(url) ? url : null;
+}
+
+export function containerTerminalAvailable(): boolean {
+  return gatewayUrl() !== null;
+}

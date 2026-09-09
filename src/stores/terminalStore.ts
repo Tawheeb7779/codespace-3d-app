@@ -13,9 +13,25 @@ export interface TerminalSession extends ShellSession {
   revision: number;
 }
 
+/**
+ * Where a terminal's commands actually run.
+ *
+ * `virtual` is the in-browser shell that has always been here: instant, offline,
+ * and limited to what a browser can do. `container` is a real Linux shell in an
+ * isolated workspace, which can install packages and run servers but needs
+ * infrastructure to exist.
+ *
+ * Deliberately one setting for the panel rather than per session: a user thinks
+ * "am I in the browser or on a machine", and two tabs in different worlds
+ * sharing one prompt style is a trap.
+ */
+export type TerminalMode = 'virtual' | 'container';
+
 interface TerminalState {
   sessions: TerminalSession[];
   activeId: string | null;
+  mode: TerminalMode;
+  setMode: (mode: TerminalMode) => void;
   createSession: () => string;
   /** Create the first session only if none exists. Safe to call repeatedly. */
   ensureSession: () => string;
@@ -65,6 +81,10 @@ function newSession(index: number): TerminalSession {
 export const useTerminalStore = create<TerminalState>()((set, get) => ({
   sessions: [],
   activeId: null,
+  // Virtual until something proves a container is available, so a deployment
+  // with no gateway simply never leaves the mode that always works.
+  mode: 'virtual',
+  setMode: (mode) => set({ mode }),
 
   createSession() {
     const session = newSession(get().sessions.length);

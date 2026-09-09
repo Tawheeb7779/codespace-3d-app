@@ -37,7 +37,11 @@
     "test:e2e:platform": "node e2e/platform.mjs",
     "verify:cloud": "node scripts/verify-cloud-save.mjs",
     "test:edge": "deno test --allow-env --allow-net --no-check supabase/functions/ai-proxy/index.test.ts",
-    "audit:secrets": "node scripts/audit-secrets.mjs"
+    "audit:secrets": "node scripts/audit-secrets.mjs",
+    "gateway:test": "npm --prefix gateway test",
+    "gateway:typecheck": "npm --prefix gateway run typecheck",
+    "gateway:dev": "npm --prefix gateway run dev",
+    "image:workspace": "docker build -t ta-code/workspace:1 docker/workspace"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

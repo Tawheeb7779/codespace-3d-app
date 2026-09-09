@@ -1,0 +1,500 @@
+/**
+ * The wire protocol between TA CODE and the container gateway.
+ *
+ * One definition, imported by both sides — the browser client from `src/`, the
+ * gateway from its own package — because a protocol described twice is a
+ * protocol that drifts. It is pure data and pure functions: no DOM, no Node, no
+ * imports, so it typechecks in both builds.
+ *
+ * Everything here assumes the peer is hostile. The browser is not trusted by
+ * the gateway (a WebSocket is an anonymous socket until proven otherwise), and
+ * the gateway's frames are not trusted by the browser (a compromised or
+ * confused gateway must not be able to make the editor write arbitrary paths).
+ * So every frame is validated on arrival, on both ends, by the same code.
+ */
+
+/**
+ * Bumped when a change would make an old client misread a new frame.
+ *
+ * The client sends it in `hello`; a gateway that does not recognise it refuses
+ * the connection with a message naming both versions, rather than accepting a
+ * frame it will misinterpret.
+ */
+export const PROTOCOL_VERSION = 1;
+
+// ---------------------------------------------------------------------------
+// Limits
+//
+// These are protocol limits, not policy: they bound what a single frame can do
+// to the peer's memory before anything has decided whether the sender is even
+// allowed to be here. Resource policy — how much CPU a container gets, how many
+// sessions a user may open — lives in the gateway's config.
+// ---------------------------------------------------------------------------
+
+export const LIMITS = {
+  /** Largest frame accepted, before parsing. A megabyte of JSON is not a keystroke. */
+  maxFrameBytes: 256 * 1024,
+  /** Largest single chunk of terminal input. Paste is chunked above this. */
+  maxInputBytes: 64 * 1024,
+  /** Largest output chunk the gateway will emit in one frame. */
+  maxOutputBytes: 64 * 1024,
+  /** Terminal geometry, wide enough for any real screen and bounded. */
+  maxCols: 500,
+  maxRows: 300,
+  /** Identifier length, so an id cannot be used as a payload. */
+  maxIdLength: 128,
+  /** Frames per second from one client before it is throttled. */
+  maxFramesPerSecond: 200,
+  /** Output bytes buffered per session for replay after a reconnect. */
+  replayBufferBytes: 256 * 1024,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Error categories
+// ---------------------------------------------------------------------------
+
+export type ErrorCode =
+  | 'AUTH_ERROR'
+  | 'PERMISSION_ERROR'
+  | 'CONTAINER_ERROR'
+  | 'PTY_ERROR'
+  | 'SYNC_ERROR'
+  | 'PORT_ERROR'
+  | 'RESOURCE_LIMIT'
+  | 'TIMEOUT'
+  | 'PROTOCOL_ERROR'
+  | 'INTERNAL_ERROR';
+
+/** Categories after which the client must not simply retry the same frame. */
+export const FATAL_ERRORS: readonly ErrorCode[] = [
+  'AUTH_ERROR',
+  'PERMISSION_ERROR',
+  'PROTOCOL_ERROR',
+];
+
+// ---------------------------------------------------------------------------
+// Container lifecycle
+// ---------------------------------------------------------------------------
+
+export type ContainerStatus =
+  | 'creating'
+  | 'starting'
+  | 'ready'
+  | 'stopping'
+  | 'stopped'
+  | 'error'
+  | 'expired';
+
+/** States in which a terminal can be attached. */
+export const ATTACHABLE: readonly ContainerStatus[] = ['ready'];
+
+// ---------------------------------------------------------------------------
+// Client -> gateway
+// ---------------------------------------------------------------------------
+
+export interface HelloFrame {
+  type: 'hello';
+  protocol: number;
+  /**
+   * The caller's Supabase access token.
+   *
+   * In the frame rather than a header because a browser cannot set headers on a
+   * WebSocket handshake, and a token in the URL would reach access logs and
+   * `Referer`. The gateway verifies it with Supabase; it is never decoded
+   * client-side to decide anything.
+   */
+  token: string;
+  projectId: string;
+  /** Resume an existing session instead of starting a shell. */
+  sessionId?: string;
+  /** Last sequence the client saw, so the gateway can replay the gap. */
+  lastSeq?: number;
+  cols?: number;
+  rows?: number;
+}
+
+export interface InputFrame {
+  type: 'input';
+  sessionId: string;
+  /** Raw bytes for the PTY, base64 — terminal input is not valid UTF-8 text. */
+  data: string;
+}
+
+export interface ResizeFrame {
+  type: 'resize';
+  sessionId: string;
+  cols: number;
+  rows: number;
+}
+
+export interface SignalFrame {
+  type: 'signal';
+  sessionId: string;
+  /** Only signals a terminal user can already send from a keyboard. */
+  signal: 'SIGINT' | 'SIGQUIT' | 'SIGTERM' | 'SIGHUP';
+}
+
+export interface DetachFrame {
+  type: 'detach';
+  sessionId: string;
+  /**
+   * Whether the shell should die with the connection.
+   *
+   * Default false, and that default is the point: closing a laptop lid must not
+   * kill `npm run dev`. A session outlives its socket until the container's own
+   * idle policy reclaims it.
+   */
+  kill?: boolean;
+}
+
+export interface PingFrame {
+  type: 'ping';
+  at: number;
+}
+
+export type ClientFrame =
+  | HelloFrame
+  | InputFrame
+  | ResizeFrame
+  | SignalFrame
+  | DetachFrame
+  | PingFrame;
+
+// ---------------------------------------------------------------------------
+// Gateway -> client
+// ---------------------------------------------------------------------------
+
+export interface ReadyFrame {
+  type: 'ready';
+  protocol: number;
+  sessionId: string;
+  containerId: string;
+  status: ContainerStatus;
+  /** Which runtime is behind this session, so the UI can say so honestly. */
+  runtime: string;
+  /** True when the shell was resumed rather than started. */
+  resumed: boolean;
+  /** Sequence of the last output frame the gateway has, for gap detection. */
+  seq: number;
+}
+
+export interface OutputFrame {
+  type: 'output';
+  sessionId: string;
+  /** Monotonic per session. The client uses it to spot a gap after a reconnect. */
+  seq: number;
+  /** Raw PTY bytes, base64. */
+  data: string;
+}
+
+export interface ExitFrame {
+  type: 'exit';
+  sessionId: string;
+  exitCode: number | null;
+  signal: string | null;
+}
+
+export interface StatusFrame {
+  type: 'status';
+  containerId: string;
+  status: ContainerStatus;
+  detail?: string;
+}
+
+export interface PortsFrame {
+  type: 'ports';
+  containerId: string;
+  ports: Array<{ port: number; url: string; protocol: 'http' }>;
+}
+
+export interface ErrorFrame {
+  type: 'error';
+  code: ErrorCode;
+  /** Safe for a user to read. Never a stack trace, a path, or a credential. */
+  message: string;
+  sessionId?: string;
+  fatal: boolean;
+}
+
+export interface PongFrame {
+  type: 'pong';
+  at: number;
+}
+
+export type ServerFrame =
+  | ReadyFrame
+  | OutputFrame
+  | ExitFrame
+  | StatusFrame
+  | PortsFrame
+  | ErrorFrame
+  | PongFrame;
+
+// ---------------------------------------------------------------------------
+// Validation
+//
+// Hand-written rather than schema-driven, because this runs on every frame of a
+// terminal stream and because the failure mode of a validator that is itself
+// slow or allocation-heavy is the flooding it exists to prevent.
+// ---------------------------------------------------------------------------
+
+export class ProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProtocolError';
+  }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function str(frame: Record<string, unknown>, field: string, max: number): string {
+  const value = frame[field];
+  if (typeof value !== 'string') throw new ProtocolError(`${field} must be a string`);
+  if (value.length > max) throw new ProtocolError(`${field} is too long`);
+  return value;
+}
+
+function optionalStr(frame: Record<string, unknown>, field: string, max: number): string | undefined {
+  return frame[field] === undefined ? undefined : str(frame, field, max);
+}
+
+function int(frame: Record<string, unknown>, field: string, min: number, max: number): number {
+  const value = frame[field];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ProtocolError(`${field} must be a number`);
+  }
+  const rounded = Math.floor(value);
+  if (rounded < min || rounded > max) throw new ProtocolError(`${field} is out of range`);
+  return rounded;
+}
+
+/**
+ * An identifier the gateway will use to look something up.
+ *
+ * Restricted to a character set that cannot be a path, a shell fragment, or a
+ * PostgREST filter, because an id from a client is eventually interpolated into
+ * one of those by somebody, somewhere.
+ */
+const ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function id(frame: Record<string, unknown>, field: string): string {
+  const value = str(frame, field, LIMITS.maxIdLength);
+  if (!ID.test(value)) throw new ProtocolError(`${field} is not a valid identifier`);
+  return value;
+}
+
+/** Base64 with no whitespace, bounded before it is decoded. */
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function base64(frame: Record<string, unknown>, field: string, maxDecodedBytes: number): string {
+  const value = str(frame, field, Math.ceil((maxDecodedBytes * 4) / 3) + 8);
+  if (!BASE64.test(value)) throw new ProtocolError(`${field} is not base64`);
+  return value;
+}
+
+/**
+ * Parse one frame from a client.
+ *
+ * Throws {@link ProtocolError} for anything it does not recognise, which the
+ * server turns into a fatal `PROTOCOL_ERROR` and a closed socket. There is no
+ * lenient path: a client that sends a frame this does not understand is either
+ * broken or probing, and both are handled the same way.
+ */
+export function parseClientFrame(raw: string): ClientFrame {
+  if (raw.length > LIMITS.maxFrameBytes) throw new ProtocolError('frame is too large');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ProtocolError('frame is not valid JSON');
+  }
+  if (!isRecord(parsed)) throw new ProtocolError('frame must be an object');
+
+  const type = parsed.type;
+  switch (type) {
+    case 'hello':
+      return {
+        type: 'hello',
+        protocol: int(parsed, 'protocol', 0, 1000),
+        // Bounded but not pattern-checked: a JWT's shape is Supabase's business,
+        // and this must not become a second, weaker token validator.
+        token: str(parsed, 'token', 8192),
+        projectId: id(parsed, 'projectId'),
+        sessionId: parsed.sessionId === undefined ? undefined : id(parsed, 'sessionId'),
+        lastSeq: parsed.lastSeq === undefined ? undefined : int(parsed, 'lastSeq', 0, 2 ** 48),
+        cols: parsed.cols === undefined ? undefined : int(parsed, 'cols', 1, LIMITS.maxCols),
+        rows: parsed.rows === undefined ? undefined : int(parsed, 'rows', 1, LIMITS.maxRows),
+      };
+
+    case 'input':
+      return {
+        type: 'input',
+        sessionId: id(parsed, 'sessionId'),
+        data: base64(parsed, 'data', LIMITS.maxInputBytes),
+      };
+
+    case 'resize':
+      return {
+        type: 'resize',
+        sessionId: id(parsed, 'sessionId'),
+        cols: int(parsed, 'cols', 1, LIMITS.maxCols),
+        rows: int(parsed, 'rows', 1, LIMITS.maxRows),
+      };
+
+    case 'signal': {
+      const signal = str(parsed, 'signal', 16);
+      if (!['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP'].includes(signal)) {
+        throw new ProtocolError('unsupported signal');
+      }
+      return { type: 'signal', sessionId: id(parsed, 'sessionId'), signal: signal as SignalFrame['signal'] };
+    }
+
+    case 'detach':
+      return {
+        type: 'detach',
+        sessionId: id(parsed, 'sessionId'),
+        kill: parsed.kill === undefined ? false : parsed.kill === true,
+      };
+
+    case 'ping':
+      return { type: 'ping', at: int(parsed, 'at', 0, 2 ** 48) };
+
+    default:
+      throw new ProtocolError(`unknown frame type: ${typeof type === 'string' ? type.slice(0, 32) : 'none'}`);
+  }
+}
+
+/**
+ * Parse one frame from the gateway.
+ *
+ * The browser validates too. A gateway is more trusted than a browser, but
+ * "more trusted" is not "trusted": these frames drive an editor, and a frame
+ * that arrived malformed should be dropped rather than half-applied.
+ */
+export function parseServerFrame(raw: string): ServerFrame {
+  if (raw.length > LIMITS.maxFrameBytes) throw new ProtocolError('frame is too large');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ProtocolError('frame is not valid JSON');
+  }
+  if (!isRecord(parsed)) throw new ProtocolError('frame must be an object');
+
+  switch (parsed.type) {
+    case 'ready':
+      return {
+        type: 'ready',
+        protocol: int(parsed, 'protocol', 0, 1000),
+        sessionId: id(parsed, 'sessionId'),
+        containerId: id(parsed, 'containerId'),
+        status: containerStatus(parsed.status),
+        runtime: str(parsed, 'runtime', 64),
+        resumed: parsed.resumed === true,
+        seq: int(parsed, 'seq', 0, 2 ** 48),
+      };
+
+    case 'output':
+      return {
+        type: 'output',
+        sessionId: id(parsed, 'sessionId'),
+        seq: int(parsed, 'seq', 0, 2 ** 48),
+        data: base64(parsed, 'data', LIMITS.maxOutputBytes),
+      };
+
+    case 'exit':
+      return {
+        type: 'exit',
+        sessionId: id(parsed, 'sessionId'),
+        exitCode: parsed.exitCode === null ? null : int(parsed, 'exitCode', -1, 255),
+        signal: parsed.signal === null ? null : str(parsed, 'signal', 16),
+      };
+
+    case 'status':
+      return {
+        type: 'status',
+        containerId: id(parsed, 'containerId'),
+        status: containerStatus(parsed.status),
+        detail: optionalStr(parsed, 'detail', 400),
+      };
+
+    case 'ports': {
+      const ports = parsed.ports;
+      if (!Array.isArray(ports) || ports.length > 64) throw new ProtocolError('ports is invalid');
+      return {
+        type: 'ports',
+        containerId: id(parsed, 'containerId'),
+        ports: ports.map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('port entry is invalid');
+          return {
+            port: int(entry, 'port', 1, 65535),
+            url: str(entry, 'url', 2048),
+            protocol: 'http' as const,
+          };
+        }),
+      };
+    }
+
+    case 'error':
+      return {
+        type: 'error',
+        code: errorCode(parsed.code),
+        message: str(parsed, 'message', 400),
+        sessionId: parsed.sessionId === undefined ? undefined : id(parsed, 'sessionId'),
+        fatal: parsed.fatal === true,
+      };
+
+    case 'pong':
+      return { type: 'pong', at: int(parsed, 'at', 0, 2 ** 48) };
+
+    default:
+      throw new ProtocolError('unknown frame type');
+  }
+}
+
+const STATUSES: readonly string[] = [
+  'creating',
+  'starting',
+  'ready',
+  'stopping',
+  'stopped',
+  'error',
+  'expired',
+];
+
+function containerStatus(value: unknown): ContainerStatus {
+  if (typeof value !== 'string' || !STATUSES.includes(value)) {
+    throw new ProtocolError('unknown container status');
+  }
+  return value as ContainerStatus;
+}
+
+const CODES: readonly string[] = [
+  'AUTH_ERROR',
+  'PERMISSION_ERROR',
+  'CONTAINER_ERROR',
+  'PTY_ERROR',
+  'SYNC_ERROR',
+  'PORT_ERROR',
+  'RESOURCE_LIMIT',
+  'TIMEOUT',
+  'PROTOCOL_ERROR',
+  'INTERNAL_ERROR',
+];
+
+function errorCode(value: unknown): ErrorCode {
+  if (typeof value !== 'string' || !CODES.includes(value)) return 'INTERNAL_ERROR';
+  return value as ErrorCode;
+}
+
+/** Encode a frame for the wire. Separate so the size cap is applied in one place. */
+export function encodeFrame(frame: ClientFrame | ServerFrame): string {
+  const text = JSON.stringify(frame);
+  if (text.length > LIMITS.maxFrameBytes) {
+    throw new ProtocolError(`frame of type ${frame.type} exceeds the size limit`);
+  }
+  return text;
+}

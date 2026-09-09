@@ -1391,6 +1391,71 @@ begin
   end;
 end $$;
 
+-- --------------------------------------------------------------------------
+-- Container workspaces
+--
+-- A record of who ran code where. Readable by its owner, written only by the
+-- gateway: a user who could insert here could claim a workspace, and one who
+-- could delete could erase the record of having had one.
+-- --------------------------------------------------------------------------
+
+select pg_temp.act_as_admin();
+insert into public.container_workspaces (id, user_id, project_id, status, tier)
+values
+  ('tacode-aaa1', '11111111-1111-1111-1111-111111111111', 'prj_test_alpha', 'ready', 'free'),
+  ('tacode-bbb2', '22222222-2222-2222-2222-222222222222', 'prj_test_alpha', 'ready', 'free');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+
+select pg_temp.assert(
+  (select count(*) from public.container_workspaces) = 1,
+  'a user sees only their own container workspaces'
+);
+
+do $$
+begin
+  begin
+    insert into public.container_workspaces (id, user_id, project_id)
+    values ('tacode-forged', '22222222-2222-2222-2222-222222222222', 'prj_test_alpha');
+    raise exception 'FAIL  a user created a workspace record for another account';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot create a container workspace record';
+    when others then
+      if sqlerrm like 'FAIL%' then raise;
+      end if;
+      raise notice 'ok    a user cannot create a container workspace record';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    delete from public.container_workspaces;
+    if found then
+      raise exception 'FAIL  a user erased their container workspace history';
+    end if;
+    raise notice 'ok    a user cannot erase their container workspace history';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot erase their container workspace history';
+  end;
+end $$;
+
+do $$
+begin
+  begin
+    update public.container_workspaces set status = 'ready', last_active_at = now();
+    if found then
+      raise exception 'FAIL  a user extended their own container workspace';
+    end if;
+    raise notice 'ok    a user cannot extend their own container workspace';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a user cannot extend their own container workspace';
+  end;
+end $$;
+
 select pg_temp.act_as_admin();
 select pg_temp.assert(true, 'all authorization assertions passed');
 
