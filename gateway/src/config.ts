@@ -89,6 +89,35 @@ export interface GatewayConfig {
   maxSyncFileBytes: number;
   /** Files in one sync batch. */
   maxSyncFiles: number;
+  /**
+   * WebSocket connections this process will hold at once.
+   *
+   * A ceiling on sockets, which is a different resource from containers: an
+   * unauthenticated socket costs no container and is held for the length of the
+   * handshake deadline, so without this a client that opens and abandons
+   * sockets exhausts file descriptors long before any container limit is
+   * reached.
+   */
+  maxConnections: number;
+  /** Connections one account may hold. Bounds a single tab loop. */
+  maxConnectionsPerUser: number;
+  /**
+   * File bytes one connection may push per second.
+   *
+   * The frame budget bounds how *often* a client speaks; this bounds how much
+   * work each frame asks for. A sync push is a disk write, and two hundred
+   * frames a second of sixty-four files each is a disk-filling loop that never
+   * exceeds the frame budget.
+   */
+  maxSyncBytesPerSecond: number;
+  /**
+   * How long a runtime command may take before it is abandoned.
+   *
+   * A `docker` invocation that never returns — a wedged daemon, a host under
+   * memory pressure — otherwise holds the request that made it forever, and
+   * those requests hold sockets and sessions.
+   */
+  runtimeTimeoutMs: number;
 }
 
 function int(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -148,6 +177,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     network: env.TACODE_NETWORK === 'full' ? 'full' : 'none',
     maxSyncFileBytes: int(env, 'TACODE_MAX_SYNC_FILE_BYTES', 2 * 1024 * 1024),
     maxSyncFiles: int(env, 'TACODE_MAX_SYNC_FILES', 20_000),
+    maxConnections: int(env, 'TACODE_MAX_CONNECTIONS', 500),
+    maxConnectionsPerUser: int(env, 'TACODE_MAX_CONNECTIONS_PER_USER', 8),
+    maxSyncBytesPerSecond: int(env, 'TACODE_MAX_SYNC_BYTES_PER_SECOND', 8 * 1024 * 1024),
+    runtimeTimeoutMs: int(env, 'TACODE_RUNTIME_TIMEOUT_MS', 30_000),
   };
 }
 

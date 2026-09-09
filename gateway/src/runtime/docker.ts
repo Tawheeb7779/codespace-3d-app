@@ -138,6 +138,14 @@ export interface DockerRuntimeOptions {
   spawnPty?: (args: string[], options: SpawnOptions) => PtyHandle;
   useGvisor?: boolean;
   /**
+   * How long a `docker` invocation may take before it is abandoned.
+   *
+   * Without it a wedged daemon holds the caller forever, and the caller is
+   * usually a WebSocket handshake or a reaper sweep — so one stuck command
+   * becomes a stuck gateway rather than one failed request.
+   */
+  timeoutMs?: number;
+  /**
    * Force the disk-quota decision instead of probing for it.
    *
    * Exists for tests; production probes once, at `available()`, because the
@@ -174,7 +182,13 @@ export async function probeDiskQuota(
 
 export function createDockerRuntime(options: DockerRuntimeOptions = {}): ContainerRuntime {
   const exec =
-    options.exec ?? ((args: string[]) => run('docker', args, { maxBuffer: 4 * 1024 * 1024 }));
+    options.exec ??
+    ((args: string[]) =>
+      run('docker', args, {
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: options.timeoutMs ?? 30_000,
+        killSignal: 'SIGKILL',
+      }));
 
   // Decided once, at startup, and then fixed: it is a property of the daemon.
   let diskQuota = options.diskQuota ?? false;

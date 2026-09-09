@@ -59,6 +59,16 @@ interface Connection {
   frameBudget: number;
   budgetResetAt: number;
   /**
+   * File bytes this socket may still push this second.
+   *
+   * Separate from the frame budget because they bound different things: the
+   * frame budget says how often a client may speak, this says how much work
+   * each frame may ask for. A push is a disk write, and a client staying inside
+   * the frame budget can still ask for gigabytes a second of them.
+   */
+  syncBudget: number;
+  syncResetAt: number;
+  /**
    * This socket's subscription to its container's filesystem, if it has one.
    *
    * Held so that closing the socket unsubscribes it. Without that the service
@@ -131,20 +141,46 @@ export function createGateway(deps: GatewayDeps): {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.maxFrameBytes });
 
+  /**
+   * Whether the container runtime is answering, cached briefly.
+   *
+   * Cached because a health endpoint is polled every few seconds by every
+   * probe that exists, and `docker version` is a round trip to a daemon that
+   * may be the thing under strain. Briefly, because the point of asking is to
+   * notice when the answer changes.
+   */
+  let runtimeCheckedAt = 0;
+  let runtimeOk = true;
+  async function runtimeHealth(): Promise<boolean> {
+    const now = Date.now();
+    if (now - runtimeCheckedAt < 5000) return runtimeOk;
+    runtimeCheckedAt = now;
+    runtimeOk = await runtime.available().catch(() => false);
+    return runtimeOk;
+  }
+
   async function handleHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = request.url ?? '/';
 
     if (url === '/health' || url.startsWith('/health?')) {
+      // Two different questions, and conflating them is how an orchestrator
+      // keeps routing traffic to a gateway that cannot start a single
+      // workspace. `ok` is "this process is serving"; `runtimeAvailable` is
+      // "the container runtime answers". A 503 when the runtime is gone is
+      // what makes a load balancer act on the difference.
+      const runtimeAvailable = await runtimeHealth();
+      response.writeHead(runtimeAvailable ? 200 : 503, { 'content-type': 'application/json' });
       // Deliberately says nothing about who is using it. A health endpoint is
       // usually the most exposed thing a service has.
-      response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
           ok: true,
+          runtimeAvailable,
           runtime: runtime.name,
           isolated: runtime.isolates,
           protocol: PROTOCOL_VERSION,
           containers: containers.size,
+          connections: connections.size,
         }),
       );
       return;
@@ -196,6 +232,13 @@ export function createGateway(deps: GatewayDeps): {
       socket.destroy();
       return;
     }
+    // Refused before the WebSocket is accepted, so a flood costs a rejected
+    // handshake rather than a socket held for the handshake deadline.
+    if (connections.size >= config.maxConnections) {
+      logger.event('terminal_rejected', { reason: 'gateway at connection capacity' });
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+      return;
+    }
     if (!originAllowed(request, config)) {
       logger.event('terminal_rejected', { reason: 'origin not allowed' });
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
@@ -214,6 +257,8 @@ export function createGateway(deps: GatewayDeps): {
       session: null,
       frameBudget: LIMITS.maxFramesPerSecond,
       budgetResetAt: Date.now() + 1000,
+      syncBudget: config.maxSyncBytesPerSecond,
+      syncResetAt: Date.now() + 1000,
       syncOf: null,
     };
     connections.add(connection);
@@ -300,6 +345,10 @@ export function createGateway(deps: GatewayDeps): {
         frame.type === 'sync-push' ||
         frame.type === 'sync-delete'
       ) {
+        if (frame.type === 'sync-push' && !spendSync(connection, frame.files)) {
+          fail(connection, resourceLimit('Files are being synchronised faster than the workspace accepts.'));
+          return;
+        }
         await onSync(connection, frame);
         return;
       }
@@ -386,6 +435,15 @@ export function createGateway(deps: GatewayDeps): {
     if (connection.userId) throw protocolError('duplicate hello');
 
     const { identity } = await authorizeTerminal(authorizer, frame.token, frame.projectId);
+
+    // Counted after authentication, because before it there is no user to
+    // count against — which is also why the total cap above exists separately.
+    let mine = 0;
+    for (const other of connections) if (other.userId === identity.userId) mine += 1;
+    if (mine >= config.maxConnectionsPerUser) {
+      throw resourceLimit('You have too many terminals open. Close one and try again.');
+    }
+
     connection.userId = identity.userId;
     connection.projectId = frame.projectId;
 
@@ -491,6 +549,26 @@ export function createGateway(deps: GatewayDeps): {
     }
     connection.frameBudget -= 1;
     return connection.frameBudget >= 0;
+  }
+
+  /**
+   * Charge a push against this socket's byte budget, refilled once a second.
+   *
+   * Refused as a whole rather than partially: applying half a batch would
+   * leave the editor believing files landed that did not, and the conflict
+   * machinery cannot tell that apart from a container-side change.
+   */
+  function spendSync(connection: Connection, files: Array<{ content: string }>): boolean {
+    const now = Date.now();
+    if (now > connection.syncResetAt) {
+      connection.syncBudget = config.maxSyncBytesPerSecond;
+      connection.syncResetAt = now + 1000;
+    }
+    let bytes = 0;
+    for (const file of files) bytes += file.content.length;
+    if (bytes > connection.syncBudget) return false;
+    connection.syncBudget -= bytes;
+    return true;
   }
 
   function send(connection: Connection, frame: ServerFrame): void {
