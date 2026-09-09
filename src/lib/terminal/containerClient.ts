@@ -5,7 +5,9 @@ import {
   parseServerFrame,
   type ContainerStatus,
   type ErrorCode,
+  type ManifestEntryFrame,
   type ServerFrame,
+  type SyncAckFrame,
 } from '@/lib/terminal/protocol';
 
 /**
@@ -44,6 +46,22 @@ export interface ContainerTerminalOptions {
   onStatus?: (status: ContainerStatus, detail?: string) => void;
   onExit?: (exitCode: number | null, signal: string | null) => void;
   onError?: (code: ErrorCode, message: string, fatal: boolean) => void;
+  /** The gateway's answer to a manifest: what to send, and what never will be. */
+  onSyncPlan?: (plan: {
+    needed: string[];
+    diverged: Array<{ path: string; containerHash: string }>;
+    skipped: Array<{ path: string; reason: string }>;
+    stale: string[];
+  }) => void;
+  /** The outcome of a push, including any conflict the editor must resolve. */
+  onSyncAck?: (results: SyncAckFrame['results']) => void;
+  /** What the container did to the files. */
+  onSyncChanged?: (
+    files: Array<{ path: string; content: string; hash: string }>,
+    deleted: string[],
+  ) => void;
+  /** Too much changed to enumerate; the editor should send a fresh manifest. */
+  onSyncStorm?: (count: number) => void;
   /** Injected in tests; defaults to the platform's WebSocket. */
   createSocket?: (url: string) => WebSocket;
 }
@@ -188,6 +206,27 @@ export class ContainerTerminal {
         }
         break;
 
+      case 'sync-plan':
+        this.options.onSyncPlan?.({
+          needed: frame.needed,
+          diverged: frame.diverged,
+          skipped: frame.skipped,
+          stale: frame.stale,
+        });
+        break;
+
+      case 'sync-ack':
+        this.options.onSyncAck?.(frame.results);
+        break;
+
+      case 'sync-changed':
+        this.options.onSyncChanged?.(frame.files, frame.deleted);
+        break;
+
+      case 'sync-storm':
+        this.options.onSyncStorm?.(frame.count);
+        break;
+
       case 'ports':
       case 'pong':
         break;
@@ -239,6 +278,50 @@ export class ContainerTerminal {
   interrupt(): void {
     if (!this.sessionId) return;
     this.send({ type: 'signal', sessionId: this.sessionId, signal: 'SIGINT' });
+  }
+
+  // -------------------------------------------------------------------------
+  // File synchronisation
+  //
+  // Addressed by container, not by session: the workspace's files belong to the
+  // workspace, and two terminals on one project share them. Every method here
+  // is a no-op before `ready`, because until then there is no container id to
+  // address and a frame naming none is a protocol error.
+  // -------------------------------------------------------------------------
+
+  /** Offer the project's file list; the gateway answers with what it needs. */
+  sendManifest(files: ManifestEntryFrame[]): void {
+    if (!this.containerId) return;
+    this.send({ type: 'sync-manifest', containerId: this.containerId, files });
+  }
+
+  /**
+   * Send edited files into the container.
+   *
+   * Chunked to the protocol's batch size rather than assumed to fit: a save-all
+   * over a large project is one call here and must not become one frame the
+   * gateway refuses to read.
+   */
+  pushFiles(files: Array<{ path: string; content: string; baseHash?: string }>): void {
+    if (!this.containerId || !files.length) return;
+    for (let offset = 0; offset < files.length; offset += LIMITS.maxSyncBatchFiles) {
+      this.send({
+        type: 'sync-push',
+        containerId: this.containerId,
+        files: files.slice(offset, offset + LIMITS.maxSyncBatchFiles),
+      });
+    }
+  }
+
+  deleteFiles(paths: string[]): void {
+    if (!this.containerId || !paths.length) return;
+    for (let offset = 0; offset < paths.length; offset += LIMITS.maxSyncBatchFiles) {
+      this.send({
+        type: 'sync-delete',
+        containerId: this.containerId,
+        paths: paths.slice(offset, offset + LIMITS.maxSyncBatchFiles),
+      });
+    }
   }
 
   /**

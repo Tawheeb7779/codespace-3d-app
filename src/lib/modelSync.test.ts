@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changedPaths, hasRemovals } from '@/lib/modelSync';
+import { changedPaths, hasRemovals, minimalEdit } from '@/lib/modelSync';
 
 /**
  * What the editor has to reconcile after a write.
@@ -94,5 +94,71 @@ describe('whether anything was removed', () => {
 
   it('is false on the first sync', () => {
     expect(hasRemovals({}, { 'a.ts': 'a' })).toBe(false);
+  });
+});
+
+describe('the smallest edit between two texts', () => {
+  /**
+   * The property that matters is not "it produces some edit" — replacing the
+   * whole file always does — but that applying it reproduces the target while
+   * touching as little as possible. The first is correctness; the second is
+   * whether the cursor and the undo stack survive.
+   */
+  const applied = (current: string, next: string) => {
+    const edit = minimalEdit(current, next);
+    if (!edit) return current;
+    return current.slice(0, edit.start) + edit.text + current.slice(edit.end);
+  };
+
+  it('is nothing at all when the texts are identical', () => {
+    expect(minimalEdit('const x = 1;', 'const x = 1;')).toBeNull();
+  });
+
+  it('touches only the characters that changed', () => {
+    const edit = minimalEdit('const x = 1;', 'const x = 2;');
+
+    expect(edit).toEqual({ start: 10, end: 11, text: '2' });
+  });
+
+  it('is an insertion with an empty range when text is only added', () => {
+    const edit = minimalEdit('ab', 'axb')!;
+
+    expect(edit.start).toBe(edit.end);
+    expect(edit.text).toBe('x');
+  });
+
+  it('is a deletion with empty text when text is only removed', () => {
+    const edit = minimalEdit('axb', 'ab')!;
+
+    expect(edit.text).toBe('');
+    expect(edit.end - edit.start).toBe(1);
+  });
+
+  /**
+   * The case that makes a naive prefix/suffix scan produce an inverted range:
+   * the scans meet in the middle and both claim the same characters.
+   */
+  it('does not let the prefix and suffix scans overlap', () => {
+    const edit = minimalEdit('aaa', 'aa')!;
+
+    expect(edit.start).toBeLessThanOrEqual(edit.end);
+    expect(applied('aaa', 'aa')).toBe('aa');
+  });
+
+  it('reproduces the target for every shape of change', () => {
+    const cases: Array<[string, string]> = [
+      ['', 'new file\n'],
+      ['gone\n', ''],
+      ['line one\nline two\n', 'line one\nline CHANGED\n'],
+      ['prefix same suffix', 'prefix different suffix'],
+      ['aaaa', 'aaaaa'],
+      ['aaaaa', 'aaaa'],
+      ['abc', 'cba'],
+      ['ünïcödé 🎉', 'ünïcödé 🎈'],
+    ];
+
+    for (const [current, next] of cases) {
+      expect(applied(current, next), `${current} -> ${next}`).toBe(next);
+    }
   });
 });

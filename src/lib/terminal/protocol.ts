@@ -20,7 +20,7 @@
  * the connection with a message naming both versions, rather than accepting a
  * frame it will misinterpret.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -47,6 +47,21 @@ export const LIMITS = {
   maxFramesPerSecond: 200,
   /** Output bytes buffered per session for replay after a reconnect. */
   replayBufferBytes: 256 * 1024,
+  /**
+   * Largest file either side will synchronise.
+   *
+   * Well under `maxFrameBytes`, because a sync frame carries a file *and* its
+   * envelope, and because a file this size is not one somebody is editing — it
+   * is a bundle, a lockfile or an asset, and copying it on every keystroke is
+   * how a sync engine becomes the reason the editor is slow.
+   */
+  maxSyncFileBytes: 128 * 1024,
+  /** Files in one push or one change batch, so a batch stays a frame. */
+  maxSyncBatchFiles: 64,
+  /** Paths in a manifest. A project larger than this does not get a container. */
+  maxManifestFiles: 5000,
+  /** Path length on the wire, before either side normalises it. */
+  maxPathLength: 1024,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -152,13 +167,74 @@ export interface PingFrame {
   at: number;
 }
 
+// ---------------------------------------------------------------------------
+// File synchronisation
+//
+// The editor's virtual filesystem and the container's real one are two writers
+// over one tree. These frames are the whole conversation between them, and its
+// shape follows from one decision: content hashes, never timestamps.
+//
+// A hash answers "is this the same file", which is a question both sides can
+// answer identically. A timestamp answers "which happened later", which is the
+// wrong question — `npm install` rewrites thousands of mtimes, the container's
+// clock is not the browser's, and a file written twice with the same bytes is
+// not a change at all.
+// ---------------------------------------------------------------------------
+
+/** One file's identity, without its content. */
+export interface ManifestEntryFrame {
+  path: string;
+  hash: string;
+  size: number;
+}
+
+/**
+ * "Here is my whole project; tell me what you are missing."
+ *
+ * Sent once when the panel opens, and again after a storm. The answer is a
+ * list of paths, not a transfer, so a reconnect costs the files that actually
+ * differ rather than the project — on a large repository that is the
+ * difference between a feature and one nobody waits for.
+ */
+export interface SyncManifestFrame {
+  type: 'sync-manifest';
+  containerId: string;
+  files: ManifestEntryFrame[];
+}
+
+export interface SyncPushFrame {
+  type: 'sync-push';
+  containerId: string;
+  files: Array<{
+    path: string;
+    content: string;
+    /**
+     * What the editor believed the file held before this edit.
+     *
+     * The conflict check, and the reason this is not just a write. If the file
+     * on disk is neither this nor what is being written, the container changed
+     * it too and the gateway refuses rather than choosing a winner.
+     */
+    baseHash?: string;
+  }>;
+}
+
+export interface SyncDeleteFrame {
+  type: 'sync-delete';
+  containerId: string;
+  paths: string[];
+}
+
 export type ClientFrame =
   | HelloFrame
   | InputFrame
   | ResizeFrame
   | SignalFrame
   | DetachFrame
-  | PingFrame;
+  | PingFrame
+  | SyncManifestFrame
+  | SyncPushFrame
+  | SyncDeleteFrame;
 
 // ---------------------------------------------------------------------------
 // Gateway -> client
@@ -221,6 +297,64 @@ export interface PongFrame {
   at: number;
 }
 
+/** The answer to a manifest: what to send, what will never be sent, what is extra. */
+export interface SyncPlanFrame {
+  type: 'sync-plan';
+  containerId: string;
+  /** Paths the container does not have at all, so sending them is safe. */
+  needed: string[];
+  /**
+   * Paths both sides hold with different content.
+   *
+   * Not "needed": pushing over one of these loses whichever version the person
+   * did not choose, and they have not been asked. Reported with the
+   * container's hash so the editor can present the disagreement.
+   */
+  diverged: Array<{ path: string; containerHash: string }>;
+  /** Paths that will never cross, each with a reason a user can read. */
+  skipped: Array<{ path: string; reason: string }>;
+  /**
+   * In the container, unknown to the editor.
+   *
+   * Reported, never deleted: a container's extra files are usually build
+   * output, and deleting whatever the editor has not heard of is how a sync
+   * engine destroys the `dist` somebody was serving.
+   */
+  stale: string[];
+}
+
+export interface SyncAckFrame {
+  type: 'sync-ack';
+  containerId: string;
+  results: Array<
+    | { status: 'written' | 'unchanged'; path: string; hash: string }
+    | { status: 'skipped'; path: string; reason: string }
+    | { status: 'conflict'; path: string; containerHash: string; editorHash: string }
+  >;
+}
+
+/** What the container did to the files, pushed as it happens. */
+export interface SyncChangedFrame {
+  type: 'sync-changed';
+  containerId: string;
+  files: Array<{ path: string; content: string; hash: string }>;
+  deleted: string[];
+}
+
+/**
+ * "Too much changed to list."
+ *
+ * `npm install` writes tens of thousands of files. Enumerating them is not a
+ * smaller problem than resynchronising, so past a threshold the gateway says
+ * how many and the editor sends a fresh manifest. Degrading loudly beats
+ * falling over quietly.
+ */
+export interface SyncStormFrame {
+  type: 'sync-storm';
+  containerId: string;
+  count: number;
+}
+
 export type ServerFrame =
   | ReadyFrame
   | OutputFrame
@@ -228,7 +362,11 @@ export type ServerFrame =
   | StatusFrame
   | PortsFrame
   | ErrorFrame
-  | PongFrame;
+  | PongFrame
+  | SyncPlanFrame
+  | SyncAckFrame
+  | SyncChangedFrame
+  | SyncStormFrame;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -281,6 +419,50 @@ const ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 function id(frame: Record<string, unknown>, field: string): string {
   const value = str(frame, field, LIMITS.maxIdLength);
   if (!ID.test(value)) throw new ProtocolError(`${field} is not a valid identifier`);
+  return value;
+}
+
+/**
+ * A workspace-relative path, checked syntactically.
+ *
+ * This is not the security boundary and must not be mistaken for one: the
+ * boundary is `resolveInWorkspace` in the gateway and `normalizePath` in the
+ * browser, each of which resolves a path against a root and refuses anything
+ * that escapes it. This is the cheap layer in front of them — it rejects the
+ * obviously hostile shape before a frame is allocated, so a traversal attempt
+ * never reaches the code that would have to reject it anyway.
+ */
+function relativePath(value: unknown, field: string): string {
+  if (typeof value !== 'string') throw new ProtocolError(`${field} must be a string`);
+  if (value.length === 0 || value.length > LIMITS.maxPathLength) {
+    throw new ProtocolError(`${field} is not a valid path`);
+  }
+  // Absolute, drive-relative, Windows-separated, or containing a traversal
+  // segment, a NUL, or any other control character.
+  if (
+    value.startsWith('/') ||
+    value.includes('\\') ||
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    value.split('/').some((segment) => segment === '..' || segment === '.')
+  ) {
+    throw new ProtocolError(`${field} is not a valid path`);
+  }
+  return value;
+}
+
+/** A content hash as this protocol writes them: 32 lowercase hex characters. */
+const HASH = /^[0-9a-f]{32}$/;
+
+function hash(frame: Record<string, unknown>, field: string): string {
+  const value = str(frame, field, 64);
+  if (!HASH.test(value)) throw new ProtocolError(`${field} is not a content hash`);
+  return value;
+}
+
+function array(value: unknown, field: string, max: number): unknown[] {
+  if (!Array.isArray(value)) throw new ProtocolError(`${field} must be an array`);
+  if (value.length > max) throw new ProtocolError(`${field} has too many entries`);
   return value;
 }
 
@@ -360,6 +542,43 @@ export function parseClientFrame(raw: string): ClientFrame {
 
     case 'ping':
       return { type: 'ping', at: int(parsed, 'at', 0, 2 ** 48) };
+
+    case 'sync-manifest':
+      return {
+        type: 'sync-manifest',
+        containerId: id(parsed, 'containerId'),
+        files: array(parsed.files, 'files', LIMITS.maxManifestFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('manifest entry is invalid');
+          return {
+            path: relativePath(entry.path, 'path'),
+            hash: hash(entry, 'hash'),
+            size: int(entry, 'size', 0, 2 ** 32),
+          };
+        }),
+      };
+
+    case 'sync-push':
+      return {
+        type: 'sync-push',
+        containerId: id(parsed, 'containerId'),
+        files: array(parsed.files, 'files', LIMITS.maxSyncBatchFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('push entry is invalid');
+          return {
+            path: relativePath(entry.path, 'path'),
+            content: str(entry, 'content', LIMITS.maxSyncFileBytes),
+            baseHash: entry.baseHash === undefined ? undefined : hash(entry, 'baseHash'),
+          };
+        }),
+      };
+
+    case 'sync-delete':
+      return {
+        type: 'sync-delete',
+        containerId: id(parsed, 'containerId'),
+        paths: array(parsed.paths, 'paths', LIMITS.maxSyncBatchFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+      };
 
     default:
       throw new ProtocolError(`unknown frame type: ${typeof type === 'string' ? type.slice(0, 32) : 'none'}`);
@@ -449,6 +668,76 @@ export function parseServerFrame(raw: string): ServerFrame {
 
     case 'pong':
       return { type: 'pong', at: int(parsed, 'at', 0, 2 ** 48) };
+
+    case 'sync-plan':
+      return {
+        type: 'sync-plan',
+        containerId: id(parsed, 'containerId'),
+        needed: array(parsed.needed, 'needed', LIMITS.maxManifestFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+        diverged: array(parsed.diverged, 'diverged', LIMITS.maxManifestFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('diverged entry is invalid');
+          return { path: relativePath(entry.path, 'path'), containerHash: hash(entry, 'containerHash') };
+        }),
+        skipped: array(parsed.skipped, 'skipped', LIMITS.maxManifestFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('skipped entry is invalid');
+          return { path: relativePath(entry.path, 'path'), reason: str(entry, 'reason', 200) };
+        }),
+        stale: array(parsed.stale, 'stale', LIMITS.maxManifestFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+      };
+
+    case 'sync-ack':
+      return {
+        type: 'sync-ack',
+        containerId: id(parsed, 'containerId'),
+        results: array(parsed.results, 'results', LIMITS.maxSyncBatchFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('result entry is invalid');
+          const path = relativePath(entry.path, 'path');
+          switch (entry.status) {
+            case 'written':
+            case 'unchanged':
+              return { status: entry.status, path, hash: hash(entry, 'hash') };
+            case 'skipped':
+              return { status: 'skipped' as const, path, reason: str(entry, 'reason', 200) };
+            case 'conflict':
+              return {
+                status: 'conflict' as const,
+                path,
+                containerHash: hash(entry, 'containerHash'),
+                editorHash: hash(entry, 'editorHash'),
+              };
+            default:
+              throw new ProtocolError('unknown sync result status');
+          }
+        }),
+      };
+
+    case 'sync-changed':
+      return {
+        type: 'sync-changed',
+        containerId: id(parsed, 'containerId'),
+        files: array(parsed.files, 'files', LIMITS.maxSyncBatchFiles).map((entry) => {
+          if (!isRecord(entry)) throw new ProtocolError('changed entry is invalid');
+          return {
+            path: relativePath(entry.path, 'path'),
+            content: str(entry, 'content', LIMITS.maxSyncFileBytes),
+            hash: hash(entry, 'hash'),
+          };
+        }),
+        deleted: array(parsed.deleted, 'deleted', LIMITS.maxSyncBatchFiles).map((path) =>
+          relativePath(path, 'path'),
+        ),
+      };
+
+    case 'sync-storm':
+      return {
+        type: 'sync-storm',
+        containerId: id(parsed, 'containerId'),
+        count: int(parsed, 'count', 0, 2 ** 32),
+      };
 
     default:
       throw new ProtocolError('unknown frame type');

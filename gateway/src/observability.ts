@@ -29,6 +29,8 @@ export type EventName =
   | 'sync_completed'
   | 'sync_failed'
   | 'sync_conflict'
+  /** The watcher gave up enumerating a burst; the client must resynchronise. */
+  | 'sync_storm'
   | 'port_opened'
   | 'port_closed'
   | 'port_denied'

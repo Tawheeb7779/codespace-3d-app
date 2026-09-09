@@ -10,6 +10,7 @@ import {
   gatewayUrl,
   type ConnectionState,
 } from '@/lib/terminal/containerClient';
+import { attachWorkspaceSync, detachWorkspaceSync } from '@/lib/terminal/fileStoreSync';
 import { TERMINAL_COLORS } from '@/components/ide/terminalColors';
 import { cx } from '@/lib/utils';
 
@@ -103,7 +104,19 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
       term.open(host);
 
       const decoder = new TextDecoder();
-      const client = new ContainerTerminalClient({
+      // One sync engine per project, created before the client so the frame
+      // handlers below can hand it the gateway's answers. Attaching is
+      // idempotent: a second tab on this project joins the same engine.
+      const sync = attachWorkspaceSync(projectId, {
+        sendManifest: (files) => client.sendManifest(files),
+        pushFiles: (files) => client.pushFiles(files),
+        deleteFiles: (paths) => client.deleteFiles(paths),
+        get containerId() {
+          return client.containerId;
+        },
+      });
+
+      const client: ContainerTerminalClient = new ContainerTerminalClient({
         gatewayUrl: url,
         projectId,
         token: currentToken,
@@ -113,9 +126,18 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
         onState: (next, why) => {
           setState(next);
           setDetail(why ?? '');
+          // The container has a filesystem only once it is ready, and the
+          // manifest is what establishes what is already on it. Sent here
+          // rather than on mount because a reconnect needs it again: the
+          // container may have been rebuilt while the tab was away.
+          if (next === 'ready') void sync.start();
         },
         onExit: (code) => term.writeln(`\r\n\x1b[2m[process exited with code ${code ?? 0}]\x1b[0m`),
         onError: (_code, message) => term.writeln(`\r\n\x1b[31m${message}\x1b[0m`),
+        onSyncPlan: (plan) => void sync.onPlan(plan),
+        onSyncAck: (results) => sync.onAck(results),
+        onSyncChanged: (files, deleted) => sync.onChanged(files, deleted),
+        onSyncStorm: () => sync.onStorm(),
       });
 
       // Every keystroke, as typed. No line buffering: the PTY owns editing.
@@ -207,6 +229,7 @@ export function ContainerTerminalView({ sessionId }: { sessionId: string }) {
  * its shells into the next one would be both confusing and wrong.
  */
 export function disposeContainerTerminals(projectId?: string): void {
+  detachWorkspaceSync(projectId);
   for (const [key, entry] of live) {
     if (projectId && !key.startsWith(`${projectId}:`)) continue;
     entry.client.disconnect();

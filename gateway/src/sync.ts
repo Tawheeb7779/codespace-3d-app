@@ -153,7 +153,13 @@ export async function applyEditorWrite(
 
   // The file changed under us since the editor last saw it, and the editor is
   // not writing that same content — genuinely concurrent, so refuse.
-  if (currentHash !== null && file.baseHash !== undefined && currentHash !== file.baseHash) {
+  //
+  // A missing `baseHash` is treated the same way when the file exists, and
+  // that is the stricter reading on purpose: the editor omits it only for a
+  // file the plan said the container did not have, so a file that is there
+  // anyway appeared between the plan and this write. Rare, and precisely the
+  // race where "no base" would otherwise mean "overwrite whatever is there".
+  if (currentHash !== null && currentHash !== file.baseHash) {
     return { status: 'conflict', path, containerHash: currentHash, editorHash: nextHash };
   }
 
@@ -223,7 +229,12 @@ export function planInitialSync(
   editorManifest: ManifestEntry[],
   containerManifest: ManifestEntry[],
   limits: SyncLimits,
-): { needed: string[]; skipped: Array<{ path: string; reason: string }>; stale: string[] } {
+): {
+  needed: string[];
+  diverged: Array<{ path: string; containerHash: string }>;
+  skipped: Array<{ path: string; reason: string }>;
+  stale: string[];
+} {
   if (editorManifest.length > limits.maxFiles) {
     throw new GatewayError(
       'SYNC_ERROR',
@@ -234,6 +245,7 @@ export function planInitialSync(
 
   const container = new Map(containerManifest.map((entry) => [entry.path, entry.hash]));
   const needed: string[] = [];
+  const diverged: Array<{ path: string; containerHash: string }> = [];
   const skipped: Array<{ path: string; reason: string }> = [];
 
   for (const entry of editorManifest) {
@@ -245,7 +257,22 @@ export function planInitialSync(
       skipped.push({ path: entry.path, reason: 'file exceeds the size limit' });
       continue;
     }
-    if (container.get(entry.path) !== entry.hash) needed.push(entry.path);
+
+    const present = container.get(entry.path);
+    if (present === entry.hash) continue;
+
+    // Absent from the container, so sending it can overwrite nothing.
+    if (present === undefined) {
+      needed.push(entry.path);
+      continue;
+    }
+
+    // Present, and different. Both sides have content and neither is derived
+    // from the other — a `git checkout` in the terminal, or a container that
+    // outlived the tab that filled it. Pushing over it is a silent data loss,
+    // and it is the loss nobody notices until the file is needed, so this is
+    // reported as a conflict exactly like a concurrent write.
+    diverged.push({ path: entry.path, containerHash: present });
   }
 
   // Present in the container, gone from the editor. Reported rather than
@@ -257,7 +284,39 @@ export function planInitialSync(
     .filter((entry) => !editorPaths.has(entry.path) && shouldSync(entry.path))
     .map((entry) => entry.path);
 
-  return { needed, skipped, stale };
+  return { needed, diverged, skipped, stale };
+}
+
+/**
+ * What the container's filesystem actually holds, as a manifest.
+ *
+ * Read from disk rather than from {@link SyncIndex}, and the difference
+ * matters: the index knows what *this gateway* wrote or read, which after a
+ * restart, a `git checkout` or a build is a strict and unhelpful subset of what
+ * is there. A plan built from the index would ask the editor to resend files
+ * the container already has, which on a large project is the whole project.
+ *
+ * Bounded by `maxFiles`, and it reads every file it lists — so it is called
+ * once, when a panel opens or after a storm, and never on the hot path.
+ */
+export async function containerManifest(
+  workspaceDir: string,
+  paths: string[],
+  limits: SyncLimits,
+): Promise<ManifestEntry[]> {
+  const entries: ManifestEntry[] = [];
+  for (const path of paths.slice(0, limits.maxFiles)) {
+    const target = resolveInWorkspace(workspaceDir, path);
+    const info = await stat(target).catch(() => null);
+    if (!info || !info.isFile()) continue;
+    // Hashing a 200MB artefact to decide it will never be synced is work with
+    // no possible consumer.
+    if (info.size > limits.maxFileBytes) continue;
+    const raw = await readFile(target).catch(() => null);
+    if (raw === null) continue;
+    entries.push({ path, hash: hashContent(raw), size: info.size });
+  }
+  return entries;
 }
 
 async function readIfPresent(target: string): Promise<Buffer | null> {

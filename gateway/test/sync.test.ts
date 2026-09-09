@@ -201,7 +201,13 @@ describe('when both sides changed the same file', () => {
 });
 
 describe('the initial synchronisation', () => {
-  it('asks only for the files the container does not already have', async () => {
+  /**
+   * Three cases, and the middle one is the interesting one. A file the
+   * container has with different content is not "needed": sending it would
+   * overwrite a version nobody chose. Only a file the container does not have
+   * at all can be pushed without a decision.
+   */
+  it('separates what is missing from what disagrees', async () => {
     const plan = planInitialSync(
       [
         { path: 'a.ts', hash: 'h1', size: 10 },
@@ -215,7 +221,14 @@ describe('the initial synchronisation', () => {
       limits,
     );
 
-    expect(plan.needed).toEqual(['b.ts', 'c.ts']);
+    // Identical on both sides, so there is nothing to do about it at all.
+    expect(plan.needed).not.toContain('a.ts');
+    expect(plan.diverged.map((entry) => entry.path)).not.toContain('a.ts');
+    // Absent from the container: safe to send.
+    expect(plan.needed).toEqual(['c.ts']);
+    // Present and different: the person decides, and the container's hash goes
+    // with it so the editor can show what it is disagreeing with.
+    expect(plan.diverged).toEqual([{ path: 'b.ts', containerHash: 'different' }]);
   });
 
   it('skips protected and oversized files rather than failing the whole sync', () => {

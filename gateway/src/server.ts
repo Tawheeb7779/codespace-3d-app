@@ -19,6 +19,7 @@ import { correlationId, type Logger } from './observability.ts';
 import type { ContainerRuntime } from './runtime/types.ts';
 import { WORKSPACE_MOUNT } from './runtime/docker.ts';
 import { parseProxyPath, proxyHttp, proxyUpgrade } from './ports.ts';
+import { SyncService, type SyncSubscriber } from './syncService.ts';
 
 /**
  * The gateway: one HTTP server, three jobs.
@@ -56,6 +57,14 @@ interface Connection {
   /** Sliding budget, refilled once a second, that bounds frame rate per socket. */
   frameBudget: number;
   budgetResetAt: number;
+  /**
+   * This socket's subscription to its container's filesystem, if it has one.
+   *
+   * Held so that closing the socket unsubscribes it. Without that the service
+   * keeps a watcher alive for a browser that is gone, and sends change frames
+   * into a closed socket forever.
+   */
+  syncOf: { containerId: string; subscriber: SyncSubscriber } | null;
 }
 
 export function createGateway(deps: GatewayDeps): {
@@ -66,7 +75,10 @@ export function createGateway(deps: GatewayDeps): {
 } {
   const { config, runtime, authorizer, logger } = deps;
   const sessions = new SessionRegistry();
-  const containers = new ContainerManager(config, runtime, sessions, logger);
+  const sync = new SyncService(config, logger);
+  const containers = new ContainerManager(config, runtime, sessions, logger, (containerId) =>
+    sync.stop(containerId),
+  );
   containers.startReaper();
 
   const server = createServer((request, response) => {
@@ -173,6 +185,7 @@ export function createGateway(deps: GatewayDeps): {
       session: null,
       frameBudget: LIMITS.maxFramesPerSecond,
       budgetResetAt: Date.now() + 1000,
+      syncOf: null,
     };
     logger.event('terminal_connected', { correlationId: connection.correlation });
 
@@ -203,6 +216,10 @@ export function createGateway(deps: GatewayDeps): {
       clearTimeout(deadline);
       // Detach, do not kill. A closed tab must leave `npm run dev` running.
       connection.session?.detach();
+      if (connection.syncOf) {
+        sync.unsubscribe(connection.syncOf.containerId, connection.syncOf.subscriber);
+        connection.syncOf = null;
+      }
       logger.event('terminal_disconnected', {
         correlationId: connection.correlation,
         userId: connection.userId ?? undefined,
@@ -241,9 +258,21 @@ export function createGateway(deps: GatewayDeps): {
         return;
       }
 
-      // Everything else needs an authenticated socket and a session that
-      // belongs to the authenticated user — never one merely named by id.
+      // Everything past here needs an authenticated socket.
       if (!connection.userId) throw new GatewayError('AUTH_ERROR', 'Not authenticated.');
+
+      // Sync frames are addressed by container rather than by session: a
+      // workspace's files outlive any one shell, and two terminals on the same
+      // project must not each carry their own view of the tree.
+      if (
+        frame.type === 'sync-manifest' ||
+        frame.type === 'sync-push' ||
+        frame.type === 'sync-delete'
+      ) {
+        await onSync(connection, frame);
+        return;
+      }
+
       const session = sessions.find(frame.sessionId, connection.userId);
       if (!session) {
         // Same answer for "no such session" and "not yours": distinguishing
@@ -271,6 +300,49 @@ export function createGateway(deps: GatewayDeps): {
     } catch (error) {
       fail(connection, toGatewayError(error));
     }
+  }
+
+  /**
+   * File synchronisation for one container.
+   *
+   * The container is resolved by `byId` with the caller's own user id, so a
+   * client that names somebody else's container gets the same answer as one
+   * that names a container that does not exist. That check is the whole
+   * authorisation story for sync, and it belongs here rather than in the sync
+   * service: the service takes a record it is given, and would have no way to
+   * know who asked.
+   */
+  async function onSync(
+    connection: Connection,
+    frame: Extract<ClientFrame, { type: 'sync-manifest' | 'sync-push' | 'sync-delete' }>,
+  ): Promise<void> {
+    const record = containers.byId(frame.containerId, connection.userId!);
+    if (!record) {
+      throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+    }
+
+    switch (frame.type) {
+      case 'sync-manifest': {
+        send(connection, await sync.plan(record, frame.files));
+        // Subscribed only after a manifest, so a browser starts hearing about
+        // the container's changes at the point it knows what it already has.
+        // Subscribing at `hello` would deliver changes against a tree the
+        // client has not reconciled yet.
+        if (!connection.syncOf) {
+          const subscriber: SyncSubscriber = (outgoing) => send(connection, outgoing);
+          sync.subscribe(record, subscriber);
+          connection.syncOf = { containerId: record.id, subscriber };
+        }
+        break;
+      }
+      case 'sync-push':
+        send(connection, await sync.push(record, frame.files));
+        break;
+      case 'sync-delete':
+        send(connection, await sync.remove(record, frame.paths));
+        break;
+    }
+    containers.touch(record.id);
   }
 
   async function onHello(connection: Connection, frame: Extract<ClientFrame, { type: 'hello' }>): Promise<void> {
@@ -425,7 +497,11 @@ export function createGateway(deps: GatewayDeps): {
     containers,
     sessions,
     close: async () => {
-      // Terminals first, so a client sees a close frame rather than a reset.
+      // Watchers first: they hold inotify handles and can still fire during a
+      // shutdown, and a change frame delivered while containers are being
+      // destroyed is work with nobody left to receive it.
+      sync.stopAll();
+      // Terminals next, so a client sees a close frame rather than a reset.
       for (const client of wss.clients) client.terminate();
       wss.close();
       // Then containers, which is the part that must not be skipped: their

@@ -70,6 +70,15 @@ export class ContainerManager {
     private readonly runtime: ContainerRuntime,
     private readonly sessions: SessionRegistry,
     private readonly logger: Logger,
+    /**
+     * Called after a container is gone, so whatever was watching it can stop.
+     *
+     * A callback rather than a direct call into the sync service, because the
+     * lifecycle manager knowing about file synchronisation would make the
+     * dependency circular — and because the reaper, which is the caller that
+     * matters, runs on a timer with nobody to tell.
+     */
+    private readonly onStopped: (containerId: string) => void = () => undefined,
   ) {}
 
   get size(): number {
@@ -196,6 +205,7 @@ export class ContainerManager {
     await this.runtime.destroy(record.id).catch(() => undefined);
     record.status = reason;
     this.forget(containerKey(record.userId, record.projectId));
+    this.onStopped(record.id);
     this.logger.event(reason === 'expired' ? 'container_expired' : 'container_stopped', {
       containerId: record.id,
       userId: record.userId,

@@ -50,3 +50,49 @@ export function hasRemovals(
   }
   return false;
 }
+
+/**
+ * The smallest span that turns one text into another.
+ *
+ * Used to apply a change as an *edit* rather than a replacement, which is the
+ * difference between a file the container rewrote appearing under the cursor
+ * and the person's undo history being thrown away. `setValue` is the obvious
+ * call and it resets the undo stack, the cursor and the scroll position — fine
+ * when the editor itself is the only writer, which stopped being true when a
+ * real container started writing to the same tree.
+ *
+ * Returns null when the texts are identical, so the caller can do nothing at
+ * all — the common case, since most reconciliations are the editor's own write
+ * arriving back.
+ *
+ * Offsets, not line/column: the caller has the model and can convert, and
+ * doing it here would mean reimplementing Monaco's position arithmetic.
+ */
+export function minimalEdit(
+  current: string,
+  next: string,
+): { start: number; end: number; text: string } | null {
+  if (current === next) return null;
+
+  let prefix = 0;
+  const shortest = Math.min(current.length, next.length);
+  while (prefix < shortest && current.charCodeAt(prefix) === next.charCodeAt(prefix)) prefix += 1;
+
+  // The two scans must not overlap in the middle, or a repeated substring makes
+  // the suffix consume characters the prefix already claimed and the resulting
+  // range is inverted.
+  let suffix = 0;
+  const remaining = shortest - prefix;
+  while (
+    suffix < remaining &&
+    current.charCodeAt(current.length - 1 - suffix) === next.charCodeAt(next.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+
+  return {
+    start: prefix,
+    end: current.length - suffix,
+    text: next.slice(prefix, next.length - suffix),
+  };
+}

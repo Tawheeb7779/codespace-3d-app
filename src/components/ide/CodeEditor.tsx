@@ -3,7 +3,7 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { setupMonaco, monaco as monacoApi } from '@/lib/monaco';
 import { monacoLanguage } from '@/lib/languages';
-import { changedPaths, hasRemovals } from '@/lib/modelSync';
+import { changedPaths, hasRemovals, minimalEdit } from '@/lib/modelSync';
 import { registerAskAboutSelection, registerInlineAi } from '@/lib/inlineAi';
 import { useFileStore } from '@/stores/fileStore';
 import { useAiStore } from '@/stores/aiStore';
@@ -85,8 +85,30 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
       if (language === 'plaintext') continue;
       const uri = modelUri(filePath);
       const existing = monacoApi.editor.getModel(uri);
-      if (!existing) monacoApi.editor.createModel(text, language, uri);
-      else if (existing.getValue() !== text) existing.setValue(text);
+      if (!existing) {
+        monacoApi.editor.createModel(text, language, uri);
+        continue;
+      }
+      // Applied as an edit over the smallest changed span, not `setValue`.
+      // This branch fires when something other than this editor wrote the file
+      // — the AI agent, or the container terminal — and `setValue` would clear
+      // the undo stack and send the cursor to the top of a file the person is
+      // still reading.
+      const edit = minimalEdit(existing.getValue(), text);
+      if (!edit) continue;
+      existing.pushEditOperations(
+        null,
+        [
+          {
+            range: monacoApi.Range.fromPositions(
+              existing.getPositionAt(edit.start),
+              existing.getPositionAt(edit.end),
+            ),
+            text: edit.text,
+          },
+        ],
+        () => null,
+      );
     }
 
     // The sweep is only worth its walk when a file actually went away, which is
