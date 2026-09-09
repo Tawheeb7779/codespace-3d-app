@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { chown, mkdir } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import type { ContainerRuntime, CreateOptions, PtyHandle, SpawnOptions } from './types.ts';
 import { GatewayError } from '../errors.ts';
@@ -41,10 +42,28 @@ const run = promisify(execFile);
  * because the way they arrive is a well-meaning edit, not a decision.
  */
 
-const CONTAINER_USER = '10001:10001';
+const CONTAINER_UID = 10001;
+const CONTAINER_GID = 10001;
+const CONTAINER_USER = `${CONTAINER_UID}:${CONTAINER_GID}`;
 export const WORKSPACE_MOUNT = '/workspace';
 
-export function createArgs(options: CreateOptions, useGvisor: boolean): string[] {
+/**
+ * Whether this daemon can enforce a per-container disk quota.
+ *
+ * `--storage-opt size=` is not a portable flag: overlay2 implements it only on
+ * XFS mounted with `pquota`, and on anything else — ext4, the usual case — the
+ * daemon does not ignore it, it *refuses to create the container at all*. So a
+ * flag added for defence in depth turns into a total outage on most hosts.
+ *
+ * Found by running it. The source-level test asserted the flag was present and
+ * could not have known the daemon rejects it; nothing short of creating a real
+ * container would have caught this.
+ */
+export function createArgs(
+  options: CreateOptions,
+  useGvisor: boolean,
+  diskQuota = false,
+): string[] {
   const { containerId, workspaceDir, tier, image, network } = options;
   return [
     'create',
@@ -73,8 +92,7 @@ export function createArgs(options: CreateOptions, useGvisor: boolean): string[]
     `${tier.memoryMb}m`,
     '--cpus',
     String(tier.cpus),
-    '--storage-opt',
-    `size=${tier.diskMb}m`,
+    ...(diskQuota ? ['--storage-opt', `size=${tier.diskMb}m`] : []),
     '--network',
     network === 'full' ? 'bridge' : 'none',
     ...(useGvisor ? ['--runtime', 'runsc'] : []),
@@ -119,11 +137,47 @@ export interface DockerRuntimeOptions {
   exec?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
   spawnPty?: (args: string[], options: SpawnOptions) => PtyHandle;
   useGvisor?: boolean;
+  /**
+   * Force the disk-quota decision instead of probing for it.
+   *
+   * Exists for tests; production probes once, at `available()`, because the
+   * answer is a property of the daemon's storage driver and cannot change
+   * while it is running.
+   */
+  diskQuota?: boolean;
+  /** Reports what the probe decided, so an operator learns of an unenforced limit. */
+  onCapabilities?: (capabilities: { diskQuota: boolean }) => void;
+}
+
+/**
+ * Does this daemon accept a per-container disk quota?
+ *
+ * Asked by trying it on a container that is created and immediately removed,
+ * because there is no way to ask the daemon directly and guessing from the
+ * storage driver's name is wrong — the answer depends on the filesystem
+ * underneath it and on its mount options.
+ */
+export async function probeDiskQuota(
+  exec: (args: string[]) => Promise<{ stdout: string; stderr: string }>,
+  image: string,
+): Promise<boolean> {
+  const name = `tacode-probe-${Date.now().toString(36)}`;
+  try {
+    await exec(['create', '--name', name, '--storage-opt', 'size=1024m', image, 'true']);
+    await exec(['rm', '-f', name]).catch(() => undefined);
+    return true;
+  } catch {
+    await exec(['rm', '-f', name]).catch(() => undefined);
+    return false;
+  }
 }
 
 export function createDockerRuntime(options: DockerRuntimeOptions = {}): ContainerRuntime {
   const exec =
     options.exec ?? ((args: string[]) => run('docker', args, { maxBuffer: 4 * 1024 * 1024 }));
+
+  // Decided once, at startup, and then fixed: it is a property of the daemon.
+  let diskQuota = options.diskQuota ?? false;
 
   const docker = async (args: string[]): Promise<string> => {
     try {
@@ -144,14 +198,34 @@ export function createDockerRuntime(options: DockerRuntimeOptions = {}): Contain
     async available() {
       try {
         await exec(['version', '--format', '{{.Server.Version}}']);
-        return true;
       } catch {
         return false;
       }
+      if (options.diskQuota === undefined) {
+        diskQuota = await probeDiskQuota(exec, 'busybox:latest').catch(() => false);
+      }
+      options.onCapabilities?.({ diskQuota });
+      return true;
     },
 
     async create(createOptions) {
-      await docker(createArgs(createOptions, options.useGvisor ?? false));
+      // The workspace is a bind mount, so the host's ownership is the
+      // container's ownership. Created by this process — running as whatever
+      // the gateway runs as — and then handed to the unprivileged uid the
+      // container uses, or the container cannot write to its own project.
+      //
+      // Missing at first, and invisible to every source-level test: the flags
+      // were all correct and `echo x > /workspace/f` still failed with
+      // permission denied. Only creating a real container and trying to write
+      // found it.
+      await mkdir(createOptions.workspaceDir, { recursive: true });
+      await chown(createOptions.workspaceDir, CONTAINER_UID, CONTAINER_GID).catch(() => {
+        // A gateway without the privilege to chown cannot make a writable
+        // workspace, and that is an operator problem worth failing loudly for
+        // — but not here, where it would break a development runtime that
+        // already owns the directory.
+      });
+      await docker(createArgs(createOptions, options.useGvisor ?? false, diskQuota));
     },
 
     async start(containerId) {

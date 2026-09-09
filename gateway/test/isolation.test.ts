@@ -7,12 +7,17 @@ import { configProblems, loadConfig } from '../src/config.ts';
  * The container's isolation, tested as the arguments that produce it.
  *
  * This is not a substitute for running a container and trying to escape it, and
- * it is not presented as one. It is the test that can exist here — this machine
- * has no Docker socket, no user namespaces and no cgroup controllers — and it
- * catches the failure that actually happens in practice, which is not a novel
- * kernel exploit. It is somebody adding `--privileged` to debug a permissions
- * problem on a Friday, or mounting the Docker socket because a tool asked for
- * it, and nobody noticing.
+ * it is not presented as one. `dockerSecurity.test.ts` does that, against a
+ * real daemon, and is where the isolation claims are actually established; this
+ * suite runs everywhere, needs nothing, and catches the failure that actually
+ * happens in practice, which is not a novel kernel exploit. It is somebody
+ * adding `--privileged` to debug a permissions problem on a Friday, or mounting
+ * the Docker socket because a tool asked for it, and nobody noticing.
+ *
+ * The two are complementary in a way worth stating, because it is the lesson of
+ * this phase: reading the arguments cannot tell you a flag does what its name
+ * says. Every flag below was correct while the workspace was unwritable and the
+ * daemon refused the container outright.
  *
  * Each assertion below is a flag whose absence or presence is the difference
  * between a workspace and a root shell on the host, so each is asserted by
@@ -153,9 +158,26 @@ describe('resource ceilings', () => {
     expect(valueOf(argsFor(), '--memory-swap')).toBe(`${tier.memoryMb}m`);
   });
 
-  it('caps CPU and disk', () => {
+  it('caps CPU', () => {
     expect(valueOf(argsFor(), '--cpus')).toBe(String(tier.cpus));
-    expect(valueOf(argsFor(), '--storage-opt')).toBe(`size=${tier.diskMb}m`);
+  });
+
+  /**
+   * The disk cap is the one limit that is conditional, and the condition is the
+   * daemon's, not a preference: overlay2 implements `--storage-opt size=` only
+   * on XFS with `pquota`, and elsewhere it does not ignore the flag — it
+   * refuses to create the container. Sending it unconditionally is not a
+   * stricter container, it is no container at all.
+   *
+   * Only running one found that. This asserts both halves of the decision so
+   * the flag cannot quietly become unconditional again.
+   */
+  it('caps disk where the daemon can enforce it, and omits the flag where it cannot', () => {
+    const supported = createArgs(options, false, true);
+    const unsupported = createArgs(options, false, false);
+
+    expect(valueOf(supported, '--storage-opt')).toBe(`size=${tier.diskMb}m`);
+    expect(unsupported).not.toContain('--storage-opt');
   });
 
   it('applies a bigger tier when one is configured', () => {
