@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ContainerStatus } from '../../src/lib/terminal/protocol.ts';
 import type { GatewayConfig, ResourceTier } from './config.ts';
 import type { ContainerRuntime } from './runtime/types.ts';
@@ -48,17 +49,35 @@ export function containerKey(userId: string, projectId: string): string {
 /**
  * A container id that is also safe as a directory name and a Docker name.
  *
- * Derived from the key rather than random so that reconnecting finds the same
- * workspace, and hashed so that a project id cannot smuggle characters into
- * either namespace.
+ * Derived from the key rather than random, so reconnecting finds the same
+ * workspace, and hashed so a project id cannot smuggle characters into either
+ * namespace.
+ *
+ * The hash must be collision-resistant, and this is not a stylistic point. The
+ * id names a directory — `workspaceDirFor` resolves it under the workspace root
+ * — so two keys that hash alike are two users sharing one workspace, with each
+ * one's container bind-mounting the other's files.
+ *
+ * The previous implementation was a 32-bit FNV-1a. Project ids are generated in
+ * the browser and sent to the server, so an attacker chooses one half of the
+ * input outright: they compute offline a project id whose key collides with a
+ * victim's, create a project under it, and open a terminal onto the victim's
+ * workspace. Measured on this machine, single-threaded and unoptimised, a
+ * collision took under three minutes to find.
+ *
+ * SHA-256 truncated to 128 bits ends that. Truncation is safe here — 2^64 work
+ * for a birthday collision against a keyspace that is also rate-limited by
+ * container creation — and the id stays short enough for a Docker name.
+ *
+ * Predictability is deliberately *not* what this fixes, because it is not the
+ * problem: the id is handed to the client in the `ready` frame and is not an
+ * authorisation token. Every lookup goes through `byId(id, userId)`, which
+ * matches on ownership, so knowing an id grants nothing. Collision was the
+ * vulnerability; a keyed HMAC would hide ids without making them safer.
  */
 export function containerIdFor(userId: string, projectId: string): string {
-  let hash = 0x811c9dc5;
-  for (const char of containerKey(userId, projectId)) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return `tacode-${hash.toString(16).padStart(8, '0')}`;
+  const digest = createHash('sha256').update(containerKey(userId, projectId)).digest('hex');
+  return `tacode-${digest.slice(0, 32)}`;
 }
 
 export class ContainerManager {

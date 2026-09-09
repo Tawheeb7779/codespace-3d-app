@@ -118,6 +118,16 @@ export interface GatewayConfig {
    * those requests hold sockets and sessions.
    */
   runtimeTimeoutMs: number;
+  /**
+   * How often an open terminal's project role is re-checked.
+   *
+   * A terminal is authorised once, at `hello`, and then lives for hours. Without
+   * this, demoting somebody from editor to viewer — or removing them from the
+   * project entirely — leaves their shell running with the access they no
+   * longer have. Re-checking per frame would mean a database round trip per
+   * keystroke; re-checking on a timer bounds the exposure to one interval.
+   */
+  roleRecheckSeconds: number;
 }
 
 function int(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -181,6 +191,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     maxConnectionsPerUser: int(env, 'TACODE_MAX_CONNECTIONS_PER_USER', 8),
     maxSyncBytesPerSecond: int(env, 'TACODE_MAX_SYNC_BYTES_PER_SECOND', 8 * 1024 * 1024),
     runtimeTimeoutMs: int(env, 'TACODE_RUNTIME_TIMEOUT_MS', 30_000),
+    roleRecheckSeconds: int(env, 'TACODE_ROLE_RECHECK_SECONDS', 60),
   };
 }
 

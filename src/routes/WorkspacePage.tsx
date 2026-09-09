@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Bot, Files, FolderOpen, Monitor, SquareTerminal } from 'lucide-react';
+import { disposeContainerTerminals } from '@/components/ide/ContainerTerminal';
 import { ActivityBar } from '@/components/ide/ActivityBar';
 import { WorkspaceTopBar } from '@/components/ide/WorkspaceTopBar';
 import { FileExplorer } from '@/components/ide/FileExplorer';
@@ -219,6 +220,14 @@ export default function WorkspacePage() {
       .catch(() => setReady(true));
     return () => {
       cancelled = true;
+      // The container terminals belong to the project being left, and so does
+      // the sync engine feeding them. Without this they outlive the switch:
+      // `disposeContainerTerminals` existed and was called from nowhere, so a
+      // terminal on the previous project stayed attached while the editor moved
+      // on. The engine is guarded against acting across that boundary anyway;
+      // this is the other half — not leaving a shell and a WebSocket running
+      // for a project the user has closed.
+      disposeContainerTerminals(projectId);
     };
   }, [projectId, open, loadGit]);
 

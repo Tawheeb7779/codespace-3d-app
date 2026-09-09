@@ -26,8 +26,29 @@ if (problems.length) {
   process.exit(1);
 }
 
+/**
+ * What the runtime turned out to be able to enforce.
+ *
+ * Reported at boot rather than discovered from a support ticket. A disk quota
+ * the daemon cannot apply is a real reduction in isolation — one workspace can
+ * fill the host's disk and take every other workspace down with it — and the
+ * one thing that must not happen is for it to be silently absent while the
+ * configuration still names a `DISK_MB`.
+ */
+let capabilities = { diskQuota: false };
+
 const runtime: ContainerRuntime =
-  config.runtime === 'local' ? createLocalRuntime() : createDockerRuntime({ useGvisor: process.env.TACODE_GVISOR === '1' });
+  config.runtime === 'local'
+    ? createLocalRuntime()
+    : createDockerRuntime({
+        useGvisor: process.env.TACODE_GVISOR === '1',
+        // The operator's own pinned image, so the quota probe pulls nothing.
+        image: config.image,
+        timeoutMs: config.runtimeTimeoutMs,
+        onCapabilities: (reported) => {
+          capabilities = reported;
+        },
+      });
 
 if (!(await runtime.available())) {
   logger.problem('container_error', {
@@ -35,6 +56,18 @@ if (!(await runtime.available())) {
     reason: 'the container runtime is not available; refusing to start',
   });
   process.exit(1);
+}
+
+if (runtime.name === 'docker' && !capabilities.diskQuota) {
+  // A warning an operator will actually see, naming the consequence rather
+  // than the flag. Never silently downgraded: the tier still advertises a disk
+  // size, and nothing is enforcing it.
+  logger.problem('resource_limit_hit', {
+    runtime: runtime.name,
+    reason:
+      'per-container disk quota is NOT enforced on this host (overlay2 needs XFS with pquota); ' +
+      'TACODE_*_DISK_MB is advertised but unenforced, and one workspace can fill the host disk',
+  });
 }
 
 if (!runtime.isolates && process.env.NODE_ENV === 'production') {

@@ -12,7 +12,7 @@ import {
   type ManifestEntry,
   type SyncLimits,
 } from './sync.ts';
-import { resolveInWorkspace } from './workspace.ts';
+import { resolveInWorkspaceNoSymlinks } from './workspace.ts';
 import { WorkspaceWatcher, walkWorkspace } from './watcher.ts';
 
 /**
@@ -171,7 +171,10 @@ export class SyncService {
     const deleted: string[] = [];
 
     for (const path of paths) {
-      const target = resolveInWorkspace(record.workspaceDir, path);
+      // A watcher event for a path that crosses a symlink is not a change we
+      // are willing to act on, in either direction.
+      const target = await resolveInWorkspaceNoSymlinks(record.workspaceDir, path).catch(() => null);
+      if (target === null) continue;
       const exists = await stat(target).then(
         (info) => info.isFile(),
         () => false,

@@ -11,7 +11,7 @@ import {
   type ServerFrame,
 } from '../../src/lib/terminal/protocol.ts';
 import type { GatewayConfig } from './config.ts';
-import { authorizeTerminal, type Authorizer } from './auth.ts';
+import { atLeast, authorizeTerminal, type Authorizer } from './auth.ts';
 import { GatewayError, protocolError, resourceLimit, toGatewayError } from './errors.ts';
 import { ContainerManager } from './lifecycle.ts';
 import { SessionRegistry, TerminalSession } from './session.ts';
@@ -116,6 +116,67 @@ export function createGateway(deps: GatewayDeps): {
     },
   });
   ports.start(() => containers.list());
+
+  /**
+   * Re-check that everyone with an open terminal may still have one.
+   *
+   * Authorisation happens at `hello`, and a terminal then lives for hours. A
+   * user demoted from editor to viewer, removed from the project, or whose
+   * project was deleted keeps a running shell against files they can no longer
+   * open in the editor — the check that let them in has no expiry.
+   *
+   * On a timer rather than per frame: the role lives in Postgres, and a lookup
+   * per keystroke would put a database round trip in the path of typing. One
+   * interval is the bound on how long revoked access survives, and it is
+   * configurable for an operator who wants it tighter.
+   *
+   * The identity is not re-verified here, only the role. Re-verifying identity
+   * needs the caller's token, and the gateway deliberately does not keep one —
+   * a stored access token is a credential at rest for no gain, since a
+   * reconnect presents a fresh one. Token expiry is instead bounded by the
+   * container's own idle and lifetime limits.
+   */
+  const revalidator = setInterval(() => {
+    void revalidate().catch(() => undefined);
+  }, Math.max(5, config.roleRecheckSeconds) * 1000);
+  revalidator.unref?.();
+
+  async function revalidate(): Promise<void> {
+    for (const connection of [...connections]) {
+      const { userId, projectId } = connection;
+      if (!userId || !projectId) continue;
+
+      // A lookup that fails is not a revocation. Supabase being briefly
+      // unreachable must not close every terminal on the host.
+      const role = await authorizer.roleOn(userId, projectId).catch(() => undefined);
+      if (role === undefined) continue;
+      if (atLeast(role, 'editor')) continue;
+
+      logger.event('terminal_rejected', {
+        correlationId: connection.correlation,
+        userId,
+        projectId,
+        reason: 'project access was revoked while a terminal was open',
+      });
+
+      // The session goes, not just the socket: leaving the shell running would
+      // let the same user reattach to it on the next connection.
+      if (connection.session) sessions.remove(connection.session.id);
+      connection.session = null;
+      if (connection.syncOf) {
+        sync.unsubscribe(connection.syncOf.containerId, connection.syncOf.subscriber);
+        connection.syncOf = null;
+      }
+      fail(
+        connection,
+        new GatewayError(
+          'PERMISSION_ERROR',
+          'Your access to this project changed, so this terminal was closed.',
+        ),
+      );
+      connection.socket.close();
+    }
+  }
 
   const server = createServer((request, response) => {
     void handleHttp(request, response);
@@ -606,6 +667,7 @@ export function createGateway(deps: GatewayDeps): {
     containers,
     sessions,
     close: async () => {
+      clearInterval(revalidator);
       ports.stop();
       // Watchers first: they hold inotify handles and can still fire during a
       // shutdown, and a change frame delivered while containers are being

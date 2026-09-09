@@ -57,6 +57,39 @@ Nothing here is optional in the security sense: with no `SUPABASE_URL` the
 process refuses to start, because a gateway that cannot authenticate anybody is
 worse than one that is down.
 
+## Two terminals, and the boundary between them
+
+TA CODE has two terminal concepts and they are not the same feature.
+
+The **Project Terminal** is the in-browser shell that has always been here. It
+is project-scoped, runs against the project's virtual filesystem, needs no
+server, and is the default — the environment selector only appears where a
+container gateway is configured, so a deployment without one has exactly the
+terminal it always had. Nothing in this gateway replaces it, and a container
+being unavailable degrades to it rather than to an error.
+
+The **Linux Terminal** is this gateway: a real shell in a real container. Today
+it is scoped to one project, and that scoping is the security boundary rather
+than a convenience:
+
+- One container per `(user, project)`, keyed by a SHA-256 of that pair.
+- Exactly one bind mount, that project's workspace, and no other host path. A
+  test asserts the count, not just the contents.
+- Every connection re-authorises against that project, and an open terminal is
+  re-checked on a timer so revoked access does not survive in a live shell.
+
+A user's *other* projects are not reachable from inside a container, and neither
+is anything else of theirs. That property comes from the single mount, so it
+holds regardless of what the workload does.
+
+**What is deliberately not built yet.** The eventual design is a Linux Workspace
+that exists independently of any project, with explicit authorised import and
+export between it and a project. That is a separate phase. Until it exists, the
+container is reached through the project terminal's environment selector, and
+the thing to preserve when it is built is the mount rule above: a workspace that
+could see every project the user owns would turn one compromised dependency into
+access to all of their work.
+
 ## What is enforced, and where
 
 Application code enforces *authorisation*: who you are, which project you may

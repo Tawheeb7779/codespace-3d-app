@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { chown, mkdir } from 'node:fs/promises';
+import { chown, mkdir, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { ContainerRuntime, CreateOptions, PtyHandle, SpawnOptions } from './types.ts';
 import { GatewayError } from '../errors.ts';
@@ -160,6 +161,13 @@ export interface DockerRuntimeOptions {
   diskQuota?: boolean;
   /** Reports what the probe decided, so an operator learns of an unenforced limit. */
   onCapabilities?: (capabilities: { diskQuota: boolean }) => void;
+  /**
+   * The image the quota probe uses.
+   *
+   * The workspace image the gateway is configured with, so the probe never
+   * pulls anything and never depends on a floating tag.
+   */
+  image?: string;
 }
 
 /**
@@ -174,7 +182,11 @@ export async function probeDiskQuota(
   exec: (args: string[]) => Promise<{ stdout: string; stderr: string }>,
   image: string,
 ): Promise<boolean> {
-  const name = `tacode-probe-${Date.now().toString(36)}`;
+  // Random, not `Date.now()`. A timestamp collides when two gateways start in
+  // the same millisecond — the second `docker create` fails on the name and the
+  // probe reports "no quota support" for a daemon that has it — and it lets
+  // anything else on the host predict the name and squat it.
+  const name = `tacode-probe-${randomUUID()}`;
   try {
     await exec(['create', '--name', name, '--storage-opt', 'size=1024m', image, 'true']);
     await exec(['rm', '-f', name]).catch(() => undefined);
@@ -182,6 +194,63 @@ export async function probeDiskQuota(
   } catch {
     await exec(['rm', '-f', name]).catch(() => undefined);
     return false;
+  }
+}
+
+/**
+ * Container states in which a shell may be attached, or soon can be.
+ *
+ * `docker inspect` answers with one of a fixed set, and the distinction is not
+ * cosmetic. `exists()` previously returned true for any non-empty status, so a
+ * container that had `exited`, was `dead`, or was mid-`removing` was reported as
+ * present — `ensure()` then handed that record back and the gateway tried to
+ * `docker exec` into a corpse. The user got an opaque runtime error instead of
+ * the working container that recreating would have given them.
+ *
+ * `created` and `restarting` are here deliberately: both are containers on
+ * their way up, and treating them as absent would delete a container that was
+ * about to be usable.
+ */
+const USABLE_STATES: readonly string[] = ['running', 'created', 'restarting', 'paused'];
+
+/**
+ * Make the workspace writable by the container, and prove it.
+ *
+ * The container runs as uid 10001 and the workspace is a bind mount, so the
+ * host's ownership *is* the container's ownership. Getting this wrong does not
+ * fail loudly — every flag is correct, the container starts, and the first
+ * write inside it fails with a permission error that looks like a bug in the
+ * user's own code.
+ *
+ * So the chown is verified rather than attempted. It used to be
+ * `.catch(() => {})`, whose own comment said this was "an operator problem
+ * worth failing loudly for" and then swallowed it. A container that cannot
+ * write to its own project is not a degraded container, it is a broken one, and
+ * starting it wastes the user's time and a slot on the host.
+ *
+ * The check is on the result, not on the call: a gateway that already owns the
+ * directory needs no chown and must not be failed for a redundant one, and a
+ * chown that "succeeds" against a filesystem that ignores ownership must not be
+ * believed.
+ */
+export async function prepareWorkspace(workspaceDir: string): Promise<void> {
+  await chown(workspaceDir, CONTAINER_UID, CONTAINER_GID).catch(() => undefined);
+
+  const info = await stat(workspaceDir).catch(() => null);
+  if (!info) {
+    throw new GatewayError(
+      'CONTAINER_ERROR',
+      'The workspace could not be prepared.',
+      `workspace directory is missing after creation: ${workspaceDir}`,
+    );
+  }
+  if (info.uid !== CONTAINER_UID || info.gid !== CONTAINER_GID) {
+    throw new GatewayError(
+      'CONTAINER_ERROR',
+      'The workspace could not be prepared.',
+      `workspace ownership is ${info.uid}:${info.gid}, not ${CONTAINER_UID}:${CONTAINER_GID}; ` +
+        'the gateway needs the privilege to chown its workspace root',
+    );
   }
 }
 
@@ -221,7 +290,17 @@ export function createDockerRuntime(options: DockerRuntimeOptions = {}): Contain
         return false;
       }
       if (options.diskQuota === undefined) {
-        diskQuota = await probeDiskQuota(exec, 'busybox:latest').catch(() => false);
+        // The workspace image, not `busybox:latest`. Two reasons, and the second
+        // is the one that bites: a floating tag is a mutable dependency pulled
+        // at runtime by a security-relevant probe, and on a host with no
+        // registry access the pull fails, the probe throws, and the failure is
+        // indistinguishable from "this daemon cannot do quotas" — so the quota
+        // is silently disabled on every air-gapped host. The workspace image is
+        // already present, already the operator's pinned choice, and needs no
+        // network.
+        diskQuota = await probeDiskQuota(exec, options.image ?? 'ta-code/workspace:1').catch(
+          () => false,
+        );
       }
       options.onCapabilities?.({ diskQuota });
       return true;
@@ -238,12 +317,7 @@ export function createDockerRuntime(options: DockerRuntimeOptions = {}): Contain
       // permission denied. Only creating a real container and trying to write
       // found it.
       await mkdir(createOptions.workspaceDir, { recursive: true });
-      await chown(createOptions.workspaceDir, CONTAINER_UID, CONTAINER_GID).catch(() => {
-        // A gateway without the privilege to chown cannot make a writable
-        // workspace, and that is an operator problem worth failing loudly for
-        // — but not here, where it would break a development runtime that
-        // already owns the directory.
-      });
+      await prepareWorkspace(createOptions.workspaceDir);
       await docker(createArgs(createOptions, options.useGvisor ?? false, diskQuota));
     },
 
@@ -264,7 +338,9 @@ export function createDockerRuntime(options: DockerRuntimeOptions = {}): Contain
     async exists(containerId) {
       try {
         const out = await exec(['inspect', '--format', '{{.State.Status}}', containerId]);
-        return out.stdout.trim().length > 0;
+        // The status, not merely some output. An `exited` or `dead` container
+        // answers this call perfectly well and cannot be attached to.
+        return USABLE_STATES.includes(out.stdout.trim());
       } catch {
         return false;
       }

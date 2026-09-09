@@ -188,6 +188,57 @@ full configuration table.
 
 Apply migration `0009` for the workspace metadata table before enabling this.
 
+## Diagnosing "the owner can sign in and nobody else can"
+
+This exact report — the person who set the project up signs in fine, someone
+they send the URL to cannot — is almost never a code fault, and the asymmetry is
+the clue. Both people load the same bundle, against the same Supabase project,
+over the same origin. What differs is the *state of the second account*, so the
+cause is in the Supabase dashboard rather than in this repository.
+
+Work through it in this order. Each step distinguishes causes rather than
+guessing at them, and the second person's error message is the input to all of
+them — take it verbatim, since the app passes Supabase's own wording through
+untouched precisely so this is possible.
+
+1. **"Email not confirmed"** — Authentication → Providers → Email has "Confirm
+   email" on, and the confirmation never arrived. Supabase's built-in SMTP is
+   rate-limited to a handful of messages an hour and is not for real users, so
+   this is the single most common answer. Configure a real SMTP provider under
+   Authentication → Emails, or turn confirmation off if that suits the product.
+   The owner does not hit it because their account predates the setting or was
+   confirmed by hand.
+
+2. **"Signups not allowed for this instance"** — Authentication → Sign In / Up
+   has sign-ups disabled. The owner already has an account; nobody else can make
+   one.
+
+3. **Google sign-in returns to the app still signed out** — two separate
+   causes, told apart by where the browser lands:
+   - Back at TA CODE with no session: the production origin is missing from
+     Authentication → URL Configuration → Redirect URLs. The app asks for
+     `<origin>/auth/callback`, and Supabase silently falls back to the Site URL
+     when the requested redirect is not on the allowlist. Add both the exact
+     production origin and `<origin>/auth/callback`.
+   - A Google error page about access: the OAuth consent screen is still in
+     Testing, which admits only the accounts listed as test users — the owner,
+     and nobody they send the link to. Publish the consent screen, or add the
+     other person as a test user.
+
+4. **"Could not reach the authentication service at …"** — this message names
+   the host the deployed bundle is actually configured with. If that host is not
+   your project, `VITE_SUPABASE_URL` on Vercel is wrong or was set after the
+   last build: these are build-time values, baked into the bundle, so changing
+   them in the Vercel dashboard does nothing until a redeploy. Check the
+   Production environment specifically, not just Preview.
+
+Two things this is *not*, and both are worth ruling out cheaply so nobody spends
+a day on them. It is not CORS: Supabase serves the auth endpoints with
+permissive CORS and a misconfiguration there would break the owner too. And it
+is not session persistence: the client uses `persistSession` with PKCE, and a
+failure to persist would show as being signed out on reload, not as being unable
+to sign in at all.
+
 ## 4. Database
 
 Apply migrations in order — they are idempotent, so re-running is safe:

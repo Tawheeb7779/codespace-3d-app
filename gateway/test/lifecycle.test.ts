@@ -105,10 +105,18 @@ describe('one workspace per user and project', () => {
     expect(a.workspaceDir).not.toBe(b.workspaceDir);
   });
 
+  /**
+   * Two properties, and the width is the one with teeth. The id names the
+   * workspace directory, and project ids are chosen in the browser, so a narrow
+   * hash lets an attacker grind a project id whose key collides with a
+   * victim's and mount their workspace. It was a 32-bit FNV-1a; a collision
+   * took under three minutes to find.
+   */
   it('derives an id that is safe as a directory and a container name', () => {
     const id = containerIdFor('user-a/../..', 'proj; rm -rf /');
 
-    expect(id).toMatch(/^tacode-[0-9a-f]{8}$/);
+    // Nothing of the input survives into the name.
+    expect(id).toMatch(/^tacode-[0-9a-f]{32}$/);
   });
 
   it('will not let one user occupy the host', async () => {

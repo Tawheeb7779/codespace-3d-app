@@ -29,6 +29,11 @@ const PROJECT = 'proj-alpha';
 const ACCOUNTS: Record<string, { userId: string; roles: Record<string, ProjectRole> }> = {
   'token-amina': { userId: 'user-amina', roles: { [PROJECT]: 'owner' } },
   'token-bilal': { userId: 'user-bilal', roles: { 'proj-beta': 'owner' } },
+  // The authorization matrix. A viewer may read a project in the editor and
+  // must not reach a shell or a preview in it; an editor may do both.
+  'token-chidi': { userId: 'user-chidi', roles: { [PROJECT]: 'viewer' } },
+  'token-dara': { userId: 'user-dara', roles: { [PROJECT]: 'editor' } },
+  'token-emeka': { userId: 'user-emeka', roles: { [PROJECT]: 'admin' } },
 };
 
 const authorizer: Authorizer = {
@@ -54,7 +59,14 @@ beforeAll(async () => {
 
   // The stand-in development server: one route, and a WebSocket for "HMR".
   devServer = createServer((request, response) => {
-    if (request.url === '/slow-stream') {
+    if (request.url?.startsWith('/echo-headers')) {
+    // Everything the proxy chose to forward, so a test can assert on what did
+    // *not* cross rather than only on what did.
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ url: request.url, headers: request.headers }));
+    return;
+  }
+  if (request.url === '/slow-stream') {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.write('data: one\n\n');
       setTimeout(() => response.end('data: two\n\n'), 50);
@@ -289,5 +301,144 @@ describe('health', () => {
     expect(body).toMatchObject({ ok: true, runtime: 'local', isolated: false });
     expect(JSON.stringify(body)).not.toContain('user-');
     expect(JSON.stringify(body)).not.toContain(PROJECT);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// What the proxy forwards, and what it must not
+// ---------------------------------------------------------------------------
+
+describe('what crosses into the container', () => {
+  const echo = async (init: RequestInit = {}) => {
+    const response = await fetch(proxyUrl(devPort, '/echo-headers'), init);
+    return (await response.json()) as { url: string; headers: Record<string, string> };
+  };
+
+  /**
+   * The caller's TA CODE session token must not reach the development server.
+   * It is a credential for the gateway, and the workload behind the proxy is
+   * the user's own untrusted code — handing it a token that opens terminals is
+   * the whole reason this is stripped in two places.
+   */
+  it('never forwards the Authorization header', async () => {
+    const seen = await echo({ headers: { authorization: 'Bearer token-amina' } });
+
+    expect(seen.headers.authorization).toBeUndefined();
+  });
+
+  it('never forwards the access token in the query string', async () => {
+    const seen = await echo();
+
+    expect(seen.url).not.toContain('access_token');
+    expect(seen.url).not.toContain('token-amina');
+  });
+
+  it('keeps the caller’s other query parameters intact', async () => {
+    const response = await fetch(
+      `${base}/proxy/${containerId}/${devPort}/echo-headers?page=2&q=hello&access_token=token-amina`,
+    );
+    const seen = (await response.json()) as { url: string };
+
+    expect(seen.url).toContain('page=2');
+    expect(seen.url).toContain('q=hello');
+    expect(seen.url).not.toContain('access_token');
+  });
+
+  /**
+   * The Host header is rewritten to the destination. Forwarding the gateway's
+   * own Host lets a dev server generate absolute URLs pointing back at the
+   * gateway, and is the usual ingredient in a host-header attack.
+   */
+  it('rewrites Host to the container’s endpoint', async () => {
+    const seen = await echo({ headers: { host: 'evil.example' } });
+
+    expect(seen.headers.host).not.toBe('evil.example');
+    expect(seen.headers.host).toContain(String(devPort));
+  });
+
+  it('does not forward hop-by-hop headers', async () => {
+    const seen = await echo({ headers: { 'proxy-authorization': 'Basic abc' } });
+
+    expect(seen.headers['proxy-authorization']).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The authorization matrix, over the proxy
+// ---------------------------------------------------------------------------
+
+describe('which roles may reach a preview', () => {
+  const reach = (token: string) =>
+    fetch(proxyUrl(devPort, '/', token)).then((response) => response.status);
+
+  it('lets an owner through', async () => {
+    expect(await reach('token-amina')).toBe(200);
+  });
+
+  /**
+   * A container runs code against a project's files, so the bar is `editor` in
+   * both directions — the terminal and the preview. A viewer who could reach
+   * the preview would be reaching a server running the project's own code.
+   */
+  it('refuses a viewer', async () => {
+    expect(await reach('token-chidi')).toBe(403);
+  });
+
+  /**
+   * An editor on the project is authorised, but the container belongs to
+   * Amina: `byId` matches on ownership, so this is refused for a different
+   * reason and with the same answer.
+   */
+  it('refuses an editor who does not own this container', async () => {
+    expect(await reach('token-dara')).toBe(403);
+  });
+
+  it('refuses an admin who does not own this container', async () => {
+    expect(await reach('token-emeka')).toBe(403);
+  });
+
+  it('refuses a caller with no role on the project at all', async () => {
+    expect(await reach('token-bilal')).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Destinations the proxy must never be talked into
+// ---------------------------------------------------------------------------
+
+describe('the proxy as an SSRF primitive', () => {
+  /**
+   * The destination host is never taken from the caller. It comes from the
+   * runtime — `docker inspect` for a real container — and the caller supplies
+   * only a container id, which is checked for ownership, and a port, which is
+   * checked against the allowlist. These assert that no spelling of a
+   * destination in the path changes where the request goes.
+   */
+  it.each([
+    ['an absolute URL', `/proxy/${'x'.repeat(8)}/80/http://169.254.169.254/latest/meta-data/`],
+    ['a host in the container slot', '/proxy/169.254.169.254/80/'],
+    ['a port with a host suffix', `/proxy/abc/80@evil.example/`],
+    ['a negative port', '/proxy/abc/-1/'],
+    ['a port past the range', '/proxy/abc/99999/'],
+    ['an id with a slash', '/proxy/abc/def/80/'],
+    ['an id with a dot segment', '/proxy/../../etc/80/'],
+  ])('refuses %s', async (_label, path) => {
+    const response = await fetch(`${base}${path}?access_token=token-amina`);
+
+    // Either the path does not parse as a proxy request at all (404) or it
+    // parses and fails authorisation (403). Never 200, and never a request
+    // that leaves this host for somewhere the caller named.
+    expect([403, 404]).toContain(response.status);
+  });
+
+  /**
+   * The cloud metadata endpoint, spelled as a port rather than a host. It is
+   * not on the allowlist, which is the check that stops it.
+   */
+  it('refuses a port that is not allowlisted even for the owner', async () => {
+    const response = await fetch(proxyUrl(80, '/latest/meta-data/'));
+
+    expect(response.status).toBe(403);
   });
 });

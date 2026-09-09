@@ -117,3 +117,44 @@ describe('the message reaches the store, and the store does not pretend otherwis
     spy.mockRestore();
   });
 });
+
+/**
+ * The production report was: the owner signs in, a second person cannot.
+ *
+ * Every plausible cause of that asymmetry lives in remote configuration rather
+ * than in this repository — email confirmation required with no working SMTP,
+ * sign-ups disabled, a Google OAuth consent screen still in test mode with only
+ * the owner added, a redirect URL allowlist missing the production origin. This
+ * code cannot fix any of them.
+ *
+ * What it can do is not hide which one it is. Supabase's own wording is the
+ * only thing that distinguishes "Email not confirmed" from "Invalid login
+ * credentials" from "Signups not allowed", and an app that replaces all three
+ * with "Sign-in failed" turns a five-minute dashboard fix into an
+ * unreproducible bug report. So these assert the message survives.
+ */
+describe('the message a second user would actually see', () => {
+  it.each([
+    'Email not confirmed',
+    'Invalid login credentials',
+    'Signups not allowed for this instance',
+    'Email link is invalid or has expired',
+    'User already registered',
+  ])('passes %s through verbatim', (message) => {
+    expect(authErrorMessage(new Error(message))).toContain(message);
+  });
+
+  /**
+   * The one case that is deliberately replaced: an unreachable host produces a
+   * browser-specific string ("Failed to fetch", "Load failed", "NetworkError")
+   * that tells the reader nothing. It becomes a message naming the host this
+   * deployment is actually configured to talk to — which is the fact that
+   * distinguishes a wrong VITE_SUPABASE_URL from a real outage.
+   */
+  it('replaces an opaque network failure with the host it could not reach', () => {
+    const message = authErrorMessage(new TypeError('Failed to fetch'));
+
+    expect(message).not.toContain('Failed to fetch');
+    expect(message).toMatch(/authentication service at/i);
+  });
+});

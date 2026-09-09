@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { isSensitivePath, resolveInWorkspace, shouldSync } from './workspace.ts';
+import { isSensitivePath, resolveInWorkspaceNoSymlinks, shouldSync } from './workspace.ts';
 import { GatewayError } from './errors.ts';
 
 /**
@@ -140,7 +140,9 @@ export async function applyEditorWrite(
     return { status: 'skipped', path, reason: 'file exceeds the size limit' };
   }
 
-  const target = resolveInWorkspace(workspaceDir, path);
+  // Refuses a path that crosses a symlink, which is the only reason a write
+  // under this root could land outside it.
+  const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path);
   const nextHash = hashContent(content);
 
   const onDisk = await readIfPresent(target);
@@ -184,7 +186,8 @@ export async function readContainerChange(
 ): Promise<{ path: string; content: string; hash: string } | null> {
   if (!shouldSync(path)) return null;
 
-  const target = resolveInWorkspace(workspaceDir, path);
+  const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path).catch(() => null);
+  if (target === null) return null;
   const info = await stat(target).catch(() => null);
   if (!info || !info.isFile()) return null;
   if (info.size > limits.maxFileBytes) return null;
@@ -210,7 +213,7 @@ export async function applyEditorDelete(
   path: string,
 ): Promise<SyncOutcome> {
   if (isSensitivePath(path)) return { status: 'skipped', path, reason: 'protected path' };
-  const target = resolveInWorkspace(workspaceDir, path);
+  const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path);
   await rm(target, { force: true });
   index.forget(path);
   return { status: 'written', path, hash: '' };
@@ -306,7 +309,8 @@ export async function containerManifest(
 ): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   for (const path of paths.slice(0, limits.maxFiles)) {
-    const target = resolveInWorkspace(workspaceDir, path);
+    const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path).catch(() => null);
+    if (target === null) continue;
     const info = await stat(target).catch(() => null);
     if (!info || !info.isFile()) continue;
     // Hashing a 200MB artefact to decide it will never be synced is work with

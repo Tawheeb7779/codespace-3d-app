@@ -21,6 +21,17 @@ import type { ContainerTerminal } from '@/lib/terminal/containerClient';
  * the adapter. That path is where the VFS guards live — protected paths, path
  * normalisation, the read-only role — and a file arriving from a container is
  * exactly the input those guards exist for.
+ *
+ * **Every read and every write is gated on the project still being open.** That
+ * is the boundary between TA CODE's two terminal concepts, and it lives here
+ * because this is the only place that can enforce it. The gateway gives a
+ * container exactly one bind mount and will not hand it another project's
+ * workspace — but the browser reads a store that is *replaced wholesale* when
+ * somebody opens a different project. An engine attached for project A that
+ * kept reading that store after the switch saw every one of project B's files
+ * as a change and pushed them into project A's container, and would have
+ * written A's files back into B's editor. Nothing disposed the engine on a
+ * switch: `disposeContainerTerminals` existed and was called from nowhere.
  */
 
 interface Attachment {
@@ -47,11 +58,28 @@ export function attachWorkspaceSync(
   const existing = attached.get(projectId);
   if (existing) return existing.sync;
 
+  /**
+   * Whether the project this engine belongs to is the one currently open.
+   *
+   * The single check that keeps one project's container away from another's
+   * files. Cheap enough to ask on every read and every write, and asked on both
+   * rather than only on the subscription, because a flush can be scheduled
+   * before a switch and run after it.
+   */
+  const isCurrent = () => useFileStore.getState().projectId === projectId;
+
   const sync = new WorkspaceSync({
     terminal: client,
-    files: () => useFileStore.getState().files,
+    // An empty tree while another project is open: nothing to send, nothing to
+    // delete. Returning the live map here is what leaked.
+    files: () => (isCurrent() ? useFileStore.getState().files : {}),
 
     applyFromContainer: (files, deleted) => {
+      // A change frame from this project's container, arriving after the user
+      // moved on. Applying it would write one project's files into another's
+      // editor, and the frame is in flight long enough for that to be ordinary
+      // rather than rare.
+      if (!isCurrent()) return;
       const store = useFileStore.getState();
       // A viewer's editor must not be written into by a container either. The
       // store would refuse each call anyway; checking once keeps a `git
@@ -106,6 +134,11 @@ export function attachWorkspaceSync(
     if (next === previous) return;
     const before = previous;
     previous = next;
+
+    // A project switch is a wholesale replacement of this map, not an edit to
+    // it. Re-baselining without reporting anything is what stops the switch
+    // being read as "every file changed".
+    if (state.projectId !== projectId) return;
 
     for (const path of changedPaths(before, next)) sync.noteChange(path);
     if (hasRemovals(before, next)) {

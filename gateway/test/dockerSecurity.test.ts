@@ -527,3 +527,61 @@ describe.skipIf(!ENABLED)('discovering what a container is serving', () => {
     }
   }, 120_000);
 });
+
+// ---------------------------------------------------------------------------
+// The sync boundary, against a container that is actually trying to leave
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!ENABLED)('a real container attacking its own workspace mount', () => {
+  /**
+   * The escape as the container would actually perform it.
+   *
+   * Nothing here is privileged: the container owns `/workspace`, so `ln -s`
+   * needs no capability the security model grants it. Every isolation flag is
+   * correct and irrelevant — the link is followed on the *host* side, by the
+   * gateway, when the editor writes a file whose path crosses it.
+   *
+   * This is the end-to-end form of the unit regression in
+   * `hardeningAudit.test.ts`, and it is here because a fixture cannot prove the
+   * container can create the link in the first place.
+   */
+  test('sec26 — cannot make the gateway write outside the workspace', async () => {
+    const { SyncIndex, applyEditorWrite, readContainerChange } = await import('../src/sync.ts');
+    const { readFile, writeFile: write, mkdir: makeDir } = await import('node:fs/promises');
+
+    await withProbe('symlink', {}, async (probe) => {
+      const workspace = `${WORKSPACE}-symlink`;
+      const outside = '/var/lib/ta-code-test/outside-symlink';
+      await makeDir(outside, { recursive: true });
+      await write(`${outside}/host-secret.txt`, 'HOST SECRET CONTENTS\n');
+
+      // The container plants the link itself, with its own unprivileged shell.
+      const planted = await insideOf(probe, `ln -s ${outside} /workspace/escape && ls -l /workspace`);
+      expect(planted.out).toMatch(/escape/);
+
+      const limits = { maxFileBytes: 1024 * 1024, maxFiles: 100 };
+
+      // The editor writes a path that crosses the link. It must be refused.
+      await expect(
+        applyEditorWrite(
+          workspace,
+          new SyncIndex(),
+          { path: 'escape/pwned.txt', content: 'written outside the workspace\n' },
+          limits,
+        ),
+      ).rejects.toThrow();
+      await expect(readFile(`${outside}/pwned.txt`, 'utf8')).rejects.toThrow();
+
+      // And the other direction: a host file must not be read back for the browser.
+      const leaked = await readContainerChange(
+        workspace,
+        new SyncIndex(),
+        'escape/host-secret.txt',
+        limits,
+      );
+      expect(leaked).toBeNull();
+
+      await rm(outside, { recursive: true, force: true }).catch(() => undefined);
+    });
+  }, 120_000);
+});
