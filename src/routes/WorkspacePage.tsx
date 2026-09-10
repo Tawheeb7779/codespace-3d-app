@@ -19,6 +19,7 @@ import { SecurityPanel } from '@/components/ide/SecurityPanel';
 import { ObservabilityPanel } from '@/components/ide/ObservabilityPanel';
 import { HealthPanel } from '@/components/ide/HealthPanel';
 import { ApiPanel } from '@/components/ide/ApiPanel';
+import { EnvironmentPanel } from '@/components/ide/EnvironmentPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -82,6 +83,8 @@ function SidePanel() {
       return <HealthPanel />;
     case 'api':
       return <ApiPanel />;
+    case 'environments':
+      return <EnvironmentPanel />;
     case 'members':
       return <MembersPanel />;
     default:
