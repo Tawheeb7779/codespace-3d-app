@@ -18,6 +18,7 @@ import { CommentsPanel } from '@/components/ide/CommentsPanel';
 import { SecurityPanel } from '@/components/ide/SecurityPanel';
 import { ObservabilityPanel } from '@/components/ide/ObservabilityPanel';
 import { HealthPanel } from '@/components/ide/HealthPanel';
+import { ApiPanel } from '@/components/ide/ApiPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -79,6 +80,8 @@ function SidePanel() {
       return <ObservabilityPanel />;
     case 'health':
       return <HealthPanel />;
+    case 'api':
+      return <ApiPanel />;
     case 'members':
       return <MembersPanel />;
     default:

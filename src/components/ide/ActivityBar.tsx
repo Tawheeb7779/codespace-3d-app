@@ -9,6 +9,7 @@ import {
   MessageSquare,
   Package,
   Search,
+  Send,
   ShieldCheck,
   Users,
 } from 'lucide-react';
@@ -28,6 +29,7 @@ const PANELS: Array<{ id: SidebarPanel; label: string; icon: typeof Files }> = [
   { id: 'security', label: 'Security', icon: ShieldCheck },
   { id: 'observability', label: 'Observability', icon: Activity },
   { id: 'health', label: 'Project health', icon: HeartPulse },
+  { id: 'api', label: 'API', icon: Send },
   { id: 'members', label: 'Members', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'activity', label: 'Activity', icon: Activity },
