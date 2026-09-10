@@ -24,6 +24,14 @@ export interface PreviewBuild {
   /** Bare specifiers compiled in from the locally hosted runtime. */
   bundledPackages: string[];
   durationMs: number;
+  /**
+   * What the bundler actually produced, in bytes.
+   *
+   * Measured from the output esbuild returned rather than estimated from the
+   * sources: the profiler reports these as a fact about this build, and an
+   * estimate presented as a measurement is the thing it must never do.
+   */
+  bytes: { js: number; css: number; html: number };
 }
 
 const ENTRY_CANDIDATES = [
@@ -284,14 +292,17 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
   if (!entry) {
     if (rawHtml) {
       const doc = inlineStylesheets(rawHtml, files, htmlPath);
+      const doubled = injectBridge(doc);
       return {
-        html: injectBridge(doc),
+        html: doubled,
         entry: htmlPath,
         errors: [],
         warnings: [],
         externals: [],
         bundledPackages: [],
         durationMs: 0,
+        // Nothing was bundled: this document is the whole output.
+        bytes: { js: 0, css: 0, html: doubled.length },
       };
     }
     return {
@@ -304,6 +315,7 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
       externals: [],
       bundledPackages: [],
       durationMs: 0,
+      bytes: { js: 0, css: 0, html: 0 },
     };
   }
 
@@ -311,6 +323,7 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
   const result = await bundle(files, entry, runtime);
   if (result.errors.length) {
     return {
+      bytes: { js: 0, css: 0, html: 0 },
       html: errorDocument(result.errors),
       entry,
       errors: result.errors,
@@ -346,6 +359,7 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
         },
       ];
       return {
+        bytes: { js: 0, css: 0, html: 0 },
         html: errorDocument(errors),
         entry,
         errors,
@@ -390,6 +404,7 @@ export async function buildPreview(files: Record<string, string>): Promise<Previ
     externals: result.externals,
     bundledPackages: result.bundledPackages,
     durationMs: result.durationMs,
+    bytes: { js: result.js.length, css: result.css.length, html: html.length },
   };
 }
 

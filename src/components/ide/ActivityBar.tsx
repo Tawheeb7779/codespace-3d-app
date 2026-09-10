@@ -1,7 +1,9 @@
 import {
   Activity,
   Bot,
+  Boxes,
   Files,
+  Gauge,
   GitBranch,
   HeartPulse,
   Layers,
@@ -32,6 +34,8 @@ const PANELS: Array<{ id: SidebarPanel; label: string; icon: typeof Files }> = [
   { id: 'health', label: 'Project health', icon: HeartPulse },
   { id: 'api', label: 'API', icon: Send },
   { id: 'environments', label: 'Environments', icon: Layers },
+  { id: 'performance', label: 'Performance', icon: Gauge },
+  { id: 'architecture', label: 'Architecture', icon: Boxes },
   { id: 'members', label: 'Members', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'activity', label: 'Activity', icon: Activity },

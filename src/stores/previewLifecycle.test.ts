@@ -38,6 +38,7 @@ const { buildPreview } = await import('@/lib/preview');
 
 const built = (html: string): PreviewBuild => ({
   html,
+  bytes: { js: html.length, css: 0, html: html.length },
   entry: 'src/main.ts',
   errors: [],
   warnings: [],

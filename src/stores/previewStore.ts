@@ -7,6 +7,7 @@ import {
   type Viewport,
 } from '@/lib/preview/devices';
 import { buildPreview } from '@/lib/preview';
+import { usePerfStore } from '@/stores/perfStore';
 import type { BuildDiagnostic } from '@/lib/bundler';
 import { useFileStore } from '@/stores/fileStore';
 import { consoleLog, useConsoleStore } from '@/stores/consoleStore';
@@ -166,6 +167,16 @@ export const usePreviewStore = create<PreviewState>()((set, get) => ({
           );
         }
       }
+      // What this build actually cost, from the bundler's own output. Recorded
+      // here so the profiler can compare builds rather than describe one.
+      usePerfStore.getState().record({
+        durationMs: result.durationMs,
+        js: result.bytes.js,
+        css: result.bytes.css,
+        html: result.bytes.html,
+        externals: result.externals.length,
+        ok: result.errors.length === 0,
+      });
       set({
         document: result.html,
         entry: result.entry,
