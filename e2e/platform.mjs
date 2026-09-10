@@ -249,7 +249,11 @@ try {
   await step('a terminal session can be renamed', async () => {
     await ensureBottomPanel();
     await page.waitForTimeout(800);
-    const tab = page.locator('button', { hasText: /^shell$/ }).first();
+    // Terminal tabs are named for the environment they run in — "project",
+    // "project·linux", "linux" — rather than "shell", so that which machine a
+    // command lands on is visible on the tab itself. The behaviour under test
+    // is the rename, which is unchanged; only the tab's name has.
+    const tab = page.getByRole('button', { name: /Project Terminal: project/i }).first();
     await tab.dblclick({ timeout: 8000 });
     const input = page.getByLabel('Terminal name');
     await input.waitFor({ timeout: 8000 });

@@ -1,5 +1,11 @@
 import { create } from 'zustand';
 import type { DevicepreSet } from '@/types';
+import {
+  clampDimension,
+  viewportFor,
+  type Orientation,
+  type Viewport,
+} from '@/lib/preview/devices';
 import { buildPreview } from '@/lib/preview';
 import type { BuildDiagnostic } from '@/lib/bundler';
 import { useFileStore } from '@/stores/fileStore';
@@ -26,7 +32,17 @@ interface PreviewState {
    * store's own status transitions.
    */
   builtFrom: Record<string, string> | null;
-  device: DevicepreSet;
+  /**
+   * Which viewport the preview renders at.
+   *
+   * A preset id from `DEVICE_PRESETS` rather than the old three-value union:
+   * the ids `desktop`, `tablet` and `mobile` are still in that list, so
+   * anything that set one of them keeps working and means the same thing.
+   */
+  device: string;
+  orientation: Orientation;
+  /** An exact size, when somebody typed one. Overrides the preset. */
+  customViewport: { width: number; height: number } | null;
   lastBuildMs: number;
   buildToken: number;
   run: () => Promise<void>;
@@ -34,9 +50,20 @@ interface PreviewState {
   buildOnce: () => Promise<void>;
   stop: () => void;
   refresh: () => Promise<void>;
-  setDevice: (device: DevicepreSet) => void;
+  setDevice: (device: string) => void;
+  setOrientation: (orientation: Orientation) => void;
+  /** Pass null to go back to the chosen preset. */
+  setCustomViewport: (size: { width: number; height: number } | null) => void;
+  /** The size to render at, resolved from preset, orientation and custom. */
+  viewport: () => Viewport;
 }
 
+/**
+ * The original three sizes.
+ *
+ * Kept so nothing that imported it breaks; `viewport()` is what the panel
+ * reads now, because it also knows about orientation and a custom size.
+ */
 export const DEVICE_SIZES: Record<DevicepreSet, { width: number; height: number; label: string }> = {
   desktop: { width: 0, height: 0, label: 'Responsive' },
   tablet: { width: 834, height: 1112, label: '834 × 1112' },
@@ -77,6 +104,8 @@ export const usePreviewStore = create<PreviewState>()((set, get) => ({
   externals: [],
   builtFrom: null,
   device: 'desktop',
+  orientation: 'portrait',
+  customViewport: null,
   lastBuildMs: 0,
   buildToken: 0,
 
@@ -174,5 +203,21 @@ export const usePreviewStore = create<PreviewState>()((set, get) => ({
     set({ buildToken: get().buildToken + 1 });
   },
 
-  setDevice: (device) => set({ device }),
+  // Choosing a preset clears a custom size: the two are alternatives, and
+  // leaving the custom one in force would make the preset click do nothing.
+  setDevice: (device) => set({ device, customViewport: null }),
+
+  setOrientation: (orientation) => set({ orientation }),
+
+  setCustomViewport: (size) =>
+    set({
+      customViewport: size
+        ? { width: clampDimension(size.width), height: clampDimension(size.height) }
+        : null,
+    }),
+
+  viewport: () => {
+    const { device, orientation, customViewport } = get();
+    return viewportFor(device, orientation, customViewport);
+  },
 }));

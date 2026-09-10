@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Mic, Square, Volume2, VolumeX } from 'lucide-react';
 import { IconButton } from '@/components/ui/IconButton';
 import { useVoiceStore } from '@/stores/voiceStore';
@@ -26,7 +26,10 @@ import { cx } from '@/lib/utils';
 export function VoiceControl() {
   const { state, interim, error, replyAloud, setReplyAloud, startListening, stopListening, silence, dismissError, announce } =
     useVoiceStore();
-  const available = useVoiceStore((s) => s.available());
+  // Same hazard: `available()` builds a new object each call, which as a
+  // selector would never compare equal and would re-render without end. It
+  // reads browser capabilities, which do not change within a session.
+  const available = useMemo(() => useVoiceStore.getState().available(), []);
   const send = useAiStore((s) => s.send);
   const running = useAiStore((s) => s.running);
   const messages = useAiStore((s) => s.messages);
