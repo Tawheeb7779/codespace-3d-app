@@ -18,6 +18,8 @@ import {
 } from '@/lib/ai/task';
 import { ReadCache, detectStack, outlineOf, renderContext } from '@/lib/ai/context';
 import { uid } from '@/lib/utils';
+import { useTimeTravelStore } from '@/stores/timeTravelStore';
+import { useFileStore } from '@/stores/fileStore';
 
 /**
  * Task state for the coding agent.
@@ -85,6 +87,16 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   /** Returns null when another task already holds the workspace. */
   begin(request, projectId) {
+    /*
+     * The project as it was before the assistant touched it.
+     *
+     * Taken here rather than after, because the point of the record is to be
+     * able to see what the agent changed — which needs the version from before
+     * it started, not the one it left behind.
+     */
+    useTimeTravelStore
+      .getState()
+      .capture(useFileStore.getState().files, 'agent-task', request.slice(0, 80));
     if (activeProjectId) return null;
     activeProjectId = projectId;
     readCache.clear();

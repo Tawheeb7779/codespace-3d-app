@@ -18,6 +18,8 @@ export type SidebarPanel =
   | 'environments'
   | 'performance'
   | 'architecture'
+  | 'timeline'
+  | 'extensions'
   | 'members';
 export type BottomTab = 'terminal' | 'problems' | 'checks' | 'output' | 'ports';
 export type MobilePane = 'files' | 'editor' | 'preview' | 'terminal' | 'assistant';

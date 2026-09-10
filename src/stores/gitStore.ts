@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import * as vcs from '@/lib/vcs';
+import { useTimeTravelStore } from '@/stores/timeTravelStore';
 import type { Commit, Repo, RepoStatus } from '@/lib/vcs';
 import { repositoryFor } from '@/lib/repo';
 import { useAuthStore } from '@/stores/authStore';
@@ -266,6 +267,11 @@ export const useGitStore = create<GitState>()((set, get) => ({
     set({ repo, status: vcs.status(repo, useFileStore.getState().files), history: vcs.log(repo) });
     await persist(repo);
     recordActivity('commit.created', `${created.id.slice(0, 7)} ${created.message}`);
+    // A commit is a point somebody chose. Recording the tree here makes it a
+    // place the timeline can come back to.
+    useTimeTravelStore
+      .getState()
+      .capture(useFileStore.getState().files, 'commit', `${created.id.slice(0, 7)} ${created.message}`);
 
     // A commit made while a pull is conflicted is the resolution, and it is
     // what completes that merge — the same role `git commit` plays after a
