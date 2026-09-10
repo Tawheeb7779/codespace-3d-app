@@ -13,7 +13,7 @@ import { runAgent, type AgentActivity } from '@/lib/ai/agent';
 import type { ToolContext } from '@/lib/ai/tools';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
-import { useTerminalStore } from '@/stores/terminalStore';
+import { useTerminalStore, ENVIRONMENT_LABEL } from '@/stores/terminalStore';
 import { execute, type ShellSession } from '@/lib/shell';
 import { createShellHost } from '@/lib/shellHost';
 import { useGitStore } from '@/stores/gitStore';
@@ -144,7 +144,15 @@ function toolContext(): ToolContext {
     },
     async runShell(command) {
       const terminal = useTerminalStore.getState();
-      const id = terminal.activeId ?? terminal.createSession();
+      /*
+       * The in-browser project shell, named rather than inherited.
+       *
+       * `activeId` is whichever tab a person last clicked, and that can be a
+       * Linux workspace: appending this command's output there would put the
+       * project's output on another machine's scrollback, and would render as
+       * nothing at all, since a container session's screen comes from its PTY.
+       */
+      const id = terminal.ensureSession('project');
       const session: ShellSession = { cwd: '', history: [] };
       terminal.append(id, [{ kind: 'command', text: `agent$ ${command}` }]);
       useAgentStore.getState().noteCommand(command);
@@ -152,7 +160,8 @@ function toolContext(): ToolContext {
       terminal.append(id, result.lines);
       return result.lines.map((line) => line.text).join('\n') || '(no output)';
     },
-    terminalOutput: () => useTerminalStore.getState().recentOutput(),
+    // Scoped to the project shell for the same reason.
+    terminalOutput: () => useTerminalStore.getState().recentOutput(120, 'project'),
 
     requestApproval: (action, affects) =>
       useAgentStore.getState().requestApproval(action, affects, 'run_command'),
@@ -299,7 +308,7 @@ export function currentContextSections(): ContextSection[] {
       (problem) => `${problem.path}:${problem.line} ${problem.severity}: ${problem.message}`,
     ),
     changedPaths: [...git.status.staged, ...git.status.unstaged].map((change) => change.path),
-    terminalOutput: useTerminalStore.getState().recentOutput(),
+    terminalOutput: useTerminalStore.getState().recentOutput(120, 'project'),
   });
 }
 
@@ -319,6 +328,13 @@ function contextMessage(): string {
     diagnostics: problems
       .slice(0, 10)
       .map((p) => `${p.path}:${p.line} ${p.severity}: ${p.message}`),
+    // What is actually open, not what could be: an environment with no session
+    // is one the agent has no terminal in.
+    terminals: useTerminalStore.getState().sessions.map((session) => ({
+      name: session.name,
+      environment: session.environment,
+      label: ENVIRONMENT_LABEL[session.environment],
+    })),
   });
   const chosen = renderContextSections(currentContextSections());
   return chosen ? `${header}\n\n${chosen}` : header;

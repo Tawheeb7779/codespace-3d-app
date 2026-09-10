@@ -2,6 +2,11 @@ import { isSensitivePath, normalizePath, readableFiles } from '@/lib/vfs';
 import { classify } from '@/lib/ai/approval';
 import { searchContents, DEFAULT_SEARCH_OPTIONS } from '@/lib/search';
 import { buildTree, type TreeNode } from '@/lib/vfs';
+import {
+  ENVIRONMENT_LABEL,
+  TERMINAL_ENVIRONMENTS,
+  type TerminalEnvironment,
+} from '@/stores/terminalStore';
 
 /**
  * Tools the coding agent may call.
@@ -27,7 +32,14 @@ export interface ToolContext {
   writeFile(path: string, content: string): void;
   deletePath(path: string): void;
   runShell(command: string): Promise<string>;
-  terminalOutput(): string;
+  /**
+   * Recent output from one terminal environment.
+   *
+   * The environment is explicit because the three are different machines. An
+   * agent reasoning about a failing build must not be shown a Linux
+   * workspace's scrollback as though it were the project's.
+   */
+  terminalOutput(environment?: TerminalEnvironment): string;
   /**
    * Ask the user, in the moment, about an action that cannot be undone.
    *
@@ -118,7 +130,21 @@ export interface ToolDefinition {
   /** JSON Schema for the tool input. */
   input_schema: {
     type: 'object';
-    properties: Record<string, { type: string; description: string }>;
+    properties: Record<
+      string,
+      {
+        type: string;
+        description: string;
+        /**
+         * The permitted values, where a parameter names one of a fixed set.
+         *
+         * Carried to the provider as JSON Schema so the model is told the
+         * choices rather than left to guess them — and re-checked in the tool,
+         * because a schema is a hint to the model and never a guarantee.
+         */
+        enum?: readonly string[];
+      }
+    >;
     required: string[];
   };
   mutates: boolean;
@@ -387,8 +413,24 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'run_command',
+    /*
+     * The in-browser project shell, and nothing else.
+     *
+     * There is deliberately no tool that types into a container's PTY. The
+     * Project Terminal (Linux) and the Linux Terminal are real shells on a
+     * real machine, and "the model decided to" is not an authorisation
+     * decision for one — the agent reaches the container only through typed
+     * git operations and the five-name check allowlist, both of which the
+     * gateway validates. Saying so in the description matters: an agent that
+     * believes this is a Linux shell will write commands for one and read
+     * their failure as a project problem.
+     */
     description:
-      'Run a TA CODE shell command in the workspace (for example "build", "git status", "npm ls"). Returns the real output.',
+      'Run a command in the Project Terminal — TA CODE\'s in-browser shell over this project\'s ' +
+      'files (for example "build", "git status", "npm ls"). Returns the real output. This is NOT ' +
+      'the Linux Terminal and NOT a container shell: it has no host, no network and no processes. ' +
+      'To run the project\'s real tests, lint, typecheck or build in its Linux container, use ' +
+      'run_project_check instead.',
     input_schema: {
       type: 'object',
       properties: { command: { type: 'string', description: 'Shell command line' } },
@@ -405,10 +447,37 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'get_terminal_output',
-    description: 'Read the recent output of the active terminal session.',
-    input_schema: { type: 'object', properties: {}, required: [] },
+    description:
+      'Read the recent output of a terminal. Name which environment: "project" is the in-browser ' +
+      'Project Terminal, "project-container" is this project in its Linux container, and "linux" ' +
+      'is the separate Linux Terminal, which holds none of this project\'s files. Defaults to ' +
+      'the Project Terminal.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        environment: {
+          type: 'string',
+          enum: ['project', 'project-container', 'linux'],
+          description: 'Which terminal environment to read.',
+        },
+      },
+      required: [],
+    },
     mutates: false,
-    run: (_input, ctx) => ctx.terminalOutput() || '(the terminal has no output yet)',
+    run: (input, ctx) => {
+      const requested = (input as { environment?: unknown }).environment;
+      // An unrecognised value is refused rather than silently read as the
+      // project's: answering the wrong machine's output to a specific question
+      // is worse than answering none.
+      if (requested !== undefined && !TERMINAL_ENVIRONMENTS.includes(requested as TerminalEnvironment)) {
+        throw new ToolError(
+          `Unknown terminal environment "${String(requested)}". Use one of: ${TERMINAL_ENVIRONMENTS.join(', ')}.`,
+        );
+      }
+      const environment = (requested as TerminalEnvironment) ?? 'project';
+      const output = ctx.terminalOutput(environment);
+      return output || `(${ENVIRONMENT_LABEL[environment]} has no output yet)`;
+    },
   },
   {
     name: 'run_build',

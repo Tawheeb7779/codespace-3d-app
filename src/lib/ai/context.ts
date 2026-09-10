@@ -25,6 +25,16 @@ export interface ProjectContext {
   fileCount: number;
   /** A shallow listing: top-level entries plus notable config files. */
   outline: string[];
+  /**
+   * The terminals that are actually open, and which environment each is in.
+   *
+   * The agent has to be told, because the three environments are different
+   * machines and only one of them is reachable from `run_command`. Without
+   * this it writes a Linux command expecting the Linux Terminal to run it,
+   * gets the in-browser shell's refusal, and reads that as a project fault.
+   * Omitted from the header entirely when nothing is open.
+   */
+  terminals?: Array<{ name: string; environment: string; label: string }>;
 }
 
 interface Manifest {
@@ -91,6 +101,16 @@ export function renderContext(context: ProjectContext): string {
     `Package manager: ${context.packageManager}  Branch: ${context.branch}  Files: ${context.fileCount}`,
     `Layout: ${context.outline.join(' ')}`,
   ];
+  if (context.terminals?.length) {
+    lines.push('Terminals open:');
+    for (const terminal of context.terminals.slice(0, 8)) {
+      lines.push(`  "${terminal.name}" — ${terminal.label} (environment: ${terminal.environment})`);
+    }
+    lines.push(
+      '  run_command runs only in the Project Terminal (in-browser). It cannot run in a ' +
+        'container or in the Linux Terminal. get_terminal_output takes an environment.',
+    );
+  }
   if (context.dirty.length) {
     lines.push(`Uncommitted: ${context.dirty.slice(0, 12).join(' ')}`);
   }

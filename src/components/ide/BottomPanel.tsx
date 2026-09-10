@@ -14,11 +14,16 @@ import {
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/IconButton';
 import { EmptyState, Badge } from '@/components/ui/Primitives';
+import { Menu } from '@/components/ui/Menu';
 import { TerminalView } from '@/components/ide/TerminalView';
 import { ChecksPanel } from '@/components/ide/ChecksPanel';
 import { FileIcon } from '@/components/ide/FileIcon';
 import { useUIStore, type BottomTab } from '@/stores/uiStore';
-import { useTerminalStore, type TerminalMode } from '@/stores/terminalStore';
+import {
+  useTerminalStore,
+  ENVIRONMENT_LABEL,
+  TERMINAL_ENVIRONMENTS,
+} from '@/stores/terminalStore';
 import { containerTerminalAvailable } from '@/lib/terminal/containerClient';
 import { useEditorStore } from '@/stores/editorStore';
 import { useConsoleStore, ALL_LEVELS } from '@/stores/consoleStore';
@@ -379,6 +384,7 @@ export function BottomPanel() {
   const { bottomTab, setBottomTab, toggleBottom } = useUIStore();
   const isMobile = useIsMobile();
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [newMenu, setNewMenu] = useState<{ x: number; y: number } | null>(null);
   const {
     sessions,
     activeId,
@@ -388,8 +394,6 @@ export function BottomPanel() {
     setActive,
     renameSession,
     transcript,
-    mode,
-    setMode,
   } = useTerminalStore();
   const problemCount = useEditorStore((s) => s.problems.filter((p) => p.severity === 'error').length);
   const warningCount = useEditorStore((s) => s.problems.filter((p) => p.severity === 'warning').length);
@@ -468,18 +472,6 @@ export function BottomPanel() {
               * belongs to the person, starts empty, and mounts nothing. Naming
               * the last two alike is how the boundary gets forgotten.
               */}
-            {containerTerminalAvailable() && (
-              <select
-                aria-label="Terminal environment"
-                value={mode}
-                onChange={(event) => setMode(event.target.value as TerminalMode)}
-                className="tap-target mr-1 h-6 shrink-0 rounded border border-line bg-surface-sunken px-1.5 text-sm text-ink focus:border-accent focus:outline-none"
-              >
-                <option value="virtual">Project</option>
-                <option value="container">Project (Linux)</option>
-                <option value="linux">Linux workspace</option>
-              </select>
-            )}
             {sessions.map((session) => (
               <div
                 key={session.id}
@@ -508,12 +500,27 @@ export function BottomPanel() {
                 ) : (
                   <button
                     type="button"
-                    className="tap-target"
+                    className="tap-target flex items-center gap-1"
+                    aria-label={`${ENVIRONMENT_LABEL[session.environment]}: ${session.name}`}
                     onClick={() => setActive(session.id)}
                     onDoubleClick={() => setRenaming(session.id)}
-                    title="Double-click to rename"
+                    title={`${ENVIRONMENT_LABEL[session.environment]} — double-click to rename`}
                   >
-                    {session.name}
+                    {/* The environment is on every tab, not in a selector
+                        somewhere else: which machine a command lands on is the
+                        one thing a person must never have to remember. */}
+                    <span
+                      aria-hidden
+                      className={cx(
+                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                        session.environment === 'linux'
+                          ? 'bg-caution'
+                          : session.environment === 'project-container'
+                            ? 'bg-accent'
+                            : 'bg-ink-faint',
+                      )}
+                    />
+                    <span>{session.name}</span>
                   </button>
                 )}
                 {sessions.length > 1 && (
@@ -528,11 +535,35 @@ export function BottomPanel() {
                 )}
               </div>
             ))}
+            {/*
+              * One control that opens a terminal *somewhere*, rather than a
+              * selector that moves every terminal at once. Each entry adds a
+              * session; nothing already open is closed or replaced. With no
+              * gateway there is one environment, so there is no menu — a menu
+              * of one is a button wearing a hat.
+              */}
             <IconButton
               label="New terminal"
               size="xs"
               icon={<Plus className="h-3 w-3" />}
-              onClick={() => createSession()}
+              onClick={(event) => {
+                if (!containerTerminalAvailable()) {
+                  createSession('project');
+                  return;
+                }
+                const rect = event.currentTarget.getBoundingClientRect();
+                setNewMenu({ x: rect.left, y: rect.bottom + 4 });
+              }}
+            />
+            <Menu
+              label="New terminal environment"
+              anchor={newMenu}
+              onClose={() => setNewMenu(null)}
+              items={TERMINAL_ENVIRONMENTS.map((environment) => ({
+                id: environment,
+                label: ENVIRONMENT_LABEL[environment],
+                onSelect: () => createSession(environment),
+              }))}
             />
             <IconButton
               label="Copy terminal output"

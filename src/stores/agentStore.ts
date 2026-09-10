@@ -214,6 +214,7 @@ export function projectContextHeader(input: {
   files: Record<string, string>;
   dirty: string[];
   diagnostics: string[];
+  terminals?: Array<{ name: string; environment: string; label: string }>;
 }): string {
   const { framework, packageManager } = detectStack(input.files);
   return renderContext({
@@ -227,5 +228,6 @@ export function projectContextHeader(input: {
     diagnostics: input.diagnostics,
     fileCount: Object.keys(input.files).length,
     outline: outlineOf(input.files),
+    terminals: input.terminals,
   });
 }

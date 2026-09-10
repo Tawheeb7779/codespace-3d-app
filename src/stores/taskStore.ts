@@ -279,7 +279,9 @@ async function drain(): Promise<void> {
       // Mirror into the terminal, so a task run is visible where every other
       // command is, rather than only inside the tasks panel.
       const terminal = useTerminalStore.getState();
-      const sessionId = terminal.activeId ?? terminal.createSession();
+      // A task runs in the in-browser project shell, so its transcript belongs
+      // in a session that can show it — not in whichever tab is focused.
+      const sessionId = terminal.ensureSession('project');
       terminal.append(sessionId, [{ kind: 'command', text: `task(${config.name})$ ${config.command}` }]);
 
       // The command is re-validated here, not only when it was saved: storage

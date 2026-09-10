@@ -196,11 +196,24 @@ useTerminalStore.subscribe((state) => {
  * flag, which is how both of them end up subtly wrong.
  */
 export function TerminalView({ sessionId }: { sessionId: string }) {
-  const mode = useTerminalStore((s) => s.mode);
-  // Both container modes render the same terminal; `kind` is what decides
-  // which workspace it opens, and the gateway authorises them differently.
-  if (mode === 'container') return <ContainerTerminalView sessionId={sessionId} kind="project" />;
-  if (mode === 'linux') return <ContainerTerminalView sessionId={sessionId} kind="linux" />;
+  /*
+   * The transport is the session's, not the panel's.
+   *
+   * Reading it from a panel-level setting meant switching to Linux replaced the
+   * project terminal on screen — one terminal with a selector rather than two
+   * terminals. Read per session, both stay mounted, keep their own process and
+   * scrollback, and are switched between by their tabs.
+   */
+  const environment = useTerminalStore(
+    (s) => s.sessions.find((session) => session.id === sessionId)?.environment ?? 'project',
+  );
+  // Both container environments render the same terminal; `kind` is what
+  // decides which workspace it opens, and the gateway authorises them
+  // differently.
+  if (environment === 'project-container') {
+    return <ContainerTerminalView sessionId={sessionId} kind="project" />;
+  }
+  if (environment === 'linux') return <ContainerTerminalView sessionId={sessionId} kind="linux" />;
   return <VirtualTerminalView sessionId={sessionId} />;
 }
 
