@@ -8,6 +8,7 @@ import {
   workspaceConnected,
   workspaceContainerId,
 } from '@/lib/ai/workspaceBridge';
+import { useCheckStore } from '@/stores/checkStore';
 import { cx } from '@/lib/utils';
 
 /**
@@ -81,7 +82,17 @@ export function ChecksPanel() {
       // A refusal is a refusal: the gateway declining `deploy` is not a check
       // that passed, and must not be shown as one.
       if (!answer.ok) setError(answer.message ?? `${script} could not be run.`);
-      else if (answer.result) setOutcome(answer.result);
+      else if (answer.result) {
+        setOutcome(answer.result);
+        // Remembered beyond this panel, so the health dashboard can report a
+        // real exit code rather than assuming one.
+        useCheckStore.getState().record({
+          script: answer.result.script,
+          ok: answer.result.ok,
+          exitCode: answer.result.exitCode,
+          summary: answer.result.output,
+        });
+      }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The workspace did not answer.');
     } finally {

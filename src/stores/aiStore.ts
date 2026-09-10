@@ -14,6 +14,7 @@ import type { ToolContext } from '@/lib/ai/tools';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useTerminalStore, ENVIRONMENT_LABEL } from '@/stores/terminalStore';
+import { useCheckStore } from '@/stores/checkStore';
 import { execute, type ShellSession } from '@/lib/shell';
 import { createShellHost } from '@/lib/shellHost';
 import { useGitStore } from '@/stores/gitStore';
@@ -218,6 +219,14 @@ function toolContext(): ToolContext {
         // Recorded as a verification the agent actually ran, so the UI's
         // summary reflects what happened rather than what was attempted.
         if ('result' in answer && answer.result) {
+          // The same record the panel writes: a check the agent ran is a check
+          // that was run, and the dashboard should not care which asked.
+          useCheckStore.getState().record({
+            script: answer.result.script,
+            ok: answer.result.ok,
+            exitCode: answer.result.exitCode,
+            summary: answer.result.output,
+          });
           useAgentStore.getState().noteVerification({
             name: `npm run ${answer.result.script}`,
             ok: answer.result.ok,
