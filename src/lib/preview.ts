@@ -73,8 +73,14 @@ export function findEntry(files: Record<string, string>): string | null {
   return ENTRY_CANDIDATES.find((candidate) => candidate in files) ?? null;
 }
 
-/** The runtime bridge injected into every preview document. */
-const BRIDGE = `<script>
+/**
+ * The runtime bridge injected into every preview document.
+ *
+ * Exported so its gating can be asserted: this script runs inside the sandbox
+ * and is the only channel across it in either direction, so which messages it
+ * acts on is a security property, not an implementation detail.
+ */
+export const BRIDGE = `<script>
 (function () {
   var overlayShown = false;
   var showOverlay = function (title, detail) {
@@ -147,6 +153,104 @@ const BRIDGE = `<script>
       }
     }, 2500);
   });
+  /*
+   * Inspect mode: picking an element in the preview, from the outside.
+   *
+   * The parent cannot reach into this document — the frame is sandboxed
+   * without allow-same-origin, deliberately — so element picking has to run
+   * in here and report back over the same channel. It is off until the host
+   * asks for it, and only the host may ask: the message must come from our
+   * own parent window.
+   *
+   * What goes back is a description, never a node: tag, id, classes, own
+   * text, and a readable path. Matching that back to a line of source is the
+   * host's problem, and an inexact one, which is said there rather than
+   * papered over here.
+   */
+  var inspecting = false;
+  var marker = null;
+  var hovered = null;
+
+  var markerFor = function () {
+    if (marker) return marker;
+    marker = document.createElement('div');
+    marker.setAttribute('data-forge-inspect', '');
+    marker.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;' +
+      'border:1px solid #2bb3d6;background:rgba(43,179,214,0.16);border-radius:2px;' +
+      'transition:all 60ms ease-out;';
+    (document.body || document.documentElement).appendChild(marker);
+    return marker;
+  };
+
+  var describe = function (el) {
+    var own = '';
+    for (var i = 0; i < el.childNodes.length; i += 1) {
+      if (el.childNodes[i].nodeType === 3) own += el.childNodes[i].nodeValue;
+    }
+    var path = [];
+    var node = el;
+    while (node && node.nodeType === 1 && path.length < 8) {
+      var step = node.tagName.toLowerCase();
+      if (node.id) step += '#' + node.id;
+      else if (node.classList && node.classList.length) step += '.' + node.classList[0];
+      path.unshift(step);
+      node = node.parentElement;
+    }
+    return {
+      tag: el.tagName.toLowerCase(),
+      id: el.id || null,
+      classes: el.classList ? Array.prototype.slice.call(el.classList) : [],
+      text: own.trim().slice(0, 200),
+      path: path.join(' > ')
+    };
+  };
+
+  var onOver = function (event) {
+    if (!inspecting) return;
+    var el = event.target;
+    if (!el || el.nodeType !== 1 || el.hasAttribute('data-forge-inspect')) return;
+    hovered = el;
+    var box = el.getBoundingClientRect();
+    var m = markerFor();
+    m.style.top = box.top + 'px';
+    m.style.left = box.left + 'px';
+    m.style.width = box.width + 'px';
+    m.style.height = box.height + 'px';
+  };
+
+  var onPick = function (event) {
+    if (!inspecting) return;
+    // The page's own handlers must not fire: a click meant to select a
+    // button should not also submit the form it sits in.
+    event.preventDefault();
+    event.stopPropagation();
+    var el = event.target && event.target.nodeType === 1 ? event.target : hovered;
+    if (!el) return;
+    try {
+      parent.postMessage({ source: 'forge-preview', level: 'inspect', selection: describe(el) }, '*');
+    } catch (e) { /* the parent may be gone during teardown */ }
+  };
+
+  document.addEventListener('mouseover', onOver, true);
+  document.addEventListener('click', onPick, true);
+  document.addEventListener('mousedown', function (event) {
+    if (inspecting) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
+
+  window.addEventListener('message', function (event) {
+    // Only our own host may turn this on.
+    if (event.source !== parent) return;
+    var data = event.data;
+    if (!data || data.source !== 'forge-host' || data.type !== 'inspect') return;
+    inspecting = !!data.enabled;
+    document.documentElement.style.cursor = inspecting ? 'crosshair' : '';
+    if (!inspecting && marker) {
+      marker.parentNode.removeChild(marker);
+      marker = null;
+      hovered = null;
+    }
+  });
+
   parent.postMessage({ source: 'forge-preview', level: 'ready', message: 'preview-ready' }, '*');
 })();
 </script>`;

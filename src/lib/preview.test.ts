@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findEntry, readDependencyPins } from '@/lib/preview';
+import { BRIDGE, findEntry, readDependencyPins } from '@/lib/preview';
 import { isBareSpecifier } from '@/lib/bundler';
 import { getTemplate, TEMPLATES } from '@/lib/templates';
 import { detectProjectLanguage } from '@/lib/languages';
@@ -108,5 +108,37 @@ describe('detectProjectLanguage', () => {
 
   it('degrades to plain text when nothing is recognised', () => {
     expect(detectProjectLanguage(['notes.txt'])).toBe('Plain Text');
+  });
+});
+
+/**
+ * The bridge is the only thing that crosses the sandbox boundary, in either
+ * direction, so what it will act on is a security property.
+ *
+ * Inspect mode lets an outside window change how the previewed page behaves —
+ * it suppresses the page's own clicks — so it must answer to this app's frame
+ * and nothing else. A page inside the preview can also `postMessage`, and an
+ * embedded third-party frame could too; neither may turn picking on.
+ */
+describe('the preview bridge', () => {
+  it('only lets the parent window enable inspect mode', () => {
+    expect(BRIDGE).toContain('if (event.source !== parent) return;');
+    expect(BRIDGE).toContain("data.source !== 'forge-host'");
+  });
+
+  it('starts with inspection off', () => {
+    expect(BRIDGE).toMatch(/var inspecting = false;/);
+  });
+
+  /** A click meant to select a button must not also submit its form. */
+  it('suppresses the page’s own handlers while picking', () => {
+    expect(BRIDGE).toContain('event.preventDefault();');
+    expect(BRIDGE).toContain('event.stopPropagation();');
+  });
+
+  /** A description crosses the boundary; a node never could, and must not. */
+  it('sends a description rather than anything live', () => {
+    expect(BRIDGE).toContain("level: 'inspect'");
+    expect(BRIDGE).toContain('describe(el)');
   });
 });

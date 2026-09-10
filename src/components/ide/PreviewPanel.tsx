@@ -27,8 +27,13 @@ import { consoleLog } from '@/stores/consoleStore';
 import { toast } from '@/stores/toastStore';
 import { getTemplate } from '@/lib/templates';
 import { PREVIEW_SANDBOX, openPreviewWindow } from '@/lib/previewWindow';
+import { useUIBuilderStore } from '@/stores/uiBuilderStore';
+import { readSelection } from '@/lib/uibuilder/locate';
 import type { ConsoleLevel } from '@/types';
 import { cx } from '@/lib/utils';
+
+/** Levels that are console output; anything else on the channel is not a log. */
+const CONSOLE_LEVELS = new Set<ConsoleLevel>(['log', 'info', 'warn', 'error', 'debug']);
 
 /**
  * The toolbar's icon, showing what kind of thing is being previewed.
@@ -84,14 +89,39 @@ export function PreviewPanel() {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frameRef.current?.contentWindow) return;
-      const data = event.data as { source?: string; level?: string; message?: string } | null;
+      const data = event.data as
+        | { source?: string; level?: string; message?: string; selection?: unknown }
+        | null;
       if (!data || data.source !== 'forge-preview') return;
       if (data.level === 'ready') return;
-      consoleLog.preview(String(data.message ?? ''), (data.level as ConsoleLevel) ?? 'log');
+
+      // An element picked in the preview, not something to print.
+      if (data.level === 'inspect') {
+        const selection = readSelection(data.selection);
+        if (selection) useUIBuilderStore.getState().select(selection);
+        return;
+      }
+      if (!CONSOLE_LEVELS.has(data.level as ConsoleLevel)) return;
+      consoleLog.preview(String(data.message ?? ''), data.level as ConsoleLevel);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  /*
+   * Tell the frame whether to pick elements.
+   *
+   * Re-sent on every rebuild as well as every toggle: a new document starts
+   * with inspection off and would otherwise silently stop responding to a
+   * picker the panel still shows as on.
+   */
+  const inspecting = useUIBuilderStore((s) => s.inspecting);
+  useEffect(() => {
+    frameRef.current?.contentWindow?.postMessage(
+      { source: 'forge-host', type: 'inspect', enabled: inspecting },
+      '*',
+    );
+  }, [inspecting, buildToken]);
 
   // Auto-rebuild after edits settle, when enabled.
   //

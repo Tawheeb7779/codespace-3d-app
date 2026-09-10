@@ -26,6 +26,7 @@ import { TimeTravelPanel } from '@/components/ide/TimeTravelPanel';
 import { ExtensionsPanel } from '@/components/ide/ExtensionsPanel';
 import { BuilderPanel } from '@/components/ide/BuilderPanel';
 import { DatabasePanel } from '@/components/ide/DatabasePanel';
+import { UIBuilderPanel } from '@/components/ide/UIBuilderPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -103,6 +104,8 @@ function SidePanel() {
       return <BuilderPanel />;
     case 'database':
       return <DatabasePanel />;
+    case 'uibuilder':
+      return <UIBuilderPanel />;
     case 'members':
       return <MembersPanel />;
     default:
