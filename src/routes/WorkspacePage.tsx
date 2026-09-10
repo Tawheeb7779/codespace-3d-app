@@ -15,6 +15,7 @@ import { PackagesPanel } from '@/components/ide/PackagesPanel';
 import { AssistantPanel } from '@/components/ide/AssistantPanel';
 import { MembersPanel } from '@/components/ide/MembersPanel';
 import { CommentsPanel } from '@/components/ide/CommentsPanel';
+import { SecurityPanel } from '@/components/ide/SecurityPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -70,6 +71,8 @@ function SidePanel() {
       return <AssistantPanel />;
     case 'comments':
       return <CommentsPanel />;
+    case 'security':
+      return <SecurityPanel />;
     case 'members':
       return <MembersPanel />;
     default:

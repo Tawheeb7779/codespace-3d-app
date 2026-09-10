@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Package,
   Search,
+  ShieldCheck,
   Users,
 } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -23,6 +24,7 @@ const PANELS: Array<{ id: SidebarPanel; label: string; icon: typeof Files }> = [
   { id: 'packages', label: 'Packages', icon: Package },
   { id: 'assistant', label: 'Assistant', icon: Bot },
   { id: 'comments', label: 'Comments', icon: MessageSquare },
+  { id: 'security', label: 'Security', icon: ShieldCheck },
   { id: 'members', label: 'Members', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'activity', label: 'Activity', icon: Activity },
