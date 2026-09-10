@@ -4,31 +4,31 @@ import { PanelHeader, EmptyState, Badge, Spinner, ErrorState } from '@/component
 import { useActivityStore } from '@/stores/activityStore';
 import { usePresenceStore, statusFor } from '@/stores/presenceStore';
 import { useFileStore } from '@/stores/fileStore';
-import { useAuthStore } from '@/stores/authStore';
-import { useEditorStore } from '@/stores/editorStore';
 import { describeActivity } from '@/lib/activity';
 import { formatTimeAgo } from '@/lib/utils';
 
 /**
  * Who is here, and what has happened.
  *
- * The presence half is deliberately modest: Forge has no realtime transport,
- * so the only participant it can honestly report is this tab. The panel says
- * so in as many words rather than implying an empty list means nobody else is
- * working — those are very different claims.
+ * The panel reads presence; it does not own it. Entering a project and
+ * publishing this tab's position belong to the workspace, because presence is
+ * a property of having the project open rather than of having this panel
+ * visible — and because a panel that re-entered on mount used to clear the
+ * colleague list the transport had just filled in.
+ *
+ * `transport` is what decides whether anything is claimed about other people at
+ * all. When it is `local-only` — no Supabase, or the channel dropped — the
+ * panel says the list is only this tab, rather than letting an empty list read
+ * as "nobody else is working". Those are very different claims.
  */
 export function ActivityPanel() {
   const projectId = useFileStore((s) => s.projectId);
-  const user = useAuthStore((s) => s.user);
-  const activePath = useEditorStore((s) => s.activePath);
 
   const events = useActivityStore((s) => s.events);
   const loading = useActivityStore((s) => s.loading);
   const error = useActivityStore((s) => s.error);
   const load = useActivityStore((s) => s.load);
 
-  const enter = usePresenceStore((s) => s.enter);
-  const touch = usePresenceStore((s) => s.touch);
   const transport = usePresenceStore((s) => s.transport);
   // Same reason as the workspace list: a selector returning a new array on
   // every call never compares equal, and the component never stops updating.
@@ -39,14 +39,6 @@ export function ActivityPanel() {
   useEffect(() => {
     if (projectId) void load(projectId);
   }, [projectId, load]);
-
-  useEffect(() => {
-    if (projectId && user) enter(projectId, user);
-  }, [projectId, user, enter]);
-
-  useEffect(() => {
-    touch(activePath);
-  }, [activePath, touch]);
 
   return (
     <div className="flex h-full flex-col">

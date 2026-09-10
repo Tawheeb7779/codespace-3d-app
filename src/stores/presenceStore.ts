@@ -64,7 +64,21 @@ export const usePresenceStore = create<PresenceState>()((set, get) => ({
   // Honest by default. A transport flips this when one is actually connected.
   transport: 'local-only',
 
+  /**
+   * Announce this tab in a project.
+   *
+   * Idempotent for the same project and person, and that matters now that a
+   * transport exists: re-entering used to clear `remote`, so any second caller
+   * — a panel mounting after the channel had synced — wiped the list of
+   * colleagues until the next presence event. Re-entering the *same* room is
+   * not arriving in it again.
+   */
   enter(projectId, user) {
+    const current = get().self;
+    if (get().projectId === projectId && current?.userId === user.id) {
+      set({ self: { ...current, lastSeenAt: Date.now() } });
+      return;
+    }
     set({
       projectId,
       self: {
@@ -75,6 +89,8 @@ export const usePresenceStore = create<PresenceState>()((set, get) => ({
         lastSeenAt: Date.now(),
         isSelf: true,
       },
+      // A different project is a different room: whoever was in the last one
+      // is not in this one, and carrying them over would be a false claim.
       remote: [],
     });
   },

@@ -34,6 +34,10 @@ import type { RemoteResult } from '@/stores/gitStore';
 import { usePreviewStore } from '@/stores/previewStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useTerminalStore } from '@/stores/terminalStore';
+import { usePresenceStore } from '@/stores/presenceStore';
+import { useAuthStore } from '@/stores/authStore';
+import { connectPresence, disconnectPresence } from '@/lib/collab/presenceTransport';
+import { supabase } from '@/lib/supabase';
 import { useTaskStore } from '@/stores/taskStore';
 import { toast } from '@/stores/toastStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -230,6 +234,34 @@ export default function WorkspacePage() {
       disposeContainerTerminals(projectId);
     };
   }, [projectId, open, loadGit]);
+
+  /**
+   * Announce this tab, and hear about everyone else's.
+   *
+   * `enter` is what puts this person in the presence store at all; the
+   * transport is what makes the store's `remote` list mean something. Both are
+   * torn down on leaving, because a channel left open for a project the user
+   * has closed keeps publishing them into a room they are no longer in.
+   *
+   * With no Supabase the transport declines and the store keeps reporting
+   * `local-only` — the panel then says it knows only this tab, which is true.
+   */
+  useEffect(() => {
+    const user = useAuthStore.getState().user;
+    if (!projectId || !user) return;
+    usePresenceStore.getState().enter(projectId, user);
+    connectPresence(supabase, projectId);
+    return () => {
+      disconnectPresence();
+      usePresenceStore.getState().leave();
+    };
+  }, [projectId]);
+
+  // Where this person is working, for the others. Only the path: presence
+  // carries no file content, and must not.
+  useEffect(() => {
+    usePresenceStore.getState().touch(activePath ?? null);
+  }, [activePath]);
 
   /**
    * Put back the last session, or open a sensible first file.
