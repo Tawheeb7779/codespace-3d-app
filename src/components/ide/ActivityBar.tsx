@@ -25,6 +25,7 @@ const PANELS: Array<{ id: SidebarPanel; label: string; icon: typeof Files }> = [
   { id: 'assistant', label: 'Assistant', icon: Bot },
   { id: 'comments', label: 'Comments', icon: MessageSquare },
   { id: 'security', label: 'Security', icon: ShieldCheck },
+  { id: 'observability', label: 'Observability', icon: Activity },
   { id: 'members', label: 'Members', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'activity', label: 'Activity', icon: Activity },
