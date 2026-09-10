@@ -18,6 +18,7 @@ import {
   type ContextSource,
 } from '@/lib/ai/contextControl';
 import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
+import { VoiceControl } from '@/components/ide/VoiceControl';
 import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_BASE_URL,
@@ -470,6 +471,15 @@ export function AssistantPanel() {
       )}
 
       <div className="border-t border-line p-2.5">
+        {/* Voice sits with the composer because it is the composer: it fills
+            the same request through the same `send`, and belongs beside the
+            text box rather than in a mode of its own. Hidden until a provider
+            is connected, for the same reason the text box is disabled. */}
+        {connected && (
+          <div className="mb-1.5">
+            <VoiceControl />
+          </div>
+        )}
         <div className="flex items-end gap-1.5">
           <textarea
             value={prompt}
