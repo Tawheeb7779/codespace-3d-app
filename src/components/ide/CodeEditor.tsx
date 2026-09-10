@@ -9,6 +9,9 @@ import { useFileStore } from '@/stores/fileStore';
 import { useAiStore } from '@/stores/aiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useAuthStore } from '@/stores/authStore';
+import { useCollabStore } from '@/stores/collabStore';
+import { supabase } from '@/lib/supabase';
 import { useMonacoTheme } from '@/hooks/useTheme';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import { Spinner } from '@/components/ui/Primitives';
@@ -50,6 +53,14 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
   // every column counts.
   const isMobile = useIsMobile();
   const theme = useMonacoTheme();
+  const collabEnabled = useCollabStore((s) => s.enabled);
+  const projectId = useFileStore((s) => s.projectId);
+  const user = useAuthStore((s) => s.user);
+  // Only for the file on screen: a status left over from the previous tab
+  // would lock this one for a document it says nothing about.
+  const bootstrapping = useCollabStore(
+    (s) => s.enabled && s.path === path && s.status === 'bootstrapping',
+  );
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const viewStates = useRef(new Map<string, editor.ICodeEditorViewState | null>());
@@ -207,6 +218,59 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
     consumeReveal();
   }, [reveal, path, consumeReveal]);
 
+  /**
+   * Share this file, when the person has asked to.
+   *
+   * Attached to the *model*, after mount, and only for the file on screen. The
+   * binding is torn down on every change of file or of the switch, because a
+   * live channel for a file nobody is looking at is bandwidth and a caret on
+   * somebody else's screen for a person who has moved on.
+   *
+   * Bound edits still reach `onChange`, so the save path below is unchanged:
+   * a remote edit is written to the store exactly as a local one is.
+   */
+  useEffect(() => {
+    if (!collabEnabled || !projectId || !user || !supabase || readOnly) return;
+    const instance = editorRef.current;
+    const model = instance?.getModel();
+    if (!instance || !model) return;
+
+    /*
+     * Loaded on demand, not with the workspace.
+     *
+     * Yjs and its Monaco binding are about 30kB gzipped, and shared editing is
+     * off by default — so importing them eagerly would charge every
+     * single-player session for a feature it never uses. `cancelled` guards the
+     * gap: a person can switch file before the import resolves, and binding a
+     * document to a model nobody is looking at leaves a live channel behind.
+     */
+    let cancelled = false;
+    let handle: { destroy: () => void } | null = null;
+    // Narrowed here so the closure below carries a client rather than a maybe.
+    const client = supabase;
+
+    void import('@/lib/collab/editorBinding').then(({ bindSharedDocument }) => {
+      if (cancelled || instance.getModel() !== model) return;
+      handle = bindSharedDocument({
+        client,
+        projectId,
+        path,
+        model,
+        editors: [instance],
+        identity: { userId: user.id, displayName: user.displayName || user.email },
+        initialText: () => useFileStore.getState().files[path] ?? '',
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      handle?.destroy();
+    };
+    // `content` is deliberately absent: rebinding on every keystroke would
+    // rebuild the document, and the binding is what keeps content current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabEnabled, projectId, path, readOnly, user?.id]);
+
   const onChange = (value: string | undefined) => {
     if (value === undefined || readOnly) return;
     writeFile(path, value);
@@ -229,8 +293,10 @@ export function CodeEditor({ path, readOnly }: { path: string; readOnly: boolean
         </div>
       }
       options={{
-        readOnly,
-        domReadOnly: readOnly,
+        // Read-only until the shared document has settled. Typing into one
+        // that a peer is about to replace is how a first sentence disappears.
+        readOnly: readOnly || bootstrapping,
+        domReadOnly: readOnly || bootstrapping,
         fontSize: settings.fontSize,
         fontFamily: settings.fontFamily,
         tabSize: settings.tabSize,

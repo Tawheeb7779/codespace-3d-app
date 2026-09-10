@@ -3,6 +3,7 @@ import { History, Users, Wifi, WifiOff } from 'lucide-react';
 import { PanelHeader, EmptyState, Badge, Spinner, ErrorState } from '@/components/ui/Primitives';
 import { useActivityStore } from '@/stores/activityStore';
 import { usePresenceStore, statusFor } from '@/stores/presenceStore';
+import { CollabToggle } from '@/components/ide/CollabToggle';
 import { useFileStore } from '@/stores/fileStore';
 import { describeActivity } from '@/lib/activity';
 import { formatTimeAgo } from '@/lib/utils';
@@ -77,6 +78,8 @@ export function ActivityPanel() {
             </div>
           );
         })}
+
+        <CollabToggle />
 
         <p className="flex items-start gap-1.5 px-2.5 pb-2 pt-1 text-sm text-ink-faint">
           {transport === 'realtime' ? (
