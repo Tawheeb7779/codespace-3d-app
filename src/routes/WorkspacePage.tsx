@@ -24,6 +24,8 @@ import { PerformancePanel } from '@/components/ide/PerformancePanel';
 import { ArchitecturePanel } from '@/components/ide/ArchitecturePanel';
 import { TimeTravelPanel } from '@/components/ide/TimeTravelPanel';
 import { ExtensionsPanel } from '@/components/ide/ExtensionsPanel';
+import { BuilderPanel } from '@/components/ide/BuilderPanel';
+import { DatabasePanel } from '@/components/ide/DatabasePanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -97,6 +99,10 @@ function SidePanel() {
       return <TimeTravelPanel />;
     case 'extensions':
       return <ExtensionsPanel />;
+    case 'builder':
+      return <BuilderPanel />;
+    case 'database':
+      return <DatabasePanel />;
     case 'members':
       return <MembersPanel />;
     default:
