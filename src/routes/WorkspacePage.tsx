@@ -14,6 +14,7 @@ import { GitPanel } from '@/components/ide/GitPanel';
 import { PackagesPanel } from '@/components/ide/PackagesPanel';
 import { AssistantPanel } from '@/components/ide/AssistantPanel';
 import { MembersPanel } from '@/components/ide/MembersPanel';
+import { CommentsPanel } from '@/components/ide/CommentsPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -67,6 +68,8 @@ function SidePanel() {
       return <PackagesPanel />;
     case 'assistant':
       return <AssistantPanel />;
+    case 'comments':
+      return <CommentsPanel />;
     case 'members':
       return <MembersPanel />;
     default:

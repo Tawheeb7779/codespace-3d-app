@@ -1579,6 +1579,189 @@ begin
 end $$;
 
 select pg_temp.act_as_admin();
+-- ---------------------------------------------------------------------------
+-- Comments
+--
+-- A conversation people make decisions from, so the property that matters most
+-- is that nobody can put words in somebody else's mouth. Reading follows the
+-- project; writing needs a role; authorship cannot be assigned or rewritten,
+-- by an administrator or anybody else.
+-- ---------------------------------------------------------------------------
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+insert into public.project_comments (project_id, author_id, path, line, body)
+values ('prj_test_alpha', '22222222-2222-2222-2222-222222222222', 'src/main.ts', 3, 'Should this be const?');
+select pg_temp.assert(
+  (select count(*) from public.project_comments where project_id = 'prj_test_alpha') = 1,
+  'an editor can comment on a project');
+
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+select pg_temp.assert(
+  (select count(*) from public.project_comments where project_id = 'prj_test_alpha') = 1,
+  'a viewer reads the discussion on a project they can read');
+
+-- A viewer may read the code and the conversation about it, and add neither.
+do $$
+begin
+  begin
+    insert into public.project_comments (project_id, author_id, body)
+    values ('prj_test_alpha', '33333333-3333-3333-3333-333333333333', 'a viewer comment');
+    raise exception 'FAIL  a viewer wrote a comment';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a viewer cannot write a comment';
+    when others then
+      raise notice 'ok    a viewer cannot write a comment';
+  end;
+end
+$$;
+
+-- `prj_test_alpha` is public by this point in the suite, and a public
+-- project's comments are readable by design: a conversation about code
+-- anybody can already read is not a separate secret. Asserted rather than
+-- assumed, because it is a deliberate choice somebody could mistake for a leak.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.project_comments where project_id = 'prj_test_alpha') = 1,
+  'a public project''s comments are readable, as its code is');
+
+-- The leak that would matter is a *private* project, so it gets its own
+-- fixture rather than relying on the state of a shared one.
+select pg_temp.act_as_admin();
+insert into public.projects (id, owner_id, name, description, visibility)
+values ('prj_test_closed', '11111111-1111-1111-1111-111111111111', 'Closed', 'fixture', 'private');
+insert into public.project_comments (project_id, author_id, body)
+values ('prj_test_closed', '11111111-1111-1111-1111-111111111111', 'a private note');
+
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
+select pg_temp.assert(
+  (select count(*) from public.project_comments where project_id = 'prj_test_closed') = 0,
+  'an outsider cannot read a private project''s comments');
+
+-- Public visibility grants reading only, here as everywhere else: an outsider
+-- may read this conversation and may not join it.
+do $$
+begin
+  begin
+    insert into public.project_comments (project_id, author_id, body)
+    values ('prj_test_alpha', '44444444-4444-4444-4444-444444444444', 'an outsider comment');
+    raise exception 'FAIL  an outsider commented on a public project';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    an outsider cannot comment on a public project they can read';
+    when others then
+      raise notice 'ok    an outsider cannot comment on a public project they can read';
+  end;
+end
+$$;
+
+-- Filing a comment under a colleague's name is a forged record.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+do $$
+begin
+  begin
+    insert into public.project_comments (project_id, author_id, body)
+    values ('prj_test_alpha', '11111111-1111-1111-1111-111111111111', 'not actually from the owner');
+    raise exception 'FAIL  a member filed a comment under another account';
+  exception
+    when insufficient_privilege then
+      raise notice 'ok    a comment cannot be filed under another account';
+    when others then
+      raise notice 'ok    a comment cannot be filed under another account';
+  end;
+end
+$$;
+
+-- An author edits their own comment.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+update public.project_comments
+   set body = 'Should this be readonly?'
+ where author_id = '22222222-2222-2222-2222-222222222222';
+select pg_temp.assert(
+  (select body from public.project_comments
+    where author_id = '22222222-2222-2222-2222-222222222222') = 'Should this be readonly?',
+  'an author can edit their own comment');
+
+-- Editing somebody else's words is not editing, it is fabrication.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+insert into public.project_comments (project_id, author_id, path, body)
+values ('prj_test_alpha', '11111111-1111-1111-1111-111111111111', 'src/main.ts', 'owner note');
+
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+update public.project_comments
+   set body = 'rewritten by somebody else'
+ where author_id = '11111111-1111-1111-1111-111111111111';
+select pg_temp.assert(
+  (select body from public.project_comments
+    where author_id = '11111111-1111-1111-1111-111111111111') = 'owner note',
+  'a member cannot rewrite another account''s comment');
+
+-- Even an owner cannot reassign authorship.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+do $$
+begin
+  begin
+    update public.project_comments
+       set author_id = '11111111-1111-1111-1111-111111111111'
+     where author_id = '22222222-2222-2222-2222-222222222222';
+    raise exception 'FAIL  authorship was reassigned';
+  exception
+    when raise_exception then
+      if sqlerrm like 'FAIL%' then raise; end if;
+      raise notice 'ok    a comment cannot change author';
+    when others then
+      raise notice 'ok    a comment cannot change author';
+  end;
+end
+$$;
+
+-- Moving a thread into another project would move it to a different audience.
+select pg_temp.act_as_admin();
+insert into public.projects (id, owner_id, name, description)
+values ('prj_test_beta', '11111111-1111-1111-1111-111111111111', 'Beta', 'fixture');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+do $$
+begin
+  begin
+    update public.project_comments
+       set project_id = 'prj_test_beta'
+     where project_id = 'prj_test_alpha';
+    raise exception 'FAIL  a comment was moved between projects';
+  exception
+    when raise_exception then
+      if sqlerrm like 'FAIL%' then raise; end if;
+      raise notice 'ok    a comment cannot move between projects';
+    when others then
+      raise notice 'ok    a comment cannot move between projects';
+  end;
+end
+$$;
+
+-- Resolving is what an administrator can do to a thread they did not write.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+update public.project_comments
+   set resolved_at = now(), resolved_by = '11111111-1111-1111-1111-111111111111'
+ where author_id = '22222222-2222-2222-2222-222222222222';
+select pg_temp.assert(
+  (select resolved_at is not null from public.project_comments
+    where author_id = '22222222-2222-2222-2222-222222222222'),
+  'an administrator can resolve a thread they did not write');
+
+-- An author can delete their own comment; nobody else's.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+delete from public.project_comments where author_id = '11111111-1111-1111-1111-111111111111';
+select pg_temp.assert(
+  (select count(*) from public.project_comments
+    where author_id = '11111111-1111-1111-1111-111111111111') = 1,
+  'a member cannot delete another account''s comment');
+
+delete from public.project_comments where author_id = '22222222-2222-2222-2222-222222222222';
+select pg_temp.assert(
+  (select count(*) from public.project_comments
+    where author_id = '22222222-2222-2222-2222-222222222222') = 0,
+  'an author can delete their own comment');
+
 select pg_temp.assert(true, 'all authorization assertions passed');
 
 rollback;
