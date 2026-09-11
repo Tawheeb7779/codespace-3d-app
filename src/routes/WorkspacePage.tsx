@@ -27,6 +27,7 @@ import { ExtensionsPanel } from '@/components/ide/ExtensionsPanel';
 import { BuilderPanel } from '@/components/ide/BuilderPanel';
 import { DatabasePanel } from '@/components/ide/DatabasePanel';
 import { UIBuilderPanel } from '@/components/ide/UIBuilderPanel';
+import { LinuxFilesPanel } from '@/components/ide/LinuxFilesPanel';
 import { EditorTabs } from '@/components/ide/EditorTabs';
 import { Breadcrumbs } from '@/components/ide/Breadcrumbs';
 import { CodeEditor } from '@/components/ide/CodeEditor';
@@ -106,6 +107,8 @@ function SidePanel() {
       return <DatabasePanel />;
     case 'uibuilder':
       return <UIBuilderPanel />;
+    case 'linuxfiles':
+      return <LinuxFilesPanel />;
     case 'members':
       return <MembersPanel />;
     default:

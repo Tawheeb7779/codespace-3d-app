@@ -147,6 +147,16 @@ export class ContainerTerminal {
   private lastSeq = 0;
   /** Correlates git and transfer answers with the requests that caused them. */
   private nextRequest = 0;
+  /** Callers waiting on one transfer each, keyed by the request they sent. */
+  private transfers = new Map<
+    string,
+    (outcome: {
+      requestId: string;
+      copied: string[];
+      conflicts: string[];
+      skipped: Array<{ path: string; reason: string }>;
+    }) => void
+  >();
 
   constructor(private readonly options: ContainerTerminalOptions) {}
 
@@ -305,14 +315,23 @@ export class ContainerTerminal {
         });
         break;
 
-      case 'transfer-result':
-        this.options.onTransferResult?.({
+      case 'transfer-result': {
+        const outcome = {
           requestId: frame.requestId,
           copied: frame.copied,
           conflicts: frame.conflicts,
           skipped: frame.skipped,
-        });
+        };
+        this.options.onTransferResult?.(outcome);
+        // A caller that asked for this specific transfer gets it directly, so
+        // two transfers in flight cannot be told apart only by guessing.
+        const waiting = this.transfers.get(frame.requestId);
+        if (waiting) {
+          this.transfers.delete(frame.requestId);
+          waiting(outcome);
+        }
         break;
+      }
 
       case 'ports':
         this.options.onPorts?.(frame.ports.map(({ port, url }) => ({ port, url })));
@@ -453,6 +472,44 @@ export class ContainerTerminal {
       overwrite: options.overwrite === true,
     });
     return requestId;
+  }
+
+  /**
+   * Copy files into another workspace and wait for what actually happened.
+   *
+   * A promise rather than a callback because a transfer is a request with one
+   * answer, and the caller needs that answer to report it. A request that
+   * outlives the timeout is abandoned — the entry is removed and the caller is
+   * told — so a lost frame cannot leave a panel saying "copying…" forever.
+   *
+   * Rejecting is not the same as copying nothing: the outcome carries conflicts
+   * and refusals as data, because those are results the gateway computed.
+   */
+  transferAndWait(
+    toContainerId: string,
+    paths: string[],
+    options: { overwrite?: boolean; timeoutMs?: number } = {},
+  ): Promise<{
+    copied: string[];
+    conflicts: string[];
+    skipped: Array<{ path: string; reason: string }>;
+  }> {
+    const requestId = this.transfer(toContainerId, paths, options);
+    if (!requestId) {
+      return Promise.reject(new Error('This workspace is not connected.'));
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.transfers.delete(requestId);
+        reject(new Error('The gateway did not answer the transfer.'));
+      }, options.timeoutMs ?? 30_000);
+      this.transfers.set(requestId, ({ copied, conflicts, skipped }) => {
+        clearTimeout(timer);
+        // Without the request id: the caller correlated by holding the promise,
+        // and passing it on invites somebody to correlate by it a second time.
+        resolve({ copied, conflicts, skipped });
+      });
+    });
   }
 
   deleteFiles(paths: string[]): void {

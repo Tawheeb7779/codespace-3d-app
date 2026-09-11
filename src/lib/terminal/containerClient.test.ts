@@ -330,3 +330,98 @@ describe('base64 for bytes that are not text', () => {
     expect(new TextDecoder().decode(base64ToBytes(bytesToBase64(escape)))).toBe('\x1b[31mred\x1b[0m');
   });
 });
+
+/**
+ * Copying files between two of a person's workspaces, and getting *this*
+ * transfer's answer back.
+ *
+ * The Linux Files panel reports what actually happened — copied, left alone
+ * because something already had that name, refused with a reason — so the
+ * answer has to be matched to the request that asked. Two transfers in flight
+ * resolving into each other would report the wrong outcome for both, and a
+ * transfer that never answers must fail rather than leave a panel saying
+ * "copying…" for the rest of the session.
+ */
+describe('transferring files between workspaces', () => {
+  const transferResult = (requestId: string, overrides: object = {}) => ({
+    type: 'transfer-result',
+    requestId,
+    copied: ['uploads/a.txt'],
+    conflicts: [],
+    skipped: [],
+    ...overrides,
+  });
+
+  async function connected() {
+    const client = build();
+    await client.connect();
+    socket().open();
+    socket().deliver(ready());
+    return client;
+  }
+
+  it('sends the transfer with both workspaces named', async () => {
+    const client = await connected();
+    void client.transferAndWait('tacode-project', ['uploads/a.txt']).catch(() => undefined);
+
+    const frame = last(socket().frames());
+    expect(frame).toMatchObject({
+      type: 'transfer',
+      fromContainerId: 'tacode-abc',
+      toContainerId: 'tacode-project',
+      paths: ['uploads/a.txt'],
+      overwrite: false,
+    });
+  });
+
+  it('resolves with what the gateway reported', async () => {
+    const client = await connected();
+    const pending = client.transferAndWait('tacode-project', ['uploads/a.txt']);
+    const sent = last(socket().frames()) as { requestId: string };
+    socket().deliver(transferResult(sent.requestId, { conflicts: ['uploads/b.txt'] }));
+
+    await expect(pending).resolves.toEqual({
+      copied: ['uploads/a.txt'],
+      conflicts: ['uploads/b.txt'],
+      skipped: [],
+    });
+  });
+
+  /** Two in flight must not resolve into each other. */
+  it('matches each answer to the request that asked', async () => {
+    const client = await connected();
+    const first = client.transferAndWait('tacode-project', ['uploads/a.txt']);
+    const firstId = (last(socket().frames()) as { requestId: string }).requestId;
+    const second = client.transferAndWait('tacode-project', ['uploads/b.txt']);
+    const secondId = (last(socket().frames()) as { requestId: string }).requestId;
+
+    expect(firstId).not.toBe(secondId);
+
+    socket().deliver(transferResult(secondId, { copied: ['uploads/b.txt'] }));
+    socket().deliver(transferResult(firstId, { copied: ['uploads/a.txt'] }));
+
+    await expect(second).resolves.toMatchObject({ copied: ['uploads/b.txt'] });
+    await expect(first).resolves.toMatchObject({ copied: ['uploads/a.txt'] });
+  });
+
+  /** A lost frame must not strand the caller. */
+  it('fails rather than waiting forever', async () => {
+    const client = await connected();
+    const pending = client.transferAndWait('tacode-project', ['uploads/a.txt'], {
+      timeoutMs: 1000,
+    });
+    const assertion = expect(pending).rejects.toThrow(/did not answer/i);
+    await vi.advanceTimersByTimeAsync(1001);
+    await assertion;
+  });
+
+  it('refuses before the gateway has said which container this is', async () => {
+    const client = build();
+    await client.connect();
+    socket().open();
+
+    await expect(client.transferAndWait('tacode-project', ['uploads/a.txt'])).rejects.toThrow(
+      /not connected/i,
+    );
+  });
+});

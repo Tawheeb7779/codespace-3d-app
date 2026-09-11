@@ -7,6 +7,13 @@ import {
   TERMINAL_ENVIRONMENTS,
   type TerminalEnvironment,
 } from '@/stores/terminalStore';
+import {
+  AGENT_PANELS,
+  AGENT_PANEL_NAMES,
+  panelFor,
+  readLine,
+  type IdeActions,
+} from '@/lib/ai/ideActions';
 
 /**
  * Tools the coding agent may call.
@@ -111,6 +118,14 @@ export interface ToolContext {
    */
   changedSoFar?(): number;
   wideChangeThreshold?: number | null;
+  /**
+   * The interface, when there is one to drive.
+   *
+   * Absent in every headless context, and its absence is reported: an agent
+   * told "there is no editor here" is right, and one that says "opened it"
+   * having opened nothing is the fabrication these tools exist to avoid.
+   */
+  ide?: IdeActions;
 }
 
 /** Matches the per-file limit the database enforces on project_files.content. */
@@ -635,6 +650,104 @@ export const TOOLS: ToolDefinition[] = [
     run: (_input, ctx) => {
       if (!ctx.diagnostics) return 'Diagnostics are not available in this context.';
       return ctx.diagnostics() || 'No problems reported.';
+    },
+  },
+
+  /*
+   * Driving the interface.
+   *
+   * "Open src/App.tsx" should open the file rather than describe how to. These
+   * change what is on screen and nothing else — no tool here closes, hides or
+   * discards anything, because an agent that can take a panel away from the
+   * person watching it is a different kind of thing from one that can bring a
+   * panel forward.
+   *
+   * Each refuses an unknown target by name. A navigation that quietly does
+   * nothing is the worst outcome: the agent reports it as done and the screen
+   * has not moved.
+   */
+  {
+    name: 'open_file',
+    description:
+      'Open a file in the editor so the user can see it, optionally putting the caret on a line. ' +
+      'Use this whenever the user asks to open, show or go to a file. This does not return the ' +
+      'file contents — use read_file for that.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Project relative file path' },
+        line: { type: 'number', description: 'Optional 1-based line to reveal' },
+      },
+      required: ['path'],
+    },
+    mutates: false,
+    run: (input, ctx) => {
+      const path = requirePath(input);
+      if (ctx.files[path] === undefined) {
+        throw new ToolError(`No such file: ${path}. Use list_files to see what exists.`);
+      }
+      if (!ctx.ide) return 'There is no editor open in this context, so nothing was opened.';
+      const line = readLine((input as { line?: unknown }).line);
+      ctx.ide.openFile(path, line);
+      return line ? `Opened ${path} at line ${line}.` : `Opened ${path}.`;
+    },
+  },
+  {
+    name: 'open_panel',
+    description:
+      'Bring one of the IDE panels forward so the user can see it. Use this when the user asks ' +
+      'to open or show a tool by name.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        panel: {
+          type: 'string',
+          enum: AGENT_PANEL_NAMES,
+          description: Object.entries(AGENT_PANELS)
+            .map(([name, entry]) => `${name} (${entry.description})`)
+            .join('; '),
+        },
+      },
+      required: ['panel'],
+    },
+    mutates: false,
+    run: (input, ctx) => {
+      const name = requireString(input, 'panel');
+      const panel = panelFor(name);
+      if (!panel) {
+        throw new ToolError(
+          `Unknown panel "${name}". Use one of: ${AGENT_PANEL_NAMES.join(', ')}.`,
+        );
+      }
+      if (!ctx.ide) return 'There is no workspace open in this context, so nothing was opened.';
+      ctx.ide.openPanel(panel);
+      return `Opened the ${name} panel.`;
+    },
+  },
+  {
+    name: 'open_preview',
+    description:
+      'Show the live preview, building it if it is not already running. Use this after a change ' +
+      'the user should look at.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: (_input, ctx) => {
+      if (!ctx.ide) return 'There is no workspace open in this context, so nothing was opened.';
+      ctx.ide.openPreview();
+      return 'Opened the preview.';
+    },
+  },
+  {
+    name: 'open_problems',
+    description:
+      'Show the Problems list, where type and syntax errors are reported. Use get_diagnostics to ' +
+      'read them yourself; use this to put them in front of the user.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+    mutates: false,
+    run: (_input, ctx) => {
+      if (!ctx.ide) return 'There is no workspace open in this context, so nothing was opened.';
+      ctx.ide.openProblems();
+      return 'Opened the Problems panel.';
     },
   },
 ];

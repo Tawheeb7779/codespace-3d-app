@@ -344,6 +344,35 @@ export function ContainerTerminalView({
 }
 
 /**
+ * A connected workspace of one kind, for code outside the terminal to use.
+ *
+ * The Linux Files panel needs the Linux workspace's client and the project
+ * workspace's container id at the same time, and both live here because the
+ * client outlives the component that created it. Exposed as a lookup rather
+ * than by handing the map out: a caller names the kind it wants, so nothing
+ * outside this module can confuse the two workspaces — which is the boundary
+ * the whole design rests on.
+ *
+ * Returns null when that kind has no connected workspace. A caller must report
+ * that rather than wait, because "not connected" is a true answer.
+ */
+export function liveWorkspace(
+  kind: 'project' | 'linux',
+  projectId?: string,
+): { client: ContainerTerminalClient; containerId: string } | null {
+  const scope = kind === 'linux' ? 'linux' : projectId;
+  if (!scope) return null;
+  for (const [key, entry] of live) {
+    if (!key.startsWith(`${kind}:${scope}:`)) continue;
+    // The id comes back with the gateway's `ready` frame, so a connecting
+    // workspace has none yet and is not usable for a transfer.
+    const containerId = entry.client.containerId;
+    if (containerId) return { client: entry.client, containerId };
+  }
+  return null;
+}
+
+/**
  * End every container session for a project.
  *
  * Called when a project closes: a workspace belongs to a project, and carrying

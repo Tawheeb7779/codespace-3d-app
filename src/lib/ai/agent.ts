@@ -84,7 +84,10 @@ Rules:
 - If a request needs a capability you do not have, say so plainly.
 - For anything beyond a one-line change, state a short numbered plan first, then carry it out.
 - There is no Node process here, so npm test, tsc and npm run <script> do not exist. run_build and
-  get_diagnostics are the real checks available. Never claim to have run anything else.`;
+  get_diagnostics are the real checks available. Never claim to have run anything else.
+- You can drive the interface. When the user asks to open, show or go to something, call open_file,
+  open_panel, open_preview or open_problems rather than describing where it is. Open the file you
+  just changed when it helps the user see the change.`;
 
 const VERIFY_RULES = `
 - Verify your work: after editing code, call run_build (a real compile) or get_diagnostics, and
@@ -129,6 +132,14 @@ function describe(tool: string, input: Record<string, unknown>): string {
       return 'Building the project';
     case 'get_diagnostics':
       return 'Reading editor problems';
+    case 'open_file':
+      return `Opening ${path}`;
+    case 'open_panel':
+      return `Opening the ${String(input.panel ?? '')} panel`;
+    case 'open_preview':
+      return 'Opening the preview';
+    case 'open_problems':
+      return 'Opening the Problems panel';
     default:
       return tool;
   }

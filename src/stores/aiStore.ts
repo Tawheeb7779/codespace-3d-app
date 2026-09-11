@@ -20,6 +20,7 @@ import { createShellHost } from '@/lib/shellHost';
 import { useGitStore } from '@/stores/gitStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { usePreviewStore } from '@/stores/previewStore';
+import { useUIStore } from '@/stores/uiStore';
 import { buildPreview } from '@/lib/preview';
 import { unifiedDiff } from '@/lib/diff';
 import { headContent as vcsHeadContent } from '@/lib/vcs';
@@ -163,6 +164,36 @@ function toolContext(): ToolContext {
     },
     // Scoped to the project shell for the same reason.
     terminalOutput: () => useTerminalStore.getState().recentOutput(120, 'project'),
+
+    /*
+     * The interface, so "open that file" opens it.
+     *
+     * These go through the same store actions the UI's own controls call —
+     * `revealLocation` is what clicking a search result uses, `setSidebarPanel`
+     * is what the activity bar uses — rather than a parallel path that could
+     * drift from what a click does. On a phone those actions also bring the
+     * matching pane forward, which is exactly what should happen when somebody
+     * asks the assistant to open something.
+     */
+    ide: {
+      openFile(path, line) {
+        if (line) useEditorStore.getState().revealLocation(path, line);
+        else useEditorStore.getState().openTab(path);
+        useUIStore.getState().setMobilePane('editor');
+      },
+      openPanel(panel) {
+        useUIStore.getState().setSidebarPanel(panel);
+      },
+      openPreview() {
+        useUIStore.getState().togglePreview(true);
+        useUIStore.getState().setMobilePane('preview');
+        // Showing an idle preview panel is not showing the preview.
+        if (usePreviewStore.getState().status === 'idle') void usePreviewStore.getState().run();
+      },
+      openProblems() {
+        useUIStore.getState().setBottomTab('problems');
+      },
+    },
 
     requestApproval: (action, affects) =>
       useAgentStore.getState().requestApproval(action, affects, 'run_command'),

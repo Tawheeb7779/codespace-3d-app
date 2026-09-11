@@ -23,6 +23,7 @@ export type SidebarPanel =
   | 'builder'
   | 'database'
   | 'uibuilder'
+  | 'linuxfiles'
   | 'members';
 export type BottomTab = 'terminal' | 'problems' | 'checks' | 'output' | 'ports';
 export type MobilePane = 'files' | 'editor' | 'preview' | 'terminal' | 'assistant';
