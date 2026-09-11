@@ -28,6 +28,10 @@ import { containerTerminalAvailable } from '@/lib/terminal/containerClient';
 import { useEditorStore } from '@/stores/editorStore';
 import { useConsoleStore, ALL_LEVELS } from '@/stores/consoleStore';
 import { usePreviewStore } from '@/stores/previewStore';
+import { useAiStore } from '@/stores/aiStore';
+import { useFileStore } from '@/stores/fileStore';
+import { fixPrompt } from '@/lib/ai/fixPrompt';
+import type { Problem } from '@/types';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import {
@@ -67,6 +71,21 @@ function ProblemsList() {
   const refresh = usePreviewStore((s) => s.refresh);
   const [filter, setFilter] = useState<ProblemFilter>(DEFAULT_PROBLEM_FILTER);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const aiRunning = useAiStore((s) => s.running);
+
+  /**
+   * Hand one diagnostic to the assistant, with its source.
+   *
+   * The same `send` the assistant panel uses, so this is one conversation
+   * rather than a second path into the model; the panel is brought forward
+   * because a request whose answer appears somewhere the user is not looking
+   * reads as nothing having happened.
+   */
+  const askToFix = async (problem: Problem) => {
+    const files = useFileStore.getState().files;
+    useUIStore.getState().setSidebarPanel('assistant');
+    await useAiStore.getState().send(fixPrompt(problem, files));
+  };
 
   // One ordered list, from both real sources: the language workers and the
   // bundler. Everything below — counts, groups, navigation — reads this.
@@ -198,30 +217,50 @@ function ProblemsList() {
                   group.problems.map((problem) => {
                     const Icon = SEVERITY_ICON[problem.severity];
                     return (
-                      <button
+                      <div
                         key={problem.id}
-                        type="button"
-                        onClick={() => reveal(problem.path, problem.line, problem.column)}
-                        className="flex w-full items-start gap-2 py-1 pl-8 pr-3 text-left text-base transition-colors hover:bg-surface-raised"
+                        className="group/problem flex w-full items-start gap-2 py-1 pl-8 pr-3 transition-colors hover:bg-surface-raised"
                       >
-                        <Icon
-                          className={cx(
-                            'mt-0.5 h-3.5 w-3.5 shrink-0',
-                            SEVERITY_TONE[problem.severity],
-                          )}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block break-words text-ink">{problem.message}</span>
-                          <span className="mt-0.5 flex items-center gap-1.5 text-sm text-ink-faint">
-                            <span>
-                              [{problem.line}, {problem.column}]
-                            </span>
-                            <span className="rounded-sm border border-line px-1">
-                              {problem.source}
+                        <button
+                          type="button"
+                          onClick={() => reveal(problem.path, problem.line, problem.column)}
+                          className="flex min-w-0 flex-1 items-start gap-2 text-left text-base"
+                        >
+                          <Icon
+                            className={cx(
+                              'mt-0.5 h-3.5 w-3.5 shrink-0',
+                              SEVERITY_TONE[problem.severity],
+                            )}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block break-words text-ink">{problem.message}</span>
+                            <span className="mt-0.5 flex items-center gap-1.5 text-sm text-ink-faint">
+                              <span>
+                                [{problem.line}, {problem.column}]
+                              </span>
+                              <span className="rounded-sm border border-line px-1">
+                                {problem.source}
+                              </span>
                             </span>
                           </span>
-                        </span>
-                      </button>
+                        </button>
+                        {/*
+                          The fix starts where the error is.
+                          Otherwise somebody retypes the message into the
+                          assistant without the path, and it fixes the wrong
+                          file. This sends the real diagnostic and the real
+                          source around it.
+                        */}
+                        <button
+                          type="button"
+                          disabled={aiRunning}
+                          onClick={() => void askToFix(problem)}
+                          className="tap-target mt-0.5 shrink-0 rounded border border-line px-1.5 py-0.5 text-sm text-ink-faint opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/problem:opacity-100 disabled:cursor-not-allowed"
+                          title="Ask the assistant to fix this"
+                        >
+                          <span>Fix</span>
+                        </button>
+                      </div>
                     );
                   })}
               </section>
