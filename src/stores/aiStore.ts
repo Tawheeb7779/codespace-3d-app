@@ -9,7 +9,7 @@ import {
   type ProviderConfig,
   type ProviderErrorKind,
 } from '@/lib/ai/provider';
-import { runAgent, type AgentActivity } from '@/lib/ai/agent';
+import { runAgent, type AgentActivity, type UsageTally } from '@/lib/ai/agent';
 import type { ToolContext } from '@/lib/ai/tools';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -78,6 +78,15 @@ interface AiState {
   retryAt: number | null;
   /** The prompt of the last turn, so a failed task can be retried as sent. */
   lastPrompt: string | null;
+  /**
+   * What the last completed turn cost, as the provider reported it.
+   *
+   * Null when no turn has finished, and a tally whose `reported` is short of
+   * `steps` when the provider only volunteered usage for some of the calls —
+   * which the panel shows as a floor rather than a total. Nothing here is
+   * estimated from message lengths.
+   */
+  usage: UsageTally | null;
   /**
    * What the user chose to send. These narrow what leaves the browser; they
    * can never widen it, because protected paths are filtered before this is
@@ -459,6 +468,7 @@ export const useAiStore = create<AiState>()(
       errorKind: null,
       retryAt: null,
       lastPrompt: null,
+      usage: null,
       context: DEFAULT_CONTEXT,
       selection: '',
 
@@ -538,6 +548,7 @@ export const useAiStore = create<AiState>()(
           errorKind: null,
           retryAt: null,
           lastPrompt: text,
+          usage: null,
         }));
         recordActivity('agent.started', text);
 
@@ -570,7 +581,15 @@ export const useAiStore = create<AiState>()(
                   return { ...message, activities };
                 });
               },
-              onText: (chunk) => patch((message) => ({ ...message, text: chunk })),
+              /*
+               * Replaced, not appended, and that is what makes streaming work
+               * here: the agent passes the whole of the current step's text
+               * each time more of it arrives, so this renders the answer being
+               * written without holding a buffer, and a step that begins after
+               * another has finished replaces it rather than running on from
+               * the end of it.
+               */
+              onText: (textSoFar) => patch((message) => ({ ...message, text: textSoFar })),
               onToolStart: (tool) => useAgentStore.getState().noteActivityPhase(tool),
               onPlan: (plan) => useAgentStore.getState().setPlan(plan),
               verifyAfterEdits: useSettingsStore.getState().agent.verifyAfterEdits,
@@ -580,7 +599,7 @@ export const useAiStore = create<AiState>()(
             },
             controller.signal,
           );
-          set({ transcript: result.transcript, running: false });
+          set({ transcript: result.transcript, running: false, usage: result.usage });
           await useFileStore.getState().flush();
           const finished = useAgentStore.getState().task;
           useAgentStore.getState().finish('completed');
@@ -648,6 +667,7 @@ export const useAiStore = create<AiState>()(
           errorKind: null,
           retryAt: null,
           lastPrompt: null,
+          usage: null,
         });
       },
     }),

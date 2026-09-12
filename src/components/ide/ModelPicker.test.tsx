@@ -132,7 +132,39 @@ describe('when the provider answers', () => {
     await waitFor(() => expect(screen.getByText('vendor/exact-id')).toBeTruthy());
     await userEvent.click(screen.getByText('vendor/exact-id'));
 
-    expect(onSelect).toHaveBeenCalledWith('vendor/exact-id');
+    // The record travels with the id, so the caller can record what the
+    // provider said about the model rather than guessing at it later.
+    expect(onSelect).toHaveBeenCalledWith(
+      'vendor/exact-id',
+      expect.objectContaining({ modelId: 'vendor/exact-id' }),
+    );
+  });
+
+  /**
+   * Silence is not a denial.
+   *
+   * The transport streams from a provider that never said whether it could,
+   * so a row reading "no streaming" for an unstated field would contradict
+   * what the product then does.
+   */
+  it('says streaming is unstated rather than denying it', async () => {
+    vi.stubGlobal('fetch', answering({ data: [{ id: 'quiet' }] }));
+
+    render(<ModelPicker provider={groq} apiKey="k" selected="" onSelect={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText(/Streaming not stated/i)).toBeTruthy());
+    expect(screen.queryByText('No streaming')).toBeNull();
+  });
+
+  it('reports streaming when the provider listed it as a supported parameter', async () => {
+    vi.stubGlobal(
+      'fetch',
+      answering({ data: [{ id: 'fast', supported_parameters: ['stream', 'tools'] }] }),
+    );
+
+    render(<ModelPicker provider={openrouter} apiKey="k" selected="" onSelect={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText(/Streams the answer/i)).toBeTruthy());
   });
 
   it('marks the configured model as current', async () => {

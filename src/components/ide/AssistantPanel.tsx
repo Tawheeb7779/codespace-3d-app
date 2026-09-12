@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Bot, Plug, RotateCcw, Send, Square, Trash2, User } from 'lucide-react';
-import { PanelHeader, EmptyState, Badge } from '@/components/ui/Primitives';
+import { PanelHeader, EmptyState, Badge, Spinner } from '@/components/ui/Primitives';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -29,7 +29,7 @@ import {
   type ProviderErrorKind,
   type ProviderKind,
 } from '@/lib/ai/provider';
-import type { AgentActivity } from '@/lib/ai/agent';
+import type { AgentActivity, UsageTally } from '@/lib/ai/agent';
 import { hostedAiAvailable } from '@/lib/ai/hosted';
 import { cx } from '@/lib/utils';
 import { useIsTouch } from '@/hooks/useMediaQuery';
@@ -50,6 +50,20 @@ const ERROR_ADVICE: Record<ProviderErrorKind, string> = {
   malformed: 'The provider sent a response TA CODE could not read.',
   request: 'The provider refused the request.',
 };
+
+/**
+ * What the turn cost, hedged exactly as far as the truth requires.
+ *
+ * A turn is several model calls and not every provider reports usage on each
+ * one, so a sum across three of five steps is a floor. It is labelled as one
+ * rather than rounded up into a total, and a turn where no provider said
+ * anything shows nothing at all — an invented number would be worse than the
+ * absence of one.
+ */
+function describeUsage(usage: UsageTally): string {
+  const counts = `${usage.inputTokens.toLocaleString()} in · ${usage.outputTokens.toLocaleString()} out`;
+  return usage.reported < usage.steps ? `at least ${counts}` : counts;
+}
 
 function retryHint(retryAt: number | null): string {
   if (!retryAt) return '';
@@ -147,7 +161,9 @@ export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () =>
             const kind = event.target.value as ProviderKind;
             // The model travels with the provider, or choosing Gemini would
             // leave an Anthropic model name in the field and ask Google for it.
-            setProvider({ kind, model: modelForKind(kind, provider.model) });
+            // What the old provider said about streaming does not travel: it
+            // was a fact about a model on another endpoint.
+            setProvider({ kind, model: modelForKind(kind, provider.model), streaming: null });
           }}
           options={[
             { value: 'none', label: 'Not connected' },
@@ -160,7 +176,8 @@ export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () =>
           <Input
             label="Model"
             value={provider.model}
-            onChange={(event) => setProvider({ model: event.target.value })}
+            // Typed by hand, so nothing is known about what it supports.
+            onChange={(event) => setProvider({ model: event.target.value, streaming: null })}
             placeholder="claude-sonnet-5"
             hint="Choose a provider first, and its own models can be listed."
           />
@@ -170,7 +187,7 @@ export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () =>
           <Input
             label="Model"
             value={provider.model}
-            onChange={(event) => setProvider({ model: event.target.value })}
+            onChange={(event) => setProvider({ model: event.target.value, streaming: null })}
             placeholder={DEFAULT_GEMINI_MODEL}
             hint="Your deployment decides which Gemini models it will run."
           />
@@ -180,7 +197,10 @@ export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () =>
             baseUrl={provider.baseUrl}
             apiKey={key}
             selected={provider.model}
-            onSelect={(model) => setProvider({ model })}
+            // The record travels with the id: whether this model streams is
+            // the provider's own answer, and the transport needs it to know
+            // whether to ask for a stream at all.
+            onSelect={(model, record) => setProvider({ model, streaming: record?.streaming ?? null })}
           />
         ) : null}
         {provider.kind === 'openai' && (
@@ -350,6 +370,7 @@ export function AssistantPanel() {
   const retryAt = useAiStore((s) => s.retryAt);
   const retry = useAiStore((s) => s.retry);
   const canRetry = useAiStore((s) => Boolean(s.lastPrompt) && !s.running);
+  const usage = useAiStore((s) => s.usage);
   const canWrite = useFileStore((s) => s.canWrite());
   const [prompt, setPrompt] = useState('');
   const [connectOpen, setConnectOpen] = useState(false);
@@ -447,7 +468,7 @@ export function AssistantPanel() {
           />
         ) : (
           <div className="space-y-4">
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <article key={message.id} className="animate-slide-up">
                 <div className="flex items-center gap-1.5">
                   {message.role === 'user' ? (
@@ -470,8 +491,23 @@ export function AssistantPanel() {
                     {message.text}
                   </p>
                 )}
-                {message.role === 'assistant' && !message.text && running && (
-                  <p className="mt-1.5 text-base text-ink-faint">Working…</p>
+                {/*
+                  * The live state of the answer being written.
+                  *
+                  * Only on the last message, and only while the turn is
+                  * running: an indicator left under a finished answer reads as
+                  * an answer that never finished. "Generating" once text has
+                  * started is the honest word for what is happening — the
+                  * provider is streaming, and the paragraph above is growing.
+                  */}
+                {message.role === 'assistant' && running && index === messages.length - 1 && (
+                  <p
+                    aria-live="polite"
+                    className="mt-1.5 flex items-center gap-1.5 text-base text-ink-faint"
+                  >
+                    <Spinner />
+                    <span>{message.text ? 'Generating…' : 'Working…'}</span>
+                  </p>
                 )}
               </article>
             ))}
@@ -539,10 +575,13 @@ export function AssistantPanel() {
             />
           )}
         </div>
-        <div className="mt-1.5 flex items-center gap-2">
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
           <Badge tone={connected ? 'positive' : 'neutral'}>
             {connected ? provider.model : 'not connected'}
           </Badge>
+          {usage && usage.reported > 0 && !running && (
+            <span className="text-sm tabular-nums text-ink-faint">{describeUsage(usage)}</span>
+          )}
           {/* There is no Shift key to press on a phone. */}
           {!touch && (
             <span className="text-sm text-ink-faint">Shift + Enter for a new line</span>

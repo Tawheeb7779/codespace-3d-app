@@ -32,6 +32,12 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// Same gap, other method: a panel that follows a growing answer scrolls itself
+// to the bottom whenever its messages change.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = () => {};
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

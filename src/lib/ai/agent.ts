@@ -2,6 +2,7 @@ import {
   complete,
   toolResultMessage,
   type ChatMessage,
+  type CompletionUsage,
   type HostedResolver,
   type ProviderConfig,
 } from '@/lib/ai/provider';
@@ -28,6 +29,14 @@ export interface AgentActivity {
 
 export interface AgentTurn {
   onActivity: (activity: AgentActivity) => void;
+  /**
+   * The assistant's text for the current step.
+   *
+   * Called repeatedly while a streamed step is being written, each time with
+   * everything produced so far, and once more with the finished text. It is
+   * cumulative rather than incremental, so a caller that renders whatever it
+   * was last given is correct without keeping a buffer.
+   */
   onText: (text: string) => void;
   /** Fired before a tool runs, so the task can move to the right phase. */
   onToolStart?: (tool: string, input: Record<string, unknown>) => void;
@@ -44,6 +53,41 @@ export interface AgentTurn {
    * path, unchanged.
    */
   hostedEndpoint?: HostedResolver;
+  /**
+   * Ask for the answer as it is written. Defaults to on.
+   *
+   * Off makes each step one whole request, which is what a caller with nothing
+   * to render progressively wants.
+   */
+  stream?: boolean;
+}
+
+/**
+ * What a turn cost, as reported — never as estimated.
+ *
+ * `reported` is carried alongside the totals because a turn is many model
+ * calls and providers are inconsistent about volunteering usage. A sum over
+ * three of five steps is a floor, not a total, and the difference has to be
+ * visible to whoever displays it or the number becomes a quiet lie.
+ */
+export interface UsageTally {
+  inputTokens: number;
+  outputTokens: number;
+  /** Steps that reported usage. */
+  reported: number;
+  /** Steps that ran. */
+  steps: number;
+}
+
+function addUsage(tally: UsageTally, usage: CompletionUsage | null | undefined): UsageTally {
+  const next = { ...tally, steps: tally.steps + 1 };
+  if (!usage) return next;
+  return {
+    ...next,
+    inputTokens: next.inputTokens + (usage.inputTokens ?? 0),
+    outputTokens: next.outputTokens + (usage.outputTokens ?? 0),
+    reported: next.reported + 1,
+  };
 }
 
 export const MAX_STEPS = 12;
@@ -149,6 +193,7 @@ export interface AgentResult {
   text: string;
   transcript: ChatMessage[];
   steps: number;
+  usage: UsageTally;
 }
 
 export async function runAgent(
@@ -163,6 +208,7 @@ export async function runAgent(
   const tools = toolsFor(ctx.canWrite);
   let finalText = '';
   let steps = 0;
+  let usage: UsageTally = { inputTokens: 0, outputTokens: 0, reported: 0, steps: 0 };
 
   while (steps < MAX_STEPS) {
     steps += 1;
@@ -174,7 +220,11 @@ export async function runAgent(
       tools,
       signal,
       (await turn.hostedEndpoint?.()) ?? null,
+      // The same callback the finished text goes to, given the text so far, so
+      // the panel shows the answer being written instead of a spinner.
+      turn.stream === false ? null : { onText: turn.onText },
     );
+    usage = addUsage(usage, response.usage);
 
     if (response.text) {
       finalText = response.text;
@@ -188,7 +238,7 @@ export async function runAgent(
 
     if (!response.toolCalls.length) {
       messages.push({ role: 'assistant', content: response.raw });
-      return { text: finalText, transcript: messages, steps };
+      return { text: finalText, transcript: messages, steps, usage };
     }
 
     messages.push({ role: 'assistant', content: response.raw });

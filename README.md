@@ -41,7 +41,7 @@ limitation instead of miming the behaviour.
 | **Version control** | *TA CODE's version control*: content-addressed blobs, commits, branches, staging, three-way merge with conflict markers, line-level diff viewer. |
 | **Search** | Project-wide search in a worker: regex, whole word, case, include/exclude globs, replace across files. |
 | **Packages** | Live npm registry search and version resolution, written into `package.json`; anything not in the local runtime is imported at that exact version from a CDN, and an unreachable CDN produces a named, actionable error rather than a blank frame. |
-| **AI assistant** | An agent loop over nine real tools. Bring your own provider; every tool call and its result are shown. |
+| **AI assistant** | An agent loop over nine real tools. Bring your own provider; the model list comes from the provider at runtime, the answer streams in over the provider's own protocol, and every tool call and its result are shown. |
 | **Auth** | Supabase email/password plus Google and GitHub OAuth, with a graceful Local Development Mode when Supabase is absent. |
 | **Import/export** | ZIP in and out, plus import from a public GitHub repository. Traversal and sensitive paths are blocked at the boundary. |
 
@@ -482,7 +482,7 @@ src/
     monaco.ts      Monaco setup, themes and workers
     idb.ts         IndexedDB wrapper with in-memory fallback
     supabase.ts    client, with service-role key detection
-    ai/            provider, tools, agent loop
+    ai/            provider, streaming transport (sse.ts), tools, agent loop
     repo/          ProjectRepository + local and Supabase implementations
     templates/     project templates
   routes/          LandingPage, AuthPage, DashboardPage, WorkspacePage,
@@ -622,6 +622,12 @@ These are deliberate, and the UI says so where a user would otherwise be misled:
   Anything else returns `command not found` instead of plausible output.
 - **The assistant needs your own provider.** Without one the panel says it is
   not connected. Nothing is generated locally.
+- **Streaming is the provider's, or it is nothing.** The text appears as it is
+  produced because the provider is sending it that way; a provider or model
+  that will not stream gets one whole request instead, and the answer simply
+  arrives at once. No response is ever cut into pieces afterwards to look
+  progressive, and token counts are shown only where the provider reported
+  them — a turn it said nothing about shows nothing.
 - **The agent cannot run a test suite.** There is no Node process in the
   browser, so its verification is the real bundler and the real editor
   diagnostics — not `npm test`. It says so rather than claiming otherwise.

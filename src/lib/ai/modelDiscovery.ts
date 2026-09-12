@@ -387,7 +387,7 @@ function failureFor(response: Response, provider: ProviderRecord, base: string):
 const cache = new Map<string, DiscoveryResult>();
 
 const cacheKey = (providerId: string, baseUrl: string) =>
-  `${providerId} ${baseUrl.trim().replace(/\/+$/, '')}`;
+  `${providerId}\u0000${baseUrl.trim().replace(/\/+$/, '')}`;
 
 export interface CachedDiscoveryRequest extends DiscoveryRequest {
   /** Ask the provider again even if a recent answer is held. */
@@ -435,7 +435,7 @@ export function filterModels(models: readonly ModelRecord[], filter: ModelFilter
   const needle = filter.query?.trim().toLowerCase() ?? '';
   return models.filter((model) => {
     if (needle) {
-      const haystack = `${model.modelId} ${model.displayName}`.toLowerCase();
+      const haystack = `${model.modelId}\u0000${model.displayName}`.toLowerCase();
       if (!haystack.includes(needle)) return false;
     }
     if (filter.providerId && model.providerId !== filter.providerId) return false;

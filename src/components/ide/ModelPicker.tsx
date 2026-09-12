@@ -64,7 +64,14 @@ export interface ModelPickerProps {
   apiKey?: string;
   /** The model currently configured, which may not be in the list. */
   selected: string;
-  onSelect: (modelId: string) => void;
+  /**
+   * The chosen model, and the provider's own record of it when there is one.
+   *
+   * The record comes second because it is not always available: a provider
+   * with no list leaves the text field in place, and a model typed there has
+   * no record behind it. A caller that only needs the id can ignore it.
+   */
+  onSelect: (modelId: string, model?: ModelRecord) => void;
 }
 
 export function ModelPicker({
@@ -237,7 +244,7 @@ export function ModelPicker({
               <li key={model.modelId}>
                 <button
                   type="button"
-                  onClick={() => onSelect(model.modelId)}
+                  onClick={() => onSelect(model.modelId, model)}
                   aria-current={active ? 'true' : undefined}
                   className={cx(
                     'flex w-full flex-col gap-1 px-3 py-2 text-left transition-colors',
@@ -260,6 +267,20 @@ export function ModelPicker({
                         : model.toolCalling
                           ? 'Calls tools'
                           : 'No tool calling'}
+                    </span>
+                    {/*
+                      * Three states, not two. A provider that did not mention
+                      * streaming has not denied it, and shipping "no
+                      * streaming" for silence would be putting a claim in its
+                      * mouth — one the transport then disproves by streaming
+                      * from it anyway.
+                      */}
+                    <span>
+                      {model.streaming === null
+                        ? 'Streaming not stated'
+                        : model.streaming
+                          ? 'Streams the answer'
+                          : 'No streaming'}
                     </span>
                   </span>
                 </button>
