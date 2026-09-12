@@ -71,6 +71,21 @@ export interface WorkspaceSyncOptions {
 }
 
 const DEBOUNCE_MS = 300;
+/** How long a caller waits for the container to confirm what was pushed. */
+const SETTLE_TIMEOUT_MS = 15_000;
+const SETTLE_POLL_MS = 25;
+
+/** Why the editor and the container are not known to hold the same files. */
+export type SyncTrouble = 'conflict' | 'skipped' | 'disconnected' | 'timeout';
+
+/**
+ * Whether what is in the container is what the editor wrote.
+ *
+ * `ok: false` is never "probably fine". Each reason is a specific way the two
+ * sides are known to differ, and a check run in that state proves nothing about
+ * the code the user is looking at.
+ */
+export type SyncSettlement = { ok: true } | { ok: false; reason: SyncTrouble; detail: string };
 
 export class WorkspaceSync {
   /** Hash of the last content we know both sides agreed on, per path. */
@@ -78,11 +93,83 @@ export class WorkspaceSync {
   /** Hashes we applied *from* the container, so we do not send them back. */
   private readonly applied = new Map<string, string>();
   private readonly dirty = new Set<string>();
+  /** Paths pushed to the container and not yet acknowledged. */
+  private readonly pending = new Set<string>();
   private readonly removed = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
+  /**
+   * What went wrong since the last time anybody asked.
+   *
+   * Kept rather than only reported, because the caller that needs to know is
+   * the one about to run a check in the container, and it arrives after the
+   * conflict has already been handed to the UI.
+   */
+  private trouble: { reason: SyncTrouble; detail: string } | null = null;
 
   constructor(private readonly options: WorkspaceSyncOptions) {}
+
+  /**
+   * Wait until everything written has actually reached the container.
+   *
+   * This exists for one caller: the agent, about to run the project's real
+   * tests. Between the editor writing a file and the container holding it there
+   * is a debounce, a push and an ack, and a check run inside that window tests
+   * the *old* files and passes. "I changed it and the tests pass" is then false
+   * in the worst possible way — every step succeeded and the conclusion is
+   * wrong.
+   *
+   * Every way this can fail to settle is a failure, never a pass:
+   *
+   *   * a conflict — the container has a different version, so what would be
+   *     tested is not what was written;
+   *   * a skipped file — too large, or refused, so it never arrived at all;
+   *   * a disconnect — the sync stopped and the push may never have landed;
+   *   * a timeout — nothing came back, and silence is not agreement.
+   */
+  async settle(timeoutMs = SETTLE_TIMEOUT_MS): Promise<SyncSettlement> {
+    if (!this.started) {
+      return { ok: false, reason: 'disconnected', detail: 'The workspace sync is not running.' };
+    }
+
+    // Anything waiting on the debounce is sent now rather than waited out.
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    await this.flush();
+
+    const deadline = Date.now() + timeoutMs;
+    while (this.pending.size > 0) {
+      if (this.trouble) break;
+      if (!this.started) {
+        return {
+          ok: false,
+          reason: 'disconnected',
+          detail: 'The workspace disconnected before the files were confirmed.',
+        };
+      }
+      if (Date.now() >= deadline) {
+        return {
+          ok: false,
+          reason: 'timeout',
+          detail: `The container did not confirm ${this.pending.size} file(s) within ${Math.round(timeoutMs / 1000)}s, so it may not hold your latest changes.`,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+    }
+
+    if (this.trouble) {
+      const { reason, detail } = this.trouble;
+      return { ok: false, reason, detail };
+    }
+    return { ok: true };
+  }
+
+  /** Forget a recorded problem, once the caller has reported it. */
+  clearTrouble(): void {
+    this.trouble = null;
+  }
 
   /**
    * Offer the whole tree and wait to be told what is missing.
@@ -197,6 +284,9 @@ export class WorkspaceSync {
   ): void {
     const skipped: Array<{ path: string; reason: string }> = [];
     for (const result of results) {
+      // Answered, whatever the answer: `settle` waits on this set, and a file
+      // the container refused is never going to be confirmed.
+      this.pending.delete(result.path);
       switch (result.status) {
         case 'written':
         case 'unchanged':
@@ -205,8 +295,18 @@ export class WorkspaceSync {
           break;
         case 'skipped':
           skipped.push({ path: result.path, reason: result.reason });
+          // Remembered as well as reported: a file that never arrived means a
+          // check in the container would test something else.
+          this.trouble = {
+            reason: 'skipped',
+            detail: `${result.path} was not accepted by the workspace: ${result.reason}`,
+          };
           break;
         case 'conflict':
+          this.trouble = {
+            reason: 'conflict',
+            detail: `${result.path} differs between the editor and the workspace, so they are not testing the same file.`,
+          };
           this.options.onConflict(result);
           break;
       }
@@ -225,6 +325,7 @@ export class WorkspaceSync {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.started = false;
+    this.pending.clear();
     this.dirty.clear();
     this.removed.clear();
   }
@@ -269,7 +370,12 @@ export class WorkspaceSync {
       payload.push({ path, content, baseHash: this.base.get(path) });
     }
 
-    if (payload.length) this.options.terminal.pushFiles(payload);
+    if (payload.length) {
+      // Recorded before the push, so a settle that starts immediately after
+      // this returns already knows what it is waiting for.
+      for (const file of payload) this.pending.add(file.path);
+      this.options.terminal.pushFiles(payload);
+    }
   }
 
   private syncable(path: string): boolean {

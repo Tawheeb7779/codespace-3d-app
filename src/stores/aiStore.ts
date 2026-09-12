@@ -44,6 +44,7 @@ import {
   type ContextSource,
 } from '@/lib/ai/contextControl';
 import { workflowById, type WorkflowId } from '@/lib/ai/workflows';
+import { workspaceSyncFor } from '@/lib/terminal/fileStoreSync';
 import { errorMessage, uid } from '@/lib/utils';
 
 export interface AssistantMessage {
@@ -255,6 +256,38 @@ function toolContext(): ToolContext {
         return answer;
       },
       async runCheck(script: string) {
+        /*
+         * The container must be holding what the editor wrote.
+         *
+         * Between a write in the editor and the file existing in the container
+         * there is a debounce, a push and an acknowledgement. A check started
+         * inside that window runs against the *previous* files and passes —
+         * and "I changed it and the tests pass" is then false with every step
+         * having succeeded, which is the worst shape this failure can take.
+         *
+         * Anything short of a confirmed settle is reported as a check that did
+         * not run. Not as a pass: nothing was verified about the code the user
+         * is looking at.
+         */
+        const projectId = useFileStore.getState().projectId;
+        const sync = projectId ? workspaceSyncFor(projectId) : null;
+        if (sync) {
+          const settlement = await sync.settle();
+          if (!settlement.ok) {
+            sync.clearTrouble();
+            useAgentStore.getState().noteVerification({
+              name: `npm run ${script}`,
+              ok: false,
+              ran: false,
+              detail: settlement.detail,
+            });
+            return {
+              ok: false as const,
+              message: `The workspace and the editor are not in step, so \`npm run ${script}\` was not run: ${settlement.detail}`,
+            };
+          }
+        }
+
         const answer = await workspaceCheck({ op: 'run', script }).catch((error: Error) => ({
           ok: false as const,
           message: error.message,
