@@ -13,7 +13,7 @@ import {
 import type { GatewayConfig } from './config.ts';
 import { atLeast, authorizeTerminal, type Authorizer } from './auth.ts';
 import { GatewayError, protocolError, resourceLimit, toGatewayError } from './errors.ts';
-import { ContainerManager } from './lifecycle.ts';
+import { ContainerManager, type ContainerRecord } from './lifecycle.ts';
 import { SessionRegistry, TerminalSession } from './session.ts';
 import { correlationId, type Logger } from './observability.ts';
 import type { ContainerRuntime } from './runtime/types.ts';
@@ -136,6 +136,11 @@ export function createGateway(deps: GatewayDeps): {
    * per keystroke would put a database round trip in the path of typing. One
    * interval is the bound on how long revoked access survives, and it is
    * configurable for an operator who wants it tighter.
+   *
+   * Frames addressed by container are the exception and check the role as they
+   * arrive — see `ownedWorkspace`. They are not in the path of typing, and this
+   * sweep cannot cover them: it walks the project a socket announced at
+   * `hello`, and those frames name a workspace it never announced.
    *
    * The identity is not re-verified here, only the role. Re-verifying identity
    * needs the caller's token, and the gateway deliberately does not keep one —
@@ -440,7 +445,22 @@ export function createGateway(deps: GatewayDeps): {
       }
 
       const session = sessions.find(frame.sessionId, connection.userId);
-      if (!session) {
+      /*
+       * The session must be the one this socket attached to.
+       *
+       * Owning it is not enough. A person can hold sockets on two workspaces at
+       * once — a project and their Linux workspace — and each socket was
+       * authorised for the workspace it announced at `hello`, not for every
+       * workspace its user happens to own. Matching the container keeps a
+       * socket's writes inside the workspace it was admitted to, which also
+       * means the role revocation that clears `connection.session` stops input
+       * rather than leaving it addressable by id.
+       *
+       * The container rather than the session id, because one workspace may
+       * legitimately run several terminals and a socket may adopt a detached
+       * one.
+       */
+      if (!session || session.containerId !== connection.session?.containerId) {
         // Same answer for "no such session" and "not yours": distinguishing
         // them tells a caller which ids exist.
         throw new GatewayError('PERMISSION_ERROR', 'That terminal session is not available.');
@@ -469,23 +489,59 @@ export function createGateway(deps: GatewayDeps): {
   }
 
   /**
+   * The workspace a caller may act on, resolved by ownership *and* by role.
+   *
+   * Ownership alone is not enough, and the gap is not hypothetical. A container
+   * record keeps the user id of whoever created it, so `byId` keeps answering
+   * for that person after their membership of the project has been taken away.
+   * The periodic `revalidate` does not close it either: that walks the role a
+   * socket announced at `hello`, and a container-addressed frame names a
+   * workspace the socket never announced. So an editor removed from a project
+   * could still synchronise, run git against, check, or transfer out of that
+   * project's workspace, from any socket they could still open.
+   *
+   * Resolving the role here closes it. A Linux workspace has no project and no
+   * membership to check — it belongs to the person — so `projectId === null`
+   * passes on ownership alone, which is the whole of its authorisation story.
+   *
+   * A lookup that cannot reach the database fails closed: `roleOn` throws a
+   * PERMISSION_ERROR whose message says the check could not be made. That is
+   * the opposite of `revalidate`'s choice, and deliberately: refusing one
+   * operation while Supabase is unreachable is recoverable, and closing every
+   * open terminal on the host is not.
+   */
+  async function ownedWorkspace(
+    connection: Connection,
+    containerId: string,
+  ): Promise<ContainerRecord> {
+    const record = containers.byId(containerId, connection.userId!);
+    if (
+      !record ||
+      (record.projectId !== null &&
+        !atLeast(await authorizer.roleOn(connection.userId!, record.projectId), 'editor'))
+    ) {
+      // The same answer for "no such workspace", "not yours" and "not any
+      // more": telling them apart tells a caller which ids exist.
+      throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+    }
+    return record;
+  }
+
+  /**
    * File synchronisation for one container.
    *
-   * The container is resolved by `byId` with the caller's own user id, so a
-   * client that names somebody else's container gets the same answer as one
-   * that names a container that does not exist. That check is the whole
-   * authorisation story for sync, and it belongs here rather than in the sync
-   * service: the service takes a record it is given, and would have no way to
-   * know who asked.
+   * The container is resolved by `ownedWorkspace`, so a client that names
+   * somebody else's container — or one on a project it has been removed from —
+   * gets the same answer as one that names a container that does not exist.
+   * That check is the whole authorisation story for sync, and it belongs here
+   * rather than in the sync service: the service takes a record it is given,
+   * and would have no way to know who asked.
    */
   async function onSync(
     connection: Connection,
     frame: Extract<ClientFrame, { type: 'sync-manifest' | 'sync-push' | 'sync-delete' }>,
   ): Promise<void> {
-    const record = containers.byId(frame.containerId, connection.userId!);
-    if (!record) {
-      throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
-    }
+    const record = await ownedWorkspace(connection, frame.containerId);
 
     switch (frame.type) {
       case 'sync-manifest': {
@@ -514,7 +570,7 @@ export function createGateway(deps: GatewayDeps): {
   /**
    * Real git, against the workspace the caller owns.
    *
-   * The container is resolved by id *and* owner, exactly as sync is, so a git
+   * The container is resolved by owner *and* role, exactly as sync is, so a git
    * request naming somebody else's workspace is refused before any command is
    * built. Nothing from the frame reaches a command line: `git.ts` builds every
    * argv from the typed operation.
@@ -527,8 +583,7 @@ export function createGateway(deps: GatewayDeps): {
     connection: Connection,
     frame: Extract<ClientFrame, { type: 'git' }>,
   ): Promise<void> {
-    const record = containers.byId(frame.containerId, connection.userId!);
-    if (!record) throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+    const record = await ownedWorkspace(connection, frame.containerId);
 
     const runner = { runtime, record };
     const answer = (
@@ -641,8 +696,7 @@ export function createGateway(deps: GatewayDeps): {
     connection: Connection,
     frame: Extract<ClientFrame, { type: 'check' }>,
   ): Promise<void> {
-    const record = containers.byId(frame.containerId, connection.userId!);
-    if (!record) throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
+    const record = await ownedWorkspace(connection, frame.containerId);
 
     try {
       if (frame.request.op === 'list') {
@@ -692,11 +746,10 @@ export function createGateway(deps: GatewayDeps): {
     connection: Connection,
     frame: Extract<ClientFrame, { type: 'transfer' }>,
   ): Promise<void> {
-    const from = containers.byId(frame.fromContainerId, connection.userId!);
-    const to = containers.byId(frame.toContainerId, connection.userId!);
-    if (!from || !to) {
-      throw new GatewayError('PERMISSION_ERROR', 'That workspace is not available.');
-    }
+    // Both ends, not just the destination: a transfer reads one workspace and
+    // writes another, so losing access to either must stop it.
+    const from = await ownedWorkspace(connection, frame.fromContainerId);
+    const to = await ownedWorkspace(connection, frame.toContainerId);
 
     const outcome = await transferFiles(from, to, frame.paths, { overwrite: frame.overwrite });
 
