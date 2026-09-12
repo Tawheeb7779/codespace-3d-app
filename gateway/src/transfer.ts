@@ -1,5 +1,4 @@
-import { copyFile, mkdir, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readWorkspaceFile, writeWorkspaceFile } from './secureFs.ts';
 import { isSensitivePath, resolveInWorkspaceNoSymlinks } from './workspace.ts';
 import type { ContainerRecord } from './lifecycle.ts';
 import { GatewayError } from './errors.ts';
@@ -83,16 +82,29 @@ export async function transferFiles(
       continue;
     }
 
-    const info = await stat(source).catch(() => null);
-    if (!info || !info.isFile()) {
-      outcome.skipped.push({ path, reason: 'not a file' });
+    /*
+     * Read the bytes now, through a descriptor, rather than copying by name
+     * later. A `copyFile` between two checked paths is two more chances for the
+     * container to swap either end after it was checked; holding the source's
+     * contents means the destination write is about bytes we already have.
+     *
+     * The size limit lives inside the read, so the reason has to be recovered
+     * from the failure rather than decided beforehand.
+     */
+    let readFailure = 'not a file';
+    const bytes = await readWorkspaceFile(from.workspaceDir, path, MAX_FILE_BYTES).catch(
+      (error: Error) => {
+        if (error.message.includes('size limit')) {
+          readFailure = 'file exceeds the transfer size limit';
+        }
+        return null;
+      },
+    );
+    if (bytes === null) {
+      outcome.skipped.push({ path, reason: readFailure });
       continue;
     }
-    if (info.size > MAX_FILE_BYTES) {
-      outcome.skipped.push({ path, reason: 'file exceeds the transfer size limit' });
-      continue;
-    }
-    if (info.size > budget) {
+    if (bytes.length > budget) {
       outcome.skipped.push({ path, reason: 'transfer exceeds the total size limit' });
       continue;
     }
@@ -103,15 +115,22 @@ export async function transferFiles(
       continue;
     }
 
-    const existing = await stat(target).catch(() => null);
-    if (existing && !options.overwrite) {
+    // Whether something is already there is decided against the descriptor the
+    // write itself holds, so a file appearing between the check and the copy
+    // cannot be overwritten by a transfer that was told not to.
+    const conflict = await writeWorkspaceFile(
+      to.workspaceDir,
+      path,
+      bytes,
+      (current) => (current !== null && !options.overwrite ? true : null),
+      MAX_FILE_BYTES,
+    );
+    if (conflict) {
       outcome.conflicts.push(path);
       continue;
     }
 
-    await mkdir(dirname(target), { recursive: true });
-    await copyFile(source, target);
-    budget -= info.size;
+    budget -= bytes.length;
     outcome.copied.push(path);
   }
 

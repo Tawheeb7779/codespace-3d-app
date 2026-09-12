@@ -271,9 +271,18 @@ trees already agree on. Explicitly: all 12 extra panels, all 9 extra stores, all
    role ≥ editor on the owning project, and additionally requires
    `session.containerId === connection.session?.containerId`. **FEATURE is the
    weaker line here.** Integrate with its gateway tests.
-2. **`secureFs.ts` + `files.ts` + protocol v5** — one unit. Do not raise
-   `PROTOCOL_VERSION` unless both the client frames and the gateway handler land
-   in the same change; a version bump on one side alone breaks every connection.
+2. **`secureFs.ts` into the active filesystem paths.** Port `secureFs.ts` and
+   wire it into the active `sync.ts` / `syncService.ts` / `transfer.ts`
+   filesystem paths. Preserve the existing path-validation defenses. Do not
+   port `files.ts`, `workspace-file`, or protocol v5 as part of this step.
+
+   *Corrected during execution.* This item previously grouped `secureFs.ts`,
+   `files.ts` and protocol v5 as one unit. That was wrong: `files.ts` does not
+   import `secureFs` at all — it drives an in-container Python script — and
+   `secureFs`'s real importers are `sync.ts`, `syncService.ts` and
+   `transfer.ts`. `workspace-file` and protocol v5 remain unported, their only
+   client being the Linux file UI §8 excludes; raising `PROTOCOL_VERSION` with
+   nothing using the new frames would break connections for no capability.
 3. **Read integrity + P1** — `context.ts` `ReadCache.hasCurrentRead`, the
    `tools.ts` write guard, and `agentStore.noteChange` are one mechanism.
    Porting any one alone either does nothing or refuses legitimate writes.

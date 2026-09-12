@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readWorkspaceFile, writeWorkspaceFile, deleteWorkspaceFile } from './secureFs.ts';
 import { isSensitivePath, resolveInWorkspaceNoSymlinks, shouldSync } from './workspace.ts';
 import { GatewayError } from './errors.ts';
 
@@ -141,32 +140,51 @@ export async function applyEditorWrite(
   }
 
   // Refuses a path that crosses a symlink, which is the only reason a write
-  // under this root could land outside it.
-  const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path);
+  // under this root could land outside it. Kept ahead of the write rather than
+  // replaced by it: this rejects the path outright, where `writeWorkspaceFile`
+  // guarantees the bytes go to the object it checked.
+  await resolveInWorkspaceNoSymlinks(workspaceDir, path);
   const nextHash = hashContent(content);
 
-  const onDisk = await readIfPresent(target);
-  const currentHash = onDisk === null ? null : hashContent(onDisk);
+  /*
+   * Read, decide and write through one descriptor.
+   *
+   * The conflict check is only worth anything if the file it read is the file
+   * it then writes to. Reading by name, deciding, and writing by name leaves a
+   * gap in which the container can replace the file — or the directory above
+   * it — and the write lands on something nobody compared.
+   */
+  const refusal = await writeWorkspaceFile<SyncOutcome>(
+    workspaceDir,
+    path,
+    Buffer.from(content, 'utf8'),
+    (onDisk) => {
+      const currentHash = onDisk === null ? null : hashContent(onDisk);
 
-  if (currentHash === nextHash) {
-    index.record(path, nextHash, bytes, 'editor');
-    return { status: 'unchanged', path, hash: nextHash };
-  }
+      if (currentHash === nextHash) {
+        index.record(path, nextHash, bytes, 'editor');
+        return { status: 'unchanged', path, hash: nextHash };
+      }
 
-  // The file changed under us since the editor last saw it, and the editor is
-  // not writing that same content — genuinely concurrent, so refuse.
-  //
-  // A missing `baseHash` is treated the same way when the file exists, and
-  // that is the stricter reading on purpose: the editor omits it only for a
-  // file the plan said the container did not have, so a file that is there
-  // anyway appeared between the plan and this write. Rare, and precisely the
-  // race where "no base" would otherwise mean "overwrite whatever is there".
-  if (currentHash !== null && currentHash !== file.baseHash) {
-    return { status: 'conflict', path, containerHash: currentHash, editorHash: nextHash };
-  }
+      // The file changed under us since the editor last saw it, and the editor
+      // is not writing that same content — genuinely concurrent, so refuse.
+      //
+      // A missing `baseHash` is treated the same way when the file exists, and
+      // that is the stricter reading on purpose: the editor omits it only for a
+      // file the plan said the container did not have, so a file that is there
+      // anyway appeared between the plan and this write. Rare, and precisely
+      // the race where "no base" would otherwise mean "overwrite whatever is
+      // there".
+      if (currentHash !== null && currentHash !== file.baseHash) {
+        return { status: 'conflict', path, containerHash: currentHash, editorHash: nextHash };
+      }
 
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, content, 'utf8');
+      return null;
+    },
+    limits.maxFileBytes,
+  );
+  if (refusal) return refusal;
+
   index.record(path, nextHash, bytes, 'editor');
   return { status: 'written', path, hash: nextHash };
 }
@@ -186,13 +204,15 @@ export async function readContainerChange(
 ): Promise<{ path: string; content: string; hash: string } | null> {
   if (!shouldSync(path)) return null;
 
-  const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path).catch(() => null);
-  if (target === null) return null;
-  const info = await stat(target).catch(() => null);
-  if (!info || !info.isFile()) return null;
-  if (info.size > limits.maxFileBytes) return null;
+  if (await resolveInWorkspaceNoSymlinks(workspaceDir, path).then(() => false, () => true)) {
+    return null;
+  }
 
-  const raw = await readFile(target).catch(() => null);
+  // The size limit, the regular-file check and the read all happen against one
+  // descriptor inside `readWorkspaceFile`, so a file that is swapped for a link
+  // — or for something that is not a file at all — after the path check cannot
+  // be read through.
+  const raw = await readWorkspaceFile(workspaceDir, path, limits.maxFileBytes).catch(() => null);
   if (raw === null) return null;
   // Binary files have no representation in the editor's text VFS. Detected by
   // content rather than extension, because a build tool's output is whatever it
@@ -203,7 +223,7 @@ export async function readContainerChange(
   if (index.isEcho(path, hash)) return null;
 
   const content = raw.toString('utf8');
-  index.record(path, hash, info.size, 'container');
+  index.record(path, hash, raw.length, 'container');
   return { path, content, hash };
 }
 
@@ -213,8 +233,8 @@ export async function applyEditorDelete(
   path: string,
 ): Promise<SyncOutcome> {
   if (isSensitivePath(path)) return { status: 'skipped', path, reason: 'protected path' };
-  const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path);
-  await rm(target, { force: true });
+  await resolveInWorkspaceNoSymlinks(workspaceDir, path);
+  await deleteWorkspaceFile(workspaceDir, path);
   index.forget(path);
   return { status: 'written', path, hash: '' };
 }
@@ -309,24 +329,15 @@ export async function containerManifest(
 ): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   for (const path of paths.slice(0, limits.maxFiles)) {
-    const target = await resolveInWorkspaceNoSymlinks(workspaceDir, path).catch(() => null);
-    if (target === null) continue;
-    const info = await stat(target).catch(() => null);
-    if (!info || !info.isFile()) continue;
-    // Hashing a 200MB artefact to decide it will never be synced is work with
-    // no possible consumer.
-    if (info.size > limits.maxFileBytes) continue;
-    const raw = await readFile(target).catch(() => null);
+    if (await resolveInWorkspaceNoSymlinks(workspaceDir, path).then(() => false, () => true)) {
+      continue;
+    }
+    // The size ceiling is inside the read: hashing a 200MB artefact to decide
+    // it will never be synced is work with no possible consumer, and
+    // `readHandle` refuses it before any of the bytes are copied.
+    const raw = await readWorkspaceFile(workspaceDir, path, limits.maxFileBytes).catch(() => null);
     if (raw === null) continue;
-    entries.push({ path, hash: hashContent(raw), size: info.size });
+    entries.push({ path, hash: hashContent(raw), size: raw.length });
   }
   return entries;
-}
-
-async function readIfPresent(target: string): Promise<Buffer | null> {
-  try {
-    return await readFile(target);
-  } catch {
-    return null;
-  }
 }
