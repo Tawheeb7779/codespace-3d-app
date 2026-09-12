@@ -40,7 +40,7 @@ import { Resizer } from '@/components/ui/Resizer';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/Primitives';
 import { Button } from '@/components/ui/Button';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { LAYOUTS, useUIStore } from '@/stores/uiStore';
+import { LAYOUTS, useUIStore, type SidebarPanel } from '@/stores/uiStore';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore, splitTargetFor } from '@/stores/editorStore';
 import { useGitStore } from '@/stores/gitStore';
@@ -57,6 +57,7 @@ import { toast } from '@/stores/toastStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import { isTextFile } from '@/lib/vfs';
+import { allPanels, GROUP_LABEL } from '@/lib/workspacePanels';
 import { canFormat } from '@/lib/languages';
 import { buildProblems, mergeProblems, nextProblem } from '@/lib/problems';
 import { cx, errorMessage } from '@/lib/utils';
@@ -64,56 +65,45 @@ import { ShortcutHelp } from '@/components/ide/ShortcutHelp';
 import { NotificationCenter } from '@/components/ide/NotificationCenter';
 import { useToastStore } from '@/stores/toastStore';
 
+/**
+ * Which component each panel is.
+ *
+ * A `Record` keyed by the union, not a switch with a default. The default was
+ * quietly load-bearing: `explorer` had no case and reached the file tree only
+ * by falling through it, so the drift a default exists to absorb had already
+ * happened and nothing said so. Now a panel added to `SidebarPanel` fails the
+ * build here and in `workspacePanels` until both know about it.
+ */
+const PANEL_COMPONENT: Record<SidebarPanel, () => JSX.Element> = {
+  explorer: FileExplorer,
+  project: ProjectPanel,
+  activity: ActivityPanel,
+  tasks: TasksPanel,
+  search: SearchPanel,
+  git: GitPanel,
+  packages: PackagesPanel,
+  assistant: AssistantPanel,
+  comments: CommentsPanel,
+  security: SecurityPanel,
+  observability: ObservabilityPanel,
+  health: HealthPanel,
+  api: ApiPanel,
+  environments: EnvironmentPanel,
+  performance: PerformancePanel,
+  architecture: ArchitecturePanel,
+  timeline: TimeTravelPanel,
+  extensions: ExtensionsPanel,
+  builder: BuilderPanel,
+  database: DatabasePanel,
+  uibuilder: UIBuilderPanel,
+  linuxfiles: LinuxFilesPanel,
+  members: MembersPanel,
+};
+
 function SidePanel() {
   const panel = useUIStore((s) => s.sidebarPanel);
-  switch (panel) {
-    case 'project':
-      return <ProjectPanel />;
-    case 'activity':
-      return <ActivityPanel />;
-    case 'tasks':
-      return <TasksPanel />;
-    case 'search':
-      return <SearchPanel />;
-    case 'git':
-      return <GitPanel />;
-    case 'packages':
-      return <PackagesPanel />;
-    case 'assistant':
-      return <AssistantPanel />;
-    case 'comments':
-      return <CommentsPanel />;
-    case 'security':
-      return <SecurityPanel />;
-    case 'observability':
-      return <ObservabilityPanel />;
-    case 'health':
-      return <HealthPanel />;
-    case 'api':
-      return <ApiPanel />;
-    case 'environments':
-      return <EnvironmentPanel />;
-    case 'performance':
-      return <PerformancePanel />;
-    case 'architecture':
-      return <ArchitecturePanel />;
-    case 'timeline':
-      return <TimeTravelPanel />;
-    case 'extensions':
-      return <ExtensionsPanel />;
-    case 'builder':
-      return <BuilderPanel />;
-    case 'database':
-      return <DatabasePanel />;
-    case 'uibuilder':
-      return <UIBuilderPanel />;
-    case 'linuxfiles':
-      return <LinuxFilesPanel />;
-    case 'members':
-      return <MembersPanel />;
-    default:
-      return <FileExplorer />;
-  }
+  const Panel = PANEL_COMPONENT[panel] ?? FileExplorer;
+  return <Panel />;
 }
 
 function EditorArea({ path }: { path: string | null }) {
@@ -597,24 +587,6 @@ export default function WorkspacePage() {
         run: requestReplace,
       },
       {
-        id: 'view.project',
-        group: 'View',
-        label: 'Show project overview',
-        run: () => setSidebarPanel('project'),
-      },
-      {
-        id: 'view.activity',
-        group: 'View',
-        label: 'Show activity and who is here',
-        run: () => setSidebarPanel('activity'),
-      },
-      {
-        id: 'view.tasks',
-        group: 'View',
-        label: 'Show tasks and run configurations',
-        run: () => setSidebarPanel('tasks'),
-      },
-      {
         id: 'problems.next',
         group: 'Go',
         label: 'Go to next problem',
@@ -627,33 +599,6 @@ export default function WorkspacePage() {
         label: 'Go to previous problem',
         keys: 'shift+f8',
         run: () => goToProblem(-1),
-      },
-      {
-        id: 'view.explorer',
-        group: 'View',
-        label: 'Show explorer',
-        binding: 'explorer',
-        run: () => setSidebarPanel('explorer'),
-      },
-      {
-        id: 'view.search',
-        group: 'View',
-        label: 'Search across files',
-        binding: 'search',
-        run: () => setSidebarPanel('search'),
-      },
-      {
-        id: 'view.assistant',
-        group: 'View',
-        label: 'Open the AI assistant',
-        binding: 'assistant',
-        run: () => setSidebarPanel('assistant'),
-      },
-      {
-        id: 'view.packages',
-        group: 'View',
-        label: 'Open packages',
-        run: () => setSidebarPanel('packages'),
       },
       {
         id: 'view.terminal',
@@ -836,7 +781,28 @@ export default function WorkspacePage() {
         run: gitAction(`Switched to ${branch}`, () => useGitStore.getState().checkout(branch)),
       }));
 
-    return [...base, ...editorCommands, ...taskCommands, ...branchCommands];
+    /*
+     * Every panel, from the one registry that describes them.
+     *
+     * Seven of the twenty-three used to be written out here by hand, which
+     * meant the other sixteen existed only as an icon in the rail: the
+     * database studio, the API client, the profiler and the security centre
+     * could not be reached by typing their names. Deriving them means a panel
+     * cannot be added without also being findable, and the group shown beside
+     * each one is the same hierarchy the rail presents.
+     */
+    const panelCommands: Command[] = allPanels().map(({ id, info }) => ({
+      id: `view.panel.${id}`,
+      group: GROUP_LABEL[info.group],
+      // The keywords are searchable but not shown: somebody looking for the
+      // profiler types "profiler", and the panel is called Performance.
+      label: `Show ${info.label}`,
+      keywords: info.keywords,
+      binding: info.binding,
+      run: () => setSidebarPanel(id),
+    }));
+
+    return [...base, ...panelCommands, ...editorCommands, ...taskCommands, ...branchCommands];
   }, [
     activePath,
     reopenClosedTab,

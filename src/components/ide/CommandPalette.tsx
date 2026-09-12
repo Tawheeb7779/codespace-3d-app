@@ -24,6 +24,14 @@ export interface Command {
   binding?: string;
   /** A literal chord, for the few commands the keymap does not own. */
   keys?: string;
+  /**
+   * Words this command should also be found by, never shown.
+   *
+   * People search for the thing, not for the name the product chose: somebody
+   * looking for the profiler types "profiler", and the panel is called
+   * Performance. Matching only the visible label makes them guess.
+   */
+  keywords?: string;
   disabled?: boolean;
   run: () => void;
 }
@@ -82,7 +90,8 @@ export function CommandPalette({
           (command) =>
             !needle ||
             command.label.toLowerCase().includes(needle) ||
-            command.group.toLowerCase().includes(needle),
+            command.group.toLowerCase().includes(needle) ||
+            command.keywords?.toLowerCase().includes(needle) === true,
         )
         .map((command) => ({ kind: 'command' as const, command }));
     }
