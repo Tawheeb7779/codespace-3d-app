@@ -215,6 +215,39 @@ function assertWrote(written: string[], expected: string[]): void {
   );
 }
 
+/**
+ * Assert that a project's files actually came back.
+ *
+ * The read half of {@link assertWrote}, and it is the same silence for the same
+ * reason. Row level security does not error when it refuses a read: it filters
+ * the rows and PostgREST answers 200 with `[]`. So a project whose
+ * `project_files` policy does not admit the caller loaded as a project with no
+ * files, the workspace opened on nothing, and the user's work was gone with
+ * nothing on screen having said anything went wrong — which is the complaint
+ * this guard exists for, arriving from the opposite direction to the save bug.
+ *
+ * Every project this application creates is created with files: a template
+ * always ships at least one, and `createProject` writes them under
+ * `assertWrote`. So zero rows is not a description of a project, it is a
+ * description of a read.
+ *
+ * The honest limit: a user who deleted every file in a project would reach this
+ * too, and would be told to check a policy that is fine. That is the trade
+ * taken deliberately — such a project cannot be created and has no reason to
+ * exist, the message says what to look at either way, and being stopped is
+ * recoverable where being shown an empty editor over real work is not.
+ */
+function assertLoaded(paths: string[], project: { id: string; name: string }): void {
+  if (paths.length) return;
+  throw new Error(
+    `${project.name} came back with no files. The database returned the project but none of ` +
+      'its rows, which is what a row level security policy does when it refuses a read — ' +
+      `check the \`project_files\` SELECT policy for project ${project.id} on ` +
+      `${supabaseHost()}. Nothing has been changed or lost by this; the rows were simply ` +
+      'not returned.',
+  );
+}
+
 export const supabaseRepository: ProjectRepository = {
   kind: 'supabase',
 
@@ -243,6 +276,7 @@ export const supabaseRepository: ProjectRepository = {
       files[row.path] = row.content;
     }
     const row = data as ProjectRow;
+    assertLoaded(Object.keys(files), { id: row.id, name: row.name });
     return { ...rowToMeta(row), files, dirs: row.dirs ?? [] };
   },
 
