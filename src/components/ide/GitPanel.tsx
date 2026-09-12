@@ -261,7 +261,9 @@ function BrowserGitPanel() {
           onChange={(event) =>
             void guard('Could not switch branch', () => checkout(event.target.value))
           }
-          className="min-w-0 flex-1 truncate bg-transparent text-base text-ink outline-none"
+          // Keeps the global focus ring: this is the branch switcher, it is
+          // reachable by Tab, and its row offers no other focus affordance.
+          className="min-w-0 flex-1 truncate bg-transparent text-base text-ink"
         >
           {Object.keys(repo.branches)
             .sort()

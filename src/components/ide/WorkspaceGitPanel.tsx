@@ -304,7 +304,9 @@ export function WorkspaceGitPanel() {
               toast.success('Switched branch', event.target.value),
             )
           }
-          className="min-w-0 flex-1 truncate bg-transparent text-base text-ink outline-none"
+          // Keeps the global focus ring: this is the branch switcher, it is
+          // reachable by Tab, and its row offers no other focus affordance.
+          className="min-w-0 flex-1 truncate bg-transparent text-base text-ink"
         >
           {!branches.current && <option value="">{status?.unborn ? 'no commits yet' : 'detached HEAD'}</option>}
           {branches.all.map((branch) => (

@@ -206,6 +206,68 @@ for (const height of [900, 720, 640]) {
   await page.waitForTimeout(300);
   check('escape closes the palette', !(await palette.isVisible().catch(() => false)));
 
+  // -------------------------------------------------------------------------
+  // Focus has to be visible where the keyboard can go.
+  //
+  // The global rule draws a 2px accent ring on `:focus-visible`, and a
+  // `outline-none` utility silently defeats it — the element still *matches*
+  // `:focus-visible`, it just paints the ring transparent. That is invisible
+  // in the source and invisible on screen, which is how the file tree ended up
+  // keyboard-navigable with no way to see where you were.
+  //
+  // Tab is pressed rather than calling `.focus()`, because programmatic focus
+  // does not reliably put a button into `:focus-visible` and a check that used
+  // it would pass on a control that shows nothing to a real keyboard user.
+  // -------------------------------------------------------------------------
+  const invisibleFocus = async (max) => {
+    await page.locator('body').click({ position: { x: 5, y: 5 } });
+    const bad = [];
+    for (let i = 0; i < max; i += 1) {
+      await page.keyboard.press('Tab');
+      const stop = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body) return null;
+        if (!el.matches(':focus-visible')) return null;
+        const style = getComputedStyle(el);
+        // Transparent or absent outline, and nothing else standing in for it.
+        const ringless =
+          style.outlineStyle === 'none' ||
+          style.outlineWidth === '0px' ||
+          /rgba\(0, 0, 0, 0\)|transparent/.test(style.outlineColor);
+        if (!ringless) return null;
+        if (style.boxShadow !== 'none') return null;
+        return `${el.getAttribute('aria-label') || el.textContent?.trim().slice(0, 24) || el.tagName} [${el.getAttribute('role') ?? el.tagName}]`;
+      });
+      if (stop) bad.push(stop);
+    }
+    return [...new Set(bad)];
+  };
+
+  const ringless = await invisibleFocus(30);
+  check(
+    'every keyboard stop shows a focus ring',
+    ringless.length === 0,
+    ringless.slice(0, 5).join(' | '),
+  );
+
+  // The file tree specifically: it handles its own arrow keys, so focus moves
+  // between rows without Tab and the ring is the only thing that reports it.
+  //
+  // The Explorer has to be brought back first — an earlier check opened the
+  // Performance panel, and a tree that is not on screen has no rows to fail.
+  await page.locator('button[aria-label="Explorer"]').click();
+  await page.waitForTimeout(600);
+  const treeRing = await page.evaluate(() => {
+    const row = document.querySelector('[role="treeitem"]');
+    if (!row) return 'no tree row';
+    row.focus();
+    const style = getComputedStyle(row);
+    return /rgba\(0, 0, 0, 0\)|transparent/.test(style.outlineColor)
+      ? `tree row outline is ${style.outlineColor}`
+      : null;
+  });
+  check('file tree rows can show a focus ring', treeRing === null, treeRing ?? '');
+
   // Icon-only controls must say what they are.
   const unnamed = await page.evaluate(() => {
     const out = [];

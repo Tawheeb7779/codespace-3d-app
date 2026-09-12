@@ -443,7 +443,24 @@ export function FileExplorer() {
                     }}
                     style={{ paddingLeft: node.depth * 12 + 8, height: ROW_HEIGHT }}
                     className={cx(
-                      'flex cursor-pointer select-none items-center gap-1.5 pr-2 text-base outline-none',
+                      /*
+                       * No `outline-none` here.
+                       *
+                       * These rows are deliberately keyboard-navigable —
+                       * ArrowUp and ArrowDown move focus between them — and
+                       * the utility turned the global `:focus-visible` ring
+                       * transparent, so arrowing through the tree moved a
+                       * focus nobody could see. Measured in Chromium: a
+                       * Tab-focused row matched `:focus-visible` and computed
+                       * `outline: 2px solid rgba(0, 0, 0, 0)`, against
+                       * `2px solid rgb(56, 176, 214)` on any ordinary button.
+                       *
+                       * The selected-file background is not a substitute: it
+                       * marks the file that is open, not the row the keyboard
+                       * is on, and the two are different rows the moment you
+                       * start arrowing.
+                       */
+                      'flex cursor-pointer select-none items-center gap-1.5 pr-2 text-base',
                       'transition-colors',
                       isActive
                         ? 'bg-accent-soft text-ink'
