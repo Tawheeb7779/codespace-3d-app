@@ -54,6 +54,8 @@ interface World {
   /** What Gemini answers. */
   upstreamStatus: number;
   upstreamBody: string;
+  /** Response headers, so a case can answer as an event stream. */
+  upstreamHeaders: Record<string, string>;
 }
 
 interface Seen {
@@ -77,6 +79,7 @@ function install(overrides: Partial<World> = {}) {
     upstreamBody: JSON.stringify({
       choices: [{ message: { content: 'وعليكم السلام' }, finish_reason: 'stop' }],
     }),
+    upstreamHeaders: {},
     ...overrides,
   };
   seen = { upstream: null, inserted: [], countUrls: [], authTokens: [] };
@@ -111,7 +114,10 @@ function install(overrides: Partial<World> = {}) {
     if (url.includes('generativelanguage.googleapis.com')) {
       seen.upstream = { url, init: init ?? {} };
       return Promise.resolve(
-        new Response(world.upstreamBody, { status: world.upstreamStatus }),
+        new Response(world.upstreamBody, {
+          status: world.upstreamStatus,
+          headers: world.upstreamHeaders,
+        }),
       );
     }
 
@@ -319,19 +325,49 @@ Deno.test('the output length is capped by the server, not by the caller', async 
 
 /**
  * The upstream body is rebuilt rather than forwarded, so a caller cannot append
- * parameters we would be billed for — or ask for a streamed response the client
- * cannot read.
+ * parameters we would be billed for.
+ *
+ * `stream` used to be on this list. It is allowed now — the client grew a real
+ * streaming path — but as a normalised literal rather than the caller's value,
+ * which the next case covers.
  */
 Deno.test('unknown fields never reach Gemini', async () => {
   await withWorld({}, async () => {
-    await ask({ ...CHAT, stream: true, n: 8, candidateCount: 8, safetySettings: [] });
+    await ask({ ...CHAT, n: 8, candidateCount: 8, safetySettings: [] });
 
     const sent = JSON.parse(String(seen.upstream!.init.body));
-    assertEquals(sent.stream, undefined);
     assertEquals(sent.n, undefined);
     assertEquals(sent.candidateCount, undefined);
     assertEquals(sent.safetySettings, undefined);
     assertEquals(Object.keys(sent).sort(), ['max_tokens', 'messages', 'model']);
+  });
+});
+
+Deno.test('a stream request is forwarded as the literal true', async () => {
+  await withWorld({}, async () => {
+    await ask({ ...CHAT, stream: true });
+
+    const sent = JSON.parse(String(seen.upstream!.init.body));
+    assertEquals(sent.stream, true);
+  });
+});
+
+/** Anything that is not exactly `true` is not a request to stream. */
+Deno.test('a non-boolean stream value is dropped rather than passed on', async () => {
+  for (const value of ['true', 1, {}, [], 'yes']) {
+    await withWorld({}, async () => {
+      await ask({ ...CHAT, stream: value });
+      const sent = JSON.parse(String(seen.upstream!.init.body));
+      assertEquals(sent.stream, undefined, `stream: ${JSON.stringify(value)} was forwarded`);
+    });
+  }
+});
+
+Deno.test('omitting stream still sends a whole-response request', async () => {
+  await withWorld({}, async () => {
+    await ask(CHAT);
+    const sent = JSON.parse(String(seen.upstream!.init.body));
+    assertEquals(sent.stream, undefined);
   });
 });
 
@@ -530,5 +566,74 @@ Deno.test('usage is recorded with sizes, never with content', async () => {
     assert((row.response_bytes as number) > 0);
     assert(!JSON.stringify(row).includes('a very secret prompt'));
     assert(!JSON.stringify(row).includes('وعليكم السلام'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streaming
+//
+// The whole point is that the bytes are forwarded rather than collected, so
+// these check what crosses the boundary and — more importantly — that a
+// streamed call is still metered. Counting rows is what the allowance does, so
+// a stream that were recorded only on completion would make hanging up
+// mid-answer the cheapest way to use this function for nothing.
+// ---------------------------------------------------------------------------
+
+const SSE = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n';
+const STREAMING = {
+  upstreamBody: SSE,
+  upstreamHeaders: { 'content-type': 'text/event-stream' },
+};
+
+Deno.test('a streamed reply is forwarded as an event stream', async () => {
+  await withWorld(STREAMING, async () => {
+    const response = await ask({ ...CHAT, stream: true });
+
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get('content-type'), 'text/event-stream');
+    assertEquals(await response.text(), SSE);
+  });
+});
+
+Deno.test('a streamed call is recorded before any token is forwarded', async () => {
+  await withWorld(STREAMING, async () => {
+    await ask({ ...CHAT, stream: true });
+
+    assertEquals(seen.inserted.length, 1);
+    assertEquals(seen.inserted[0].upstream_status, 200);
+    assertEquals(typeof seen.inserted[0].request_bytes, 'number');
+  });
+});
+
+Deno.test('a streamed call counts against the allowance like any other', async () => {
+  Deno.env.set('AI_RATE_LIMIT_PER_MINUTE', '1');
+  await withWorld({ ...STREAMING, countsInWindow: [1, 1] }, async () => {
+    const response = await ask({ ...CHAT, stream: true });
+    assertEquals(response.status, 429);
+    // Refused before Gemini was ever reached.
+    assertEquals(seen.upstream, null);
+  });
+});
+
+/** A provider that ignores `stream` is answered as the whole body it sent. */
+Deno.test('a whole-body reply to a stream request is still passed through', async () => {
+  await withWorld({}, async () => {
+    const response = await ask({ ...CHAT, stream: true });
+
+    assertEquals(response.headers.get('content-type'), 'application/json');
+    const body = await response.json();
+    assertEquals(body.choices[0].message.content, 'وعليكم السلام');
+  });
+});
+
+Deno.test('a streamed reply never carries the key', async () => {
+  await withWorld(STREAMING, async () => {
+    const response = await ask({ ...CHAT, stream: true });
+    const text = await response.text();
+
+    if (text.includes(SECRET)) throw new Error('the key reached the client');
+    for (const [, value] of response.headers) {
+      if (String(value).includes(SECRET)) throw new Error('the key is in a response header');
+    }
   });
 });

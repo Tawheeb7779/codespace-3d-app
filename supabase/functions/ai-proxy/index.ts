@@ -22,11 +22,18 @@
  * echoed in an error: upstream failures are re-shaped here, so a provider that
  * quotes the request back cannot relay it to the browser.
  *
- * Not streamed, deliberately. TA CODE's provider abstraction is request /
- * response — `complete()` awaits a whole completion and the agent loop turns it
- * into tool calls — so a streaming proxy would have nothing to stream into.
- * The reply is bounded by `AI_MAX_OUTPUT_TOKENS` instead, which is what keeps
- * it from being large in the first place.
+ * Streams when the caller asks for it. That was not always true: the client
+ * was request/response, so this was too, and the note here used to say a
+ * streaming proxy would have nothing to stream into. `complete()` grew a real
+ * streaming path, and a hosted user was the one person who could not have it —
+ * the allowlist quietly dropped `stream`, Google returned a whole body, and
+ * the client parsed it as one. Correct, and the slowest possible version of a
+ * feature everyone else had.
+ *
+ * Metering is unchanged by it, because the allowance counts rows rather than
+ * bytes: the row is written as soon as Google accepts the request, before a
+ * single token is forwarded, so a stream cannot be a way to make an unmetered
+ * call. The reply is still bounded by `AI_MAX_OUTPUT_TOKENS`.
  */
 
 import { CORS_HEADERS, HttpError, envInt, fail, json } from '../_shared/http.ts';
@@ -190,17 +197,22 @@ interface ChatBody {
   tools?: unknown;
   tool_choice?: unknown;
   temperature?: unknown;
+  stream?: unknown;
 }
 
 /**
  * Rebuild the upstream request from scratch.
  *
  * Forwarding the caller's object would let it set anything the API accepts —
- * `stream`, `n`, a candidate count — and bill us for it. Only these fields
- * cross, and `max_tokens` is ours.
+ * `n`, a candidate count, a sampling budget — and bill us for it. Only these
+ * fields cross, and `max_tokens` is ours.
+ *
+ * `stream` is on the list but is not the caller's value: it is normalised to
+ * the literal `true` or left out entirely, so asking to stream cannot be a way
+ * to smuggle a different type or a second parameter through.
  */
 function upstreamBody(body: ChatBody, model: string, maxOutputTokens: number): unknown {
-  const { messages, tools, tool_choice, temperature } = body;
+  const { messages, tools, tool_choice, temperature, stream } = body;
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new HttpError(400, 'A request needs at least one message.');
   }
@@ -214,6 +226,9 @@ function upstreamBody(body: ChatBody, model: string, maxOutputTokens: number): u
     ...(Array.isArray(tools) && tools.length ? { tools } : {}),
     ...(tool_choice === undefined ? {} : { tool_choice }),
     ...(typeof temperature === 'number' ? { temperature } : {}),
+    // Only ever the literal `true`: the field stays an allowlisted boolean
+    // rather than whatever the caller put there.
+    ...(stream === true ? { stream: true } : {}),
   };
 }
 
@@ -309,6 +324,31 @@ export async function handler(request: Request): Promise<Response> {
       const failure = await upstreamFailure(upstream);
       await record(user.id, model, requestBytes, 0, upstream.status);
       return failure;
+    }
+
+    /*
+     * A streamed reply is forwarded as it arrives.
+     *
+     * The ledger row is written first, not after. Counting rows is what the
+     * allowance does, so recording before the body is forwarded means a call
+     * is metered even if the caller disconnects halfway — the alternative
+     * makes hanging up mid-stream the cheapest way to use this function for
+     * free.
+     */
+    const streamed =
+      (upstream.headers.get('content-type') ?? '').toLowerCase().includes('event-stream') &&
+      upstream.body !== null;
+
+    if (streamed) {
+      await record(user.id, model, requestBytes, 0, upstream.status);
+      return new Response(upstream.body, {
+        status: 200,
+        headers: {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          ...CORS_HEADERS,
+        },
+      });
     }
 
     const text = await upstream.text();

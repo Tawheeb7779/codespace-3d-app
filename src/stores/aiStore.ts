@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
+  DEFAULT_GEMINI_MODEL,
   DEFAULT_PROVIDER,
   ProviderError,
   readApiKey,
@@ -25,7 +26,7 @@ import { buildPreview } from '@/lib/preview';
 import { unifiedDiff } from '@/lib/diff';
 import { headContent as vcsHeadContent } from '@/lib/vcs';
 import { isSensitivePath, readableFiles } from '@/lib/vfs';
-import { hostedResolverFor } from '@/lib/ai/hosted';
+import { hostedAiAvailable, hostedResolverFor } from '@/lib/ai/hosted';
 import { useAgentStore, projectContextHeader, readCache } from '@/stores/agentStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { recordActivity } from '@/stores/activityStore';
@@ -513,10 +514,35 @@ export function mergePersisted(persisted: unknown, current: AiState): AiState {
   };
 }
 
+/**
+ * What a browser that has never chosen a provider starts on.
+ *
+ * A deployment that hosts the assistant holds the credential itself, so there
+ * is nothing for a normal user to supply and nothing for them to decide. They
+ * were being asked anyway: the default was `none`, so the panel opened on "No
+ * model provider connected" and the only way forward was a dialog about
+ * providers and keys — for a deployment where the answer was already yes.
+ *
+ * Local Development Mode keeps the old default, because there the answer
+ * genuinely is "bring your own": no server stands between the browser and a
+ * provider, and pretending otherwise would be claiming a capability that is
+ * not there.
+ *
+ * Only the starting point. Anyone who has chosen a provider has it persisted,
+ * and `merge` layers that over this, so nobody's choice is overwritten.
+ */
+export function initialProvider(): ProviderConfig {
+  if (!hostedAiAvailable()) return DEFAULT_PROVIDER;
+  // The model the hosted function defaults to. It validates the request
+  // against its own allowlist and says what it accepts, so this is a starting
+  // value rather than a claim about what the deployment will run.
+  return { kind: 'gemini', model: DEFAULT_GEMINI_MODEL, baseUrl: '', streaming: null };
+}
+
 export const useAiStore = create<AiState>()(
   persist(
     (set, get) => ({
-      provider: DEFAULT_PROVIDER,
+      provider: initialProvider(),
       apiKeyPresent: typeof window !== 'undefined' && Boolean(readApiKey()),
       allowDestructive: false,
       messages: [],

@@ -226,6 +226,14 @@ supabase secrets set GEMINI_API_KEY=...
 supabase functions deploy ai-proxy
 ```
 
+On such a deployment the assistant is what a new user opens on — no provider to
+choose and no key to enter — and it streams through the function exactly as a
+direct provider does. The function meters the call before forwarding a single
+token, so hanging up mid-answer is not a way around the per-user allowance. In
+Local Development Mode the default stays "not connected", because there is no
+server there to hold a credential and saying otherwise would be a claim about a
+capability that is absent.
+
 **Anthropic and OpenAI-compatible endpoints stay bring-your-own-key.** Those
 are entered in the assistant panel and held in `sessionStorage` for that tab
 only — never persisted, never synced, never sent anywhere but the provider you

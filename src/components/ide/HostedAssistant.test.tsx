@@ -11,7 +11,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
  * both.
  */
 
-const hosted = { available: true };
+/*
+ * `vi.hoisted`, because `vi.mock` factories are hoisted above this file's own
+ * declarations. The store now resolves the transport when it is created —
+ * which is import time — so the mocked module is evaluated before a plain
+ * `const` here would exist, and the factory closed over a binding in its
+ * temporal dead zone.
+ */
+const hosted = vi.hoisted(() => ({ available: true }));
 
 vi.mock('@/lib/ai/hosted', () => ({
   hostedAiAvailable: () => hosted.available,
