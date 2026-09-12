@@ -18,6 +18,8 @@ import {
   type ContextSource,
 } from '@/lib/ai/contextControl';
 import { AgentTaskBar } from '@/components/ide/AgentTaskBar';
+import { ModelPicker } from '@/components/ide/ModelPicker';
+import { providerForConfig } from '@/lib/ai/providers';
 import { VoiceControl } from '@/components/ide/VoiceControl';
 import {
   DEFAULT_GEMINI_MODEL,
@@ -99,6 +101,14 @@ export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () =>
   // Gemini is the deployment's to provide; in Local Development Mode there is
   // no deployment, so it falls back to the key the developer supplies.
   const geminiHosted = provider.kind === 'gemini' && hostedAiAvailable();
+  /*
+   * Which provider record the configuration points at.
+   *
+   * The base URL decides, because the kind cannot: Groq, OpenRouter and a
+   * local server are all `openai`. Undefined only for `none`, which is handled
+   * separately — no placeholder record is invented for it.
+   */
+  const pickerProvider = providerForConfig(provider);
 
   useEffect(() => {
     if (open) setKey(readApiKey());
@@ -146,17 +156,33 @@ export function ConnectDialog({ open, onClose }: { open: boolean; onClose: () =>
             { value: 'openai', label: 'OpenAI-compatible endpoint' },
           ]}
         />
-        <Input
-          label="Model"
-          value={provider.model}
-          onChange={(event) => setProvider({ model: event.target.value })}
-          placeholder={provider.kind === 'gemini' ? DEFAULT_GEMINI_MODEL : 'claude-sonnet-5'}
-          hint={
-            geminiHosted
-              ? 'Your deployment decides which Gemini models it will run.'
-              : undefined
-          }
-        />
+        {provider.kind === 'none' ? (
+          <Input
+            label="Model"
+            value={provider.model}
+            onChange={(event) => setProvider({ model: event.target.value })}
+            placeholder="claude-sonnet-5"
+            hint="Choose a provider first, and its own models can be listed."
+          />
+        ) : geminiHosted ? (
+          // The deployment holds the key and decides which models it will run,
+          // so there is nothing here for the browser to ask or to choose.
+          <Input
+            label="Model"
+            value={provider.model}
+            onChange={(event) => setProvider({ model: event.target.value })}
+            placeholder={DEFAULT_GEMINI_MODEL}
+            hint="Your deployment decides which Gemini models it will run."
+          />
+        ) : pickerProvider ? (
+          <ModelPicker
+            provider={pickerProvider}
+            baseUrl={provider.baseUrl}
+            apiKey={key}
+            selected={provider.model}
+            onSelect={(model) => setProvider({ model })}
+          />
+        ) : null}
         {provider.kind === 'openai' && (
           <Input
             label="Base URL"
