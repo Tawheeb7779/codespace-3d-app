@@ -426,14 +426,52 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   },
 };
 
+/**
+ * The smallest thing that is still a page.
+ *
+ * This template used to ship a README and an empty `src/` while declaring
+ * itself runnable, and the two cannot both be true: with no `index.html` the
+ * preview has to synthesise a document, and that document's only hooks are a
+ * `#root` and an `#app` the user never wrote and cannot see. Following the
+ * empty state's own advice — add `src/main.js`, press Run — then landed on
+ * `document.querySelector('#whatever')` returning null, and the first thing
+ * this product said about the code someone had just written was a TypeError
+ * from a page they had not authored.
+ *
+ * So it ships markup. One element, wired to one script, both editable and both
+ * deletable — which is still "bring your own structure", only starting from
+ * something that runs.
+ */
 const blank: Template = {
   id: 'blank',
   name: 'Empty project',
-  description: 'A README and an empty src folder. Bring your own structure.',
+  description: 'One page, one script, nothing else. Bring your own structure.',
   tag: 'Blank',
   runnable: true,
   files: {
-    'README.md': README('New Project', 'Nothing here yet. Create your first file in `src/`.'),
+    'index.html': `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New Project</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
+`,
+    'src/main.js': `const app = document.querySelector('#app');
+
+app.textContent = 'Edit src/main.js to change this.';
+
+console.log('Ready');
+`,
+    'README.md': README(
+      'New Project',
+      'Edit `src/main.js` and press Run. Both it and `index.html` are yours to replace.',
+    ),
   },
   dirs: ['src'],
 };
