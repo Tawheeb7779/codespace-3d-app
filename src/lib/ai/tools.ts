@@ -14,6 +14,14 @@ import {
   readLine,
   type IdeActions,
 } from '@/lib/ai/ideActions';
+import {
+  MAX_ANALYSED_FILES,
+  analyseProject,
+  findRelated,
+  renderIntelligence,
+} from '@/lib/ai/intelligence';
+import { parsePlan, renderPlan, type ChangePlan } from '@/lib/ai/plan';
+import { MAX_WHOLE_FILE_CHARS } from '@/lib/ai/context';
 
 /**
  * Tools the coding agent may call.
@@ -26,6 +34,15 @@ import {
  */
 
 export interface ToolContext {
+  /**
+   * Throw if the task this tool belongs to is no longer running.
+   *
+   * Checked on entry and again after any await, because a cancellation or a
+   * navigation while an approval dialog is on screen must not be followed by
+   * the action the dialog was asking about. Absent in a headless caller, where
+   * there is no task to have gone away.
+   */
+  assertActive?(): void;
   files: Record<string, string>;
   dirs: string[];
   /** Permission of the signed-in user on this project. */
@@ -108,7 +125,24 @@ export interface ToolContext {
    * must return the real content whenever the file has changed — the saving is
    * never allowed to cost correctness.
    */
-  onRead?(path: string, content: string): { text: string; cached: boolean };
+  onRead?(path: string, content: string, partial?: boolean): { text: string; cached: boolean };
+  /**
+   * Has the agent read this file, whole, as it stands right now?
+   *
+   * Required before a whole-file overwrite. Absent in a headless context, where
+   * the check is skipped exactly as the staleness check already is.
+   */
+  hasCurrentRead?(path: string, content: string): boolean;
+  /** Is there reading budget left for this many characters? */
+  canRead?(chars: number): boolean;
+  /**
+   * Told when the agent states a plan, so the UI can show it.
+   *
+   * Optional and side-effect free by contract: a caller that does nothing with
+   * a plan behaves exactly as before, and `plan_changes` never writes whether
+   * this is supplied or not.
+   */
+  onPlan?(plan: ChangePlan): void;
   /**
    * How many files this task has already changed, and where the check-in sits.
    *
@@ -204,6 +238,16 @@ function requirePath(input: Record<string, unknown>, key = 'path'): string {
   return path;
 }
 
+/** A positive whole number the model supplied, or null when it gave nothing usable. */
+function readPositive(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.floor(parsed);
+}
+
+/** Lines returned when a file is too large to send whole and no range was asked for. */
+const DEFAULT_PAGE_LINES = 400;
+
 function requireString(input: Record<string, unknown>, key: string): string {
   const raw = input[key];
   if (typeof raw !== 'string') throw new ToolError(`"${key}" must be a string`);
@@ -230,6 +274,24 @@ function requireContent(input: Record<string, unknown>, key: string): string {
  * refusing outright — which is what any non-interactive caller gets, and is
  * the conservative default.
  */
+/**
+ * Re-read the permissions after an await, before acting on them.
+ *
+ * Every gate in this file is checked once, before the tool runs. That is enough
+ * for a tool that runs immediately and wrong for one that waits: an approval
+ * dialog can sit on screen for minutes, and the two things that can change
+ * underneath it are exactly the two that authorise the action.
+ */
+function assertStillPermitted(ctx: ToolContext, action: string): void {
+  ctx.assertActive?.();
+  if (!ctx.canWrite) {
+    throw new ToolError(
+      `${action} was approved, but your access to this project changed while it was waiting: ` +
+        'your role is now read-only. Nothing was changed.',
+    );
+  }
+}
+
 async function requireApproval(
   action: string,
   affects: string[],
@@ -238,7 +300,14 @@ async function requireApproval(
   if (ctx.allowDestructive) return;
   if (ctx.requestApproval) {
     const granted = await ctx.requestApproval(action, affects);
-    if (granted) return;
+    if (granted) {
+      // The wait was unbounded, so what was true when the dialog opened is not
+      // necessarily true now: the task may have been cancelled and the role may
+      // have been revoked. Approval is the user saying yes to the action, never
+      // the server saying they may still perform it.
+      assertStillPermitted(ctx, action);
+      return;
+    }
     throw new ToolError(`${action} was declined.`);
   }
   throw new ToolError(
@@ -293,10 +362,16 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'read_file',
-    description: 'Read the full contents of one file, with line numbers.',
+    description:
+      'Read one file, with line numbers. A large file is not returned whole — pass from_line and ' +
+      'max_lines to page through it. The result always says which lines you were given.',
     input_schema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'Project relative file path' } },
+      properties: {
+        path: { type: 'string', description: 'Project relative file path' },
+        from_line: { type: 'number', description: 'Optional 1-based line to start at.' },
+        max_lines: { type: 'number', description: 'Optional number of lines to return.' },
+      },
       required: ['path'],
     },
     mutates: false,
@@ -304,12 +379,51 @@ export const TOOLS: ToolDefinition[] = [
       const path = requirePath(input);
       const content = ctx.files[path];
       if (content === undefined) throw new ToolError(`No such file: ${path}`);
-      const view = ctx.onRead?.(path, content);
+
+      const lines = content.split('\n');
+      const requestedFrom = readPositive(input.from_line);
+      const requestedCount = readPositive(input.max_lines);
+      const paged = requestedFrom !== null || requestedCount !== null;
+
+      /*
+       * A very large file is never returned whole.
+       *
+       * Not a saving: a file that fills the context window leaves no room for
+       * the rest of the task, and the model then works from a conversation
+       * whose earlier turns have been pushed out. Paging keeps the agent in
+       * control of what it spends, and the note says the file was not
+       * exhausted so nothing concludes a symbol is absent from a fragment.
+       */
+      const mustPage = !paged && content.length > MAX_WHOLE_FILE_CHARS;
+      const from = Math.max(1, requestedFrom ?? 1);
+      const count = requestedCount ?? (mustPage ? DEFAULT_PAGE_LINES : lines.length);
+      const slice = lines.slice(from - 1, from - 1 + count);
+      const partial = from > 1 || from - 1 + count < lines.length;
+      const text = slice.join('\n');
+
+      if (ctx.canRead && !ctx.canRead(text.length)) {
+        throw new ToolError(
+          `Reading ${path} would go past this task's reading budget. Use search_files to find what you need, or read a narrower range.`,
+        );
+      }
+
+      // A partial read is recorded as partial, so a later full read is not
+      // answered with "unchanged since you read it earlier" over a fragment.
+      const view = ctx.onRead?.(path, text, partial);
       if (view?.cached) return view.text;
-      return content
-        .split('\n')
-        .map((line, index) => `${String(index + 1).padStart(4)}| ${line}`)
+
+      const numbered = slice
+        .map((line, index) => `${String(from + index).padStart(4)}| ${line}`)
         .join('\n');
+
+      if (!partial) return numbered;
+
+      const last = from - 1 + slice.length;
+      return [
+        numbered,
+        '',
+        `(showing lines ${from}-${last} of ${lines.length}. This is part of ${path}, not all of it — read another range before concluding something is absent.)`,
+      ].join('\n');
     },
   },
   {
@@ -356,6 +470,24 @@ export const TOOLS: ToolDefinition[] = [
       const content = requireContent(input, 'content');
       await checkWideChange(path, 'write_file', ctx);
       const before = ctx.files[path];
+      /*
+       * Overwriting an existing file requires a current read of it.
+       *
+       * "Not stale" is the weaker test and it passes in the case that matters
+       * most: a file the agent never opened has no recorded read, so nothing
+       * is stale, and a whole-file write replaces content nobody looked at.
+       * That is not an edit — it is a deletion with a new file in its place.
+       *
+       * So the requirement is positive: the agent must have been shown this
+       * file, whole, as it is now. Creating a new file is unaffected, because
+       * there is nothing there to destroy.
+       */
+      if (before !== undefined && ctx.hasCurrentRead && !ctx.hasCurrentRead(path, before)) {
+        throw new ToolError(
+          `${path} exists and you have not read it as it currently stands. ` +
+            'Read the whole file first, then rewrite it — or use edit_file to change part of it.',
+        );
+      }
       // A whole-file write has no anchor, so nothing else would notice that the
       // user edited this file since the agent read it — it would just replace
       // their work. Refuse and say why; the agent can re-read and try again.
@@ -750,6 +882,123 @@ export const TOOLS: ToolDefinition[] = [
       return 'Opened the Problems panel.';
     },
   },
+  {
+    name: 'get_project_intelligence',
+    description:
+      'Understand the project’s structure without reading every file: directory layout, entry ' +
+      'points, packages in use, and the imports and exports of the most structurally important ' +
+      'files. Call this before planning a change in an unfamiliar project. The analysis is ' +
+      'capped and says where it stopped — treat anything outside the analysed files as unknown.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        focus: {
+          type: 'string',
+          description:
+            'Optional comma-separated paths to analyse in depth first, when you already know which part of the project matters.',
+        },
+      },
+      required: [],
+    },
+    mutates: false,
+    run: (input, ctx) => {
+      const raw = typeof input.focus === 'string' ? input.focus : '';
+      const focus = raw
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, MAX_ANALYSED_FILES)
+        .map((entry) => {
+          try {
+            return normalizePath(entry.replace(/\\/g, '/').replace(/^\/+/, ''));
+          } catch {
+            return '';
+          }
+        })
+        .filter((path) => path && !isSensitivePath(path));
+
+      return renderIntelligence(analyseProject(ctx.files, focus));
+    },
+  },
+  {
+    name: 'find_related_code',
+    description:
+      'Find the files related to one file: what it imports, what imports it, and what sits ' +
+      'beside it. Use this before changing a file, so you know what else the change reaches. ' +
+      'Relationships come from real imports, not from names.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Project relative file path' },
+      },
+      required: ['path'],
+    },
+    mutates: false,
+    run: (input, ctx) => {
+      const path = requirePath(input);
+      if (ctx.files[path] === undefined) {
+        throw new ToolError(`No such file: ${path}. Use list_files to see what exists.`);
+      }
+
+      const related = findRelated(path, ctx.files);
+      const lines = [`Related to ${path} (scanned ${related.scanned} code files):`, ''];
+
+      lines.push(
+        related.imports.length
+          ? `Imports (${related.imports.length}):\n${related.imports.map((entry) => `  ${entry}`).join('\n')}`
+          : 'Imports: none from inside this project.',
+      );
+      lines.push(
+        '',
+        related.importedBy.length
+          ? `Imported by (${related.importedBy.length}):\n${related.importedBy.map((entry) => `  ${entry}`).join('\n')}`
+          : 'Imported by: nothing found. A file imported only dynamically, or through a path this cannot resolve, would also look like this.',
+      );
+      if (related.siblings.length) {
+        lines.push('', `Beside it:\n${related.siblings.map((entry) => `  ${entry}`).join('\n')}`);
+      }
+
+      return lines.join('\n');
+    },
+  },
+  {
+    name: 'plan_changes',
+    description:
+      'State which files you intend to change, how, and why, before changing them. This tool ' +
+      'changes nothing — it records the plan so the user can see it and disagree. Every path is ' +
+      'checked against the project: planning to create a file that exists, or modify one that ' +
+      'does not, is refused. Carry the plan out afterwards with the write tools.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'What you intend to achieve, in one or two sentences.' },
+        changes: {
+          type: 'array',
+          description:
+            'The files you intend to touch: [{path, operation: "create"|"modify"|"delete", reason}].',
+        },
+        steps: {
+          type: 'array',
+          description: 'Optional non-file steps, such as which check you will run afterwards.',
+        },
+      },
+      required: ['goal', 'changes'],
+    },
+    // Not a mutation: it writes nothing, so a read-only user may still plan.
+    mutates: false,
+    run: (input, ctx) => {
+      let plan;
+      try {
+        plan = parsePlan(input, ctx.files);
+      } catch (failure) {
+        // Surfaced as a tool error so the model sees what was wrong and can
+        // correct the plan, rather than as a crash that ends the turn.
+        throw new ToolError(failure instanceof Error ? failure.message : 'The plan was not valid.');
+      }
+      ctx.onPlan?.(plan);
+      return renderPlan(plan);
+    },
+  },
 ];
 
 /** Tools available given the caller's permission on the project. */
@@ -757,11 +1006,27 @@ export function toolsFor(canWrite: boolean): ToolDefinition[] {
   return canWrite ? TOOLS : TOOLS.filter((tool) => !tool.mutates);
 }
 
+/**
+ * Tools for one turn, narrowed by what the turn is for as well as by role.
+ *
+ * A read-only workflow — "explain this", "review this" — tells the model in its
+ * prompt not to change anything. That is an instruction, and an instruction is
+ * not a control: the model still holds `write_file`, and "Explain this
+ * function" that ends in an edit is exactly the surprise that makes an
+ * assistant untrustworthy. Withholding the tools makes the promise real.
+ *
+ * Narrowing only: a read-only turn can never gain a tool the role denies.
+ */
+export function toolsForTurn(canWrite: boolean, readOnlyTurn: boolean): ToolDefinition[] {
+  return toolsFor(canWrite && !readOnlyTurn);
+}
+
 export async function runTool(
   name: string,
   input: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<string> {
+  ctx.assertActive?.();
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) throw new ToolError(`Unknown tool: ${name}`);
   if (tool.mutates && !ctx.canWrite) {

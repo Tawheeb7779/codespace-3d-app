@@ -122,7 +122,6 @@ const MAX_DIFF_CHARS = 40_000;
  * clobbering them.
  */
 function toolContext(): ToolContext {
-  const fileStore = useFileStore.getState();
   const agent = useAgentStore.getState();
   return {
     get files() {
@@ -131,8 +130,21 @@ function toolContext(): ToolContext {
     get dirs() {
       return useFileStore.getState().dirs;
     },
-    canWrite: fileStore.canWrite(),
+    /*
+     * A getter, like `files` and `dirs`, and for the same reason plus one more.
+     *
+     * A snapshot taken when the context is built is the permission as it was at
+     * the start of the turn. `assertStillPermitted` re-reads this after an
+     * approval dialog, which can sit on screen for minutes — and re-reading a
+     * captured boolean would only ever tell it what it already knew.
+     */
+    get canWrite() {
+      return useFileStore.getState().canWrite();
+    },
     isStaleRead: (path, content) => readCache.isStale(path, content),
+    hasCurrentRead: (path, content) => readCache.hasCurrentRead(path, content),
+    canRead: (chars) => readCache.canRead(chars),
+    onPlan: (plan) => useAgentStore.getState().setChangePlan(plan),
     allowDestructive: useAiStore.getState().allowDestructive,
     writeFile(path, content) {
       const store = useFileStore.getState();
@@ -325,7 +337,7 @@ function toolContext(): ToolContext {
     },
 
     onChange: (path, kind, before, after) => agent.noteChange(path, kind, before, after),
-    onRead: (path, content) => readCache.record(path, content),
+    onRead: (path, content, partial) => readCache.record(path, content, partial),
 
     changedSoFar: () => useAgentStore.getState().task?.changes.length ?? 0,
     wideChangeThreshold: useSettingsStore.getState().agent.confirmWideChanges

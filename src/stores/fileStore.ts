@@ -18,6 +18,7 @@ import { capabilitiesFor } from '@/lib/permissions';
 import { errorMessage } from '@/lib/utils';
 import { toast } from '@/stores/toastStore';
 import { consoleLog } from '@/stores/consoleStore';
+import { useAgentStore } from '@/stores/agentStore';
 
 /**
  * The working tree for the open project.
@@ -102,6 +103,22 @@ async function resolveRole(project: Project): Promise<MemberRole> {
   }
 }
 
+/**
+ * Tell a running agent task that the files moved underneath it.
+ *
+ * Every check the agent has taken describes the files as they were when it ran.
+ * The agent's own writes expire that evidence through `noteChange`; a person
+ * typing in the editor arrives here instead, and without this the task can
+ * finish `completed` on a check that passed against code the user has since
+ * changed. Every step succeeded and the conclusion is wrong, which is the
+ * failure the validation module exists to prevent.
+ *
+ * A no-op when no task is running, which is the ordinary case.
+ */
+function notifyAgent(path: string): void {
+  useAgentStore.getState().noteExternalEdit(path);
+}
+
 export const useFileStore = create<FileState>()((set, get) => ({
   projectId: null,
   meta: null,
@@ -171,6 +188,7 @@ export const useFileStore = create<FileState>()((set, get) => ({
       files: { ...state.files, [safe]: content },
       dirty: new Set(state.dirty).add(safe),
     }));
+    notifyAgent(safe);
     scheduleSave();
   },
 
@@ -184,6 +202,7 @@ export const useFileStore = create<FileState>()((set, get) => ({
       dirs: [...new Set([...state.dirs, ...ancestors(safe)])],
       dirty: new Set(state.dirty).add(safe),
     }));
+    notifyAgent(safe);
     scheduleSave();
     return safe;
   },
@@ -254,6 +273,7 @@ export const useFileStore = create<FileState>()((set, get) => ({
         dirty: new Set(state.dirty).add(safe),
       };
     });
+    notifyAgent(safe);
     scheduleSave();
   },
 

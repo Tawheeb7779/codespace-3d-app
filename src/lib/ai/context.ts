@@ -127,25 +127,66 @@ export function renderContext(context: ProjectContext): string {
  * Keyed by content hash, so a file that changed since the last read is sent
  * again in full — the saving must never cost correctness.
  */
+/** A file larger than this is never sent whole; the agent is told to page it. */
+export const MAX_WHOLE_FILE_CHARS = 100_000;
+/** Characters one task may pull in through reads before it must be selective. */
+export const READ_BUDGET_CHARS = 200_000;
+
 export class ReadCache {
   private seen = new Map<string, string>();
+  /** Paths whose *entire* content the agent has been shown, by hash. */
+  private whole = new Map<string, string>();
   private savedBytes = 0;
+  private spentBytes = 0;
 
   /**
    * Returns the text to hand the model for this file: the content on a first
    * read or after a change, and a short note when it is already in context.
+   *
+   * `partial` is the load-bearing argument. A paged read shows one slice, and
+   * recording that as "this file is in context" would make the next full read
+   * answer "unchanged since you read it earlier" — sending the agent on with a
+   * fragment it believes is the whole file. So a partial read is remembered as
+   * spent budget and nothing else.
    */
-  record(path: string, content: string): { text: string; cached: boolean } {
+  record(path: string, content: string, partial = false): { text: string; cached: boolean } {
     const hash = hashContent(content);
-    if (this.seen.get(path) === hash) {
+
+    if (!partial && this.whole.get(path) === hash) {
       this.savedBytes += content.length;
       return {
         text: `(${path} is unchanged since you read it earlier in this task — use what you already have)`,
         cached: true,
       };
     }
+
+    this.spentBytes += content.length;
     this.seen.set(path, hash);
+    if (!partial) this.whole.set(path, hash);
     return { text: content, cached: false };
+  }
+
+  /**
+   * Has the agent read *this* file, whole, as it is right now?
+   *
+   * The requirement for a whole-file overwrite. `isStale` answers a weaker
+   * question — "did it change since a read" — which is false for a file the
+   * agent never opened, so an overwrite of an unread file passes it. That is
+   * the case worth refusing: replacing a file nobody looked at is not an edit,
+   * it is a deletion with extra steps.
+   */
+  hasCurrentRead(path: string, content: string): boolean {
+    return this.whole.get(path) === hashContent(content);
+  }
+
+  /** Characters already pulled in by reads this task. */
+  get spent(): number {
+    return this.spentBytes;
+  }
+
+  /** Is there budget left to read this much? */
+  canRead(chars: number): boolean {
+    return this.spentBytes + chars <= READ_BUDGET_CHARS;
   }
 
   /**
@@ -167,11 +208,16 @@ export class ReadCache {
   /** Drop a path so the next read resends it — used after the agent edits. */
   invalidate(path: string): void {
     this.seen.delete(path);
+    // Dropped from both, so an edited file is neither treated as cached nor
+    // accepted as a current read for the next overwrite.
+    this.whole.delete(path);
   }
 
   clear(): void {
     this.seen.clear();
+    this.whole.clear();
     this.savedBytes = 0;
+    this.spentBytes = 0;
   }
 
   get stats(): { files: number; savedBytes: number } {

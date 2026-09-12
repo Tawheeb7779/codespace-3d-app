@@ -16,6 +16,14 @@ import {
   type TaskPhase,
   type VerificationResult,
 } from '@/lib/ai/task';
+import {
+  newValidation,
+  noteUserEdit,
+  noteWrite,
+  recordCheck,
+  type ValidationState,
+} from '@/lib/ai/validation';
+import type { ChangePlan } from '@/lib/ai/plan';
 import { ReadCache, detectStack, outlineOf, renderContext } from '@/lib/ai/context';
 import { uid } from '@/lib/utils';
 import { useTimeTravelStore } from '@/stores/timeTravelStore';
@@ -55,6 +63,14 @@ interface AgentState {
     after: string,
   ) => void;
   noteVerification: (result: VerificationResult) => void;
+  /** The files the agent said it would touch, from `plan_changes`. */
+  setChangePlan: (plan: ChangePlan) => void;
+  /** A file changed outside the agent; its evidence expires too. */
+  noteExternalEdit: (path: string) => void;
+  /** Evidence for the running task: which checks ran, against which state. */
+  validation: ValidationState;
+  /** The last plan the agent stated, so the panel can show it against reality. */
+  changePlan: ChangePlan | null;
   requestApproval: (action: string, affects: string[], tool: string, reason?: string) => Promise<boolean>;
   resolveApproval: (granted: boolean) => void;
   finish: (phase: 'completed' | 'failed' | 'cancelled', summary?: string) => void;
@@ -84,6 +100,8 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   history: [],
   pending: null,
   lockedProjectId: null,
+  validation: newValidation(),
+  changePlan: null,
 
   /** Returns null when another task already holds the workspace. */
   begin(request, projectId) {
@@ -101,7 +119,15 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     activeProjectId = projectId;
     readCache.clear();
     const task = newTask(request, uid('task'));
-    set({ task, pending: null, lockedProjectId: projectId });
+    // A new task starts with no evidence. Carrying the last task's checks over
+    // would let one task's passing build vouch for another task's edits.
+    set({
+      task,
+      pending: null,
+      lockedProjectId: projectId,
+      validation: newValidation(),
+      changePlan: null,
+    });
     return task;
   },
 
@@ -132,9 +158,48 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   noteChange(path, kind, before, after) {
     const task = get().task;
     if (!task) return;
-    // The file moved on, so the agent must be shown the new content next time.
-    readCache.invalidate(path);
-    set({ task: { ...task, changes: recordChange(task.changes, { path, kind, before, after }) } });
+    /*
+     * The agent wrote these bytes, so it has read them.
+     *
+     * Invalidating unconditionally breaks the repair loop once a whole-file
+     * write requires a current read: write, build fails, write the fix — and
+     * the second write is refused because the first cleared the read record.
+     * The agent could not fix its own mistake without re-reading a file it had
+     * just authored.
+     *
+     * Recording the new content keeps the safety property exactly as it is.
+     * The rule is "never overwrite content nobody has seen", and content the
+     * agent just wrote is content the agent has seen. An edit by *somebody
+     * else* still invalidates — that is `noteExternalEdit`, and it is what
+     * protects the user's work.
+     *
+     * A deletion has no content to have read, so it still invalidates.
+     */
+    if (kind === 'deleted') readCache.invalidate(path);
+    else readCache.record(path, after, false);
+    set({
+      task: { ...task, changes: recordChange(task.changes, { path, kind, before, after }) },
+      // Every check taken before this write described a state that no longer
+      // exists. Bumping the revision is what stops it being quoted as evidence.
+      validation: noteWrite(get().validation, path),
+    });
+  },
+
+  setChangePlan(plan) {
+    if (!get().task) return;
+    set({ changePlan: plan });
+  },
+
+  /**
+   * A file changed underneath the agent, by the user or by anything else.
+   *
+   * Same invalidation as the agent's own write, because the files are equally
+   * not what the check looked at. The agent does not see this happen, which is
+   * exactly why the evidence has to expire rather than be trusted.
+   */
+  noteExternalEdit(path) {
+    if (!get().task) return;
+    set({ validation: noteUserEdit(get().validation, path) });
   },
 
   noteVerification(result) {
@@ -145,6 +210,9 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         ...task,
         verifications: [...task.verifications.filter((v) => v.name !== result.name), result],
       },
+      // Recorded against the revision it actually ran on, so a later edit can
+      // make it stale rather than silently keeping it as proof.
+      validation: recordCheck(get().validation, result),
     });
   },
 
