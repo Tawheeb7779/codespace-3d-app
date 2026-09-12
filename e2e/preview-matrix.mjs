@@ -153,6 +153,35 @@ try {
     await frame().getByRole('button', { name: /Clicked 1 time$/ }).waitFor({ timeout: 10000 });
   });
 
+  // -------------------------------------------------- standalone HTML (d9bf4de)
+  /*
+   * An ordinary HTML page is the program.
+   *
+   * The regression this guards is a real one: the preview used to insist on a
+   * React `#root` and told the author their own page was broken when it had
+   * none. This template has `<div id="app">` and a local module script, which
+   * is what most hand-written HTML looks like, and the check is that it simply
+   * runs — the entry is the document, nothing is injected into it, and no
+   * `#root` exists anywhere.
+   */
+  await step('standalone html: a page with no #root runs as itself', async () => {
+    await createProject('Empty project', 'M Standalone');
+    await waitForRunning();
+    await frame()
+      .getByText(/Edit src\/main\.js to change this/i)
+      .waitFor({ timeout: 40000 });
+
+    const roots = await frame().locator('#root').count();
+    if (roots !== 0) throw new Error(`the preview injected a #root the project never had`);
+    const app = await frame().locator('#app').count();
+    if (app !== 1) throw new Error("the page's own #app container did not survive");
+  });
+
+  await step('standalone html: its local script actually executed', async () => {
+    const text = await outputText(/Ready/);
+    if (!/Ready/.test(text)) throw new Error('the local module script did not run');
+  });
+
   // ------------------------------------------------------------------ React
   await step('react: renders with React bundled locally', async () => {
     await createProject('React', 'M React');

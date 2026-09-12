@@ -39,6 +39,21 @@ function Item({
 }) {
   const className = cx(
     'h-full items-center gap-1 whitespace-nowrap px-2 text-sm transition-colors',
+    /*
+     * The bar is shorter than a finger.
+     *
+     * These take their height from the status bar, which is 23px on a phone —
+     * measured in Chromium at 390x844, and under the 24x24 CSS px minimum for
+     * a pointer target. `tap-target` is the project's answer to exactly this:
+     * it grows the *hit* area to 32px under a coarse pointer through a
+     * transparent pseudo-element, leaves the painted bar the size it is, and
+     * costs desktop nothing because the rule only exists under
+     * `(pointer: coarse)`.
+     *
+     * Only on the clickable variant. A span is not a target and giving it one
+     * would put an invisible 32px box over its neighbours.
+     */
+    onClick && 'tap-target',
     shrinkable ? 'min-w-0 shrink' : 'shrink-0',
     minor ? 'hidden sm:flex' : 'flex',
     tone === 'danger' && 'text-danger',

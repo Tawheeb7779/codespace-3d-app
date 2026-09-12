@@ -400,12 +400,15 @@ export default function SettingsPage() {
                 checked={workspace.confirmOnDelete}
                 onChange={(value) => setWorkspace({ confirmOnDelete: value })}
               />
-              <Switch
-                label="Auto save"
-                description="Write edits to storage shortly after you stop typing."
-                checked={editor.autoSave}
-                onChange={(value) => setEditor({ autoSave: value })}
-              />
+              {/*
+                * Auto save is not repeated here.
+                *
+                * It was: this section and Editor both rendered the same
+                * `editor.autoSave` switch, with two different descriptions of
+                * it. One control per setting — two made it look like two
+                * settings, and left a reader to work out which description was
+                * the true one.
+                */}
               <Button
                 size="sm"
                 disabled={!workspace.onboarded}

@@ -41,7 +41,8 @@
     "gateway:test": "npm --prefix gateway test",
     "gateway:typecheck": "npm --prefix gateway run typecheck",
     "gateway:dev": "npm --prefix gateway run dev",
-    "image:workspace": "docker build -t ta-code/workspace:1 docker/workspace"
+    "image:workspace": "docker build -t ta-code/workspace:1 docker/workspace",
+    "test:e2e:a11y": "node e2e/a11y.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
