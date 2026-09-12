@@ -26,7 +26,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { toast } from '@/stores/toastStore';
 import {
   ancestors,
-  buildTree,
+  buildTreeCached,
   flattenTree,
   basename,
   dirname,
@@ -94,7 +94,15 @@ export function FileExplorer() {
   const pendingCreate = useUIStore((s) => s.pendingCreate);
   const consumeCreate = useUIStore((s) => s.consumeCreate);
 
-  const tree = useMemo(() => buildTree(files, dirs), [files, dirs]);
+  /*
+   * `buildTreeCached`, not `buildTree`.
+   *
+   * The store replaces `files` on every write, so this memo re-runs on every
+   * keystroke — but the tree's shape depends only on which paths exist, and the
+   * cache returns the previous array untouched when they have not changed. That
+   * also keeps `rows` below stable, since its input reference is unchanged.
+   */
+  const tree = useMemo(() => buildTreeCached(files, dirs), [files, dirs]);
   // Only paths that still exist: `dirty` also records deletions.
   const dirtyPaths = useMemo(() => [...dirty].filter((path) => path in files), [dirty, files]);
   const rows = useMemo(() => flattenTree(tree, expanded), [tree, expanded]);
