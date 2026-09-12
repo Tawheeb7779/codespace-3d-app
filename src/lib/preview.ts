@@ -54,7 +54,43 @@ const ENTRY_CANDIDATES = [
   'app.js',
 ];
 
-/** Locate the script entry point, preferring what index.html actually loads. */
+/**
+ * Does this document already carry its own program?
+ *
+ * A `<script>` with a body, rather than a `src`, is code the author put in the
+ * page. It is not a reference to something that needs building — it *is* the
+ * program, and it runs when the browser parses the document.
+ */
+function hasInlineScript(html: string): boolean {
+  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+    if (/\bsrc\s*=/i.test(match[1])) continue;
+    if (match[2].trim()) return true;
+  }
+  return false;
+}
+
+/**
+ * Locate the script entry point, preferring what index.html actually loads.
+ *
+ * The order is the whole of it, and the last step is where this used to go
+ * wrong. An ordinary standalone page — a `<style>`, some markup, an inline
+ * `<script>`, no build step — fell past the first check, because it names no
+ * script to load, and landed on the conventional-entry list. In a project that
+ * still had a template's `src/main.tsx` lying around, the preview then bundled
+ * *that* and injected it into the author's document, and the first thing the
+ * user saw was the React entry's own assertion failing:
+ *
+ *   Uncaught Error: Root element #root is missing from index.html
+ *
+ * Which was true, and none of their business. They had not asked for React,
+ * and `#root` is one framework's convention, not a requirement a browser IDE
+ * gets to impose on every HTML file.
+ *
+ * So a document that carries its own inline script is taken at its word: it is
+ * the program, and nothing is appended to it. The conventional-entry list is
+ * for the case it was always for — a project whose page does not say what to
+ * run, or which has no page at all.
+ */
 export function findEntry(files: Record<string, string>): string | null {
   const html = files['index.html'] ?? files['public/index.html'];
   if (html) {
@@ -69,6 +105,9 @@ export function findEntry(files: Record<string, string>): string | null {
         // Ignore unresolvable script tags and keep looking.
       }
     }
+    // The page brought its own code. Adding a second program to it would run
+    // something the author never referenced.
+    if (hasInlineScript(html)) return null;
   }
   return ENTRY_CANDIDATES.find((candidate) => candidate in files) ?? null;
 }
