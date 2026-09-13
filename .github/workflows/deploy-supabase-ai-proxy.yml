@@ -62,18 +62,73 @@ jobs:
           test -f "supabase/functions/${FUNCTION_NAME}/index.ts" \
             || { echo "::error::supabase/functions/${FUNCTION_NAME}/index.ts is not present on ${SOURCE_BRANCH}"; exit 1; }
 
+      # v3. The action was pinned at v1, which is two majors behind and will
+      # eventually stop being maintained.
+      #
+      # Worth being clear about what this does and does not change: the old
+      # step already asked for `version: latest`, so the `supabase` binary
+      # doing the work was always the newest one. Upgrading the action changes
+      # how the CLI is installed, not which CLI runs — so it cannot by itself
+      # explain an authorisation failure from the Management API.
       - name: Set up the Supabase CLI
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: latest
+
+      - name: Report the CLI version
+        run: supabase --version
 
       # Only this function. The repository also holds github-oauth and
       # github-proxy, and naming the function explicitly is what keeps an
       # unrelated one from being replaced by a deploy nobody asked for.
+      #
+      # `--debug` prints the HTTP exchange, which is what identifies a 403.
+      # Two things keep the token out of the log: Actions masks any value that
+      # came from `secrets.*`, and the filter below masks anything shaped like
+      # a Supabase token in case the CLI prints it in a form Actions does not
+      # recognise. `pipefail` is what keeps the CLI's exit code after the pipe.
       - name: Deploy ${{ env.FUNCTION_NAME }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
+          set -o pipefail
           test -n "${SUPABASE_ACCESS_TOKEN}" \
             || { echo "::error::SUPABASE_ACCESS_TOKEN is not set for this repository"; exit 1; }
-          supabase functions deploy "${FUNCTION_NAME}" --use-api --project-ref "${PROJECT_REF}"
+          supabase functions deploy "${FUNCTION_NAME}" \
+            --use-api \
+            --project-ref "${PROJECT_REF}" \
+            --debug 2>&1 | sed -E 's/sbp_[A-Za-z0-9]{8,}/sbp_***REDACTED***/g'
+
+      # Only on failure, and only one extra call.
+      #
+      # A 403 from the Management API means the token authenticated and was
+      # then refused, so the question is never "is the token valid" but "whose
+      # token is it, and what is it allowed to touch". `projects list` answers
+      # exactly that and nothing else: if this project is missing from the
+      # list, the token belongs to an account that cannot see it, and no change
+      # to this workflow will fix that.
+      - name: Explain the failure
+        if: failure()
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          echo "── Projects this token can reach ──"
+          supabase projects list 2>&1 \
+            | sed -E 's/sbp_[A-Za-z0-9]{8,}/sbp_***REDACTED***/g' || true
+          echo
+          echo "── Reading the result ──"
+          echo "Target project ref: ${PROJECT_REF}"
+          echo
+          echo "If ${PROJECT_REF} is NOT in the list above, the access token belongs to"
+          echo "an account that cannot see this project. Being Owner in the dashboard is"
+          echo "a property of the account; the token is a property of whoever generated"
+          echo "it. Generate a new token while signed in as the owning account:"
+          echo "  https://supabase.com/dashboard/account/tokens"
+          echo
+          echo "If ${PROJECT_REF} IS in the list and the deploy still returned 403, the"
+          echo "token reached the project but was refused this endpoint. That is a scope"
+          echo "or role limit rather than an identity problem:"
+          echo "  - a token created with limited scopes needs Edge Functions read+write"
+          echo "  - an organisation member needs a role that permits deploying functions"
+          echo
+          echo "Neither case is fixed by changing this workflow."
