@@ -1,0 +1,71 @@
+# Deploy the ai-proxy Edge Function to Supabase.
+#
+# Manual only. This function holds the deployment's Gemini credential and is
+# the single path from a browser session to the provider, so a deploy is a
+# deliberate act rather than something that happens on every push.
+#
+# Nothing here is a secret except SUPABASE_ACCESS_TOKEN. The project ref is in
+# the URL of every request the app already makes, and GEMINI_API_KEY is not
+# set here on purpose: it belongs to the Edge Function's own environment and is
+# managed with `supabase secrets set`. A key added to GitHub would be a second
+# copy of it in a second place, which is one more place to leak from.
+name: Deploy ai-proxy
+
+on:
+  workflow_dispatch:
+
+# Read-only: this job checks out code and talks to Supabase. It has no reason
+# to write to the repository.
+permissions:
+  contents: read
+
+# One deploy at a time. Two overlapping runs would race to replace the same
+# function, and the one that finished last would win regardless of which was
+# newer.
+concurrency:
+  group: deploy-ai-proxy
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: awgdurlvfqxtdadpuzse
+  FUNCTION_NAME: ai-proxy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # No `ref:` — the default is the branch chosen when the run is started,
+      # which is the point of a manual trigger. Naming a branch here would
+      # deploy that branch's code no matter what was selected.
+      - name: Check out the selected ref
+        uses: actions/checkout@v4
+
+      - name: Report what is being deployed
+        run: |
+          echo "ref:      ${{ github.ref }}"
+          echo "sha:      ${{ github.sha }}"
+          echo "function: ${FUNCTION_NAME}"
+          echo "project:  ${PROJECT_REF}"
+
+      # Fail here rather than at the CLI. A ref without this file would
+      # otherwise reach `functions deploy` and produce a less obvious error.
+      - name: Confirm the function exists on this ref
+        run: |
+          test -f "supabase/functions/${FUNCTION_NAME}/index.ts" \
+            || { echo "::error::supabase/functions/${FUNCTION_NAME}/index.ts is not present on this ref"; exit 1; }
+
+      - name: Set up the Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Only this function. The repository holds github-oauth and github-proxy
+      # as well, and naming the function explicitly is what keeps an unrelated
+      # one from being replaced by a deploy nobody asked for.
+      - name: Deploy ${{ env.FUNCTION_NAME }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          test -n "${SUPABASE_ACCESS_TOKEN}" \
+            || { echo "::error::SUPABASE_ACCESS_TOKEN is not set for this repository"; exit 1; }
+          supabase functions deploy "${FUNCTION_NAME}" --use-api --project-ref "${PROJECT_REF}"
